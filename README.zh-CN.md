@@ -12,12 +12,24 @@
 
 工作台提供任务板、小队频道、Codex 知识库、记忆、角色工坊与工具箱（Tools · MCP · Skills）。
 
-## 为什么是 Sortie Deck
+## 为什么需要 Sortie Deck
+
+团队已经在用 AI，但产品 → 研发 → 测试仍常变成 **IM 上的传话筒**：各自开聊天窗口，澄清会议后再转发需求，截图当契约。
+
+**改造前** — IM 当总线，人当传话：
+
+![改造前 · 传话筒式 AI 协作](docs/assets/sortie-before-relay-handdrawn.jpg)
+
+**改造后** — 可确认航线、产物契约、HITL 门禁、小队可见协作：
+
+![改造后 · Sortie Deck 控制面](docs/assets/sortie-after-control-plane-handdrawn.jpg)
 
 - **控制面，而不是又一个聊天框** — 任务、阶段、HITL、产物一等公民。
 - **可插拔执行器** — `mock` / `claude_code` / `cursor_cli` / `deploy_shell`，可选 LLM 产品位。
 - **可确认航线** — 内部 **航线规划官** 根据简报提案节点；出击前需确认或手改。
 - **可组合编制** — 已发布角色、编制位工具包、记忆跨任务复利。
+
+完整对照：[为什么需要 Sortie Deck](docs/zh/design/why-sortie-deck.md) · [改造方案介绍](docs/zh/design/transformation.md)。
 
 ## 功能一览
 
@@ -168,11 +180,10 @@ mkdocs serve
 # → http://127.0.0.1:8000
 ```
 
-- 设计索引：[`DESIGN.md`](DESIGN.md) · `docs/zh/design/` · `docs/en/design/`
-- 架构：[`ARCHITECTURE.md`](ARCHITECTURE.md)
-- 简体中文：`docs/zh/` · English：`docs/en/`
+- English: `docs/en/`
+- 简体中文: `docs/zh/`
 
-另见：[贡献指南](CONTRIBUTING.md) · [安全](SECURITY.md) · [行为准则](CODE_OF_CONDUCT.md) · [变更日志](CHANGELOG.md) · [TODO](TODO.md)
+另见：[贡献指南](CONTRIBUTING.md) · [安全](SECURITY.md) · [行为准则](CODE_OF_CONDUCT.md) · [变更日志](CHANGELOG.md)
 
 ## 贡献
 

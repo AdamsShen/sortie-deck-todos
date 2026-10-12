@@ -7,8 +7,8 @@ Use the language switcher in the header to toggle **English / 简体中文**.
 ## Start here
 
 - [Getting Started](getting-started.md) — install, run API + workbench
-- [What problem we solve](design/problems-solved.md) — pain points and before/after diagrams
-- [Design](design/index.md) — goals, pipeline, HITL, threat model, ADRs
+- [Why Sortie Deck](design/why-sortie-deck.md) — pain points and before/after diagrams
+- [Transformation plan](design/transformation.md) — principles and landing points
 - [Architecture Overview](architecture/overview.md) — system design
 - [Modules](modules/auth.md) — per-module tech specs and implementation plans
 - [Roadmap](roadmap.md) — cross-cutting milestones

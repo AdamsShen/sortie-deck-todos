@@ -4,7 +4,7 @@ Sortie Deck design documents live in the bilingual MkDocs tree:
 
 | Doc | English | 简体中文 |
 |-----|---------|----------|
-| What problem we solve | [`docs/en/design/problems-solved.md`](docs/en/design/problems-solved.md) | [`docs/zh/design/problems-solved.md`](docs/zh/design/problems-solved.md) |
+| Why Sortie Deck | [`docs/en/design/why-sortie-deck.md`](docs/en/design/why-sortie-deck.md) | [`docs/zh/design/why-sortie-deck.md`](docs/zh/design/why-sortie-deck.md) |
 | Transformation plan | [`docs/en/design/transformation.md`](docs/en/design/transformation.md) | [`docs/zh/design/transformation.md`](docs/zh/design/transformation.md) |
 | Design home | [`docs/en/design/index.md`](docs/en/design/index.md) | [`docs/zh/design/index.md`](docs/zh/design/index.md) |
 | Goals & non-goals | [`docs/en/design/goals.md`](docs/en/design/goals.md) | [`docs/zh/design/goals.md`](docs/zh/design/goals.md) |

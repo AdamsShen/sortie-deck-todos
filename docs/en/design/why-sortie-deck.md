@@ -1,4 +1,4 @@
-# What problem does this project solve?
+# Why Sortie Deck
 
 Sortie Deck is not about “adding AI”. It targets teams that **already use AI**, yet still use humans as a **telephone over IM**.
 

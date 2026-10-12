@@ -7,8 +7,8 @@
 ## 从这里开始
 
 - [快速开始](getting-started.md) — 安装、启动 API 与工作台
-- [项目解决了什么问题](design/problems-solved.md) — 痛点与改造前后对照图
-- [设计文档](design/index.md) — 目标、航线、HITL、威胁模型、ADR
+- [为什么需要 Sortie Deck](design/why-sortie-deck.md) — 痛点与改造前后对照图
+- [改造方案介绍](design/transformation.md) — 改造原则与落地抓手
 - [架构总览](architecture/overview.md) — 系统设计
 - [模块](modules/auth.md) — 分模块技术方案与实现计划
 - [路线图](roadmap.md) — 跨模块里程碑

@@ -47,7 +47,7 @@ plugins:
             Home: 首页
             Getting Started: 快速开始
             Design: 设计
-            What Problem We Solve: 项目解决了什么问题
+            Why Sortie Deck: 为什么需要 Sortie Deck
             Transformation Plan: 改造方案介绍
             Goals & Non-goals: 目标与非目标
             Pipeline & Graph: 航线与图编排
@@ -94,7 +94,7 @@ nav:
   - Getting Started: getting-started.md
   - Design:
       - Overview: design/index.md
-      - What Problem We Solve: design/problems-solved.md
+      - Why Sortie Deck: design/why-sortie-deck.md
       - Transformation Plan: design/transformation.md
       - Goals & Non-goals: design/goals.md
       - Pipeline & Graph: design/pipeline-and-graph.md

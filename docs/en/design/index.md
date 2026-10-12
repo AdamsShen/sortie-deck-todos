@@ -6,7 +6,7 @@ This tree holds **product / system design** (why we built it this way). Module g
 
 | Doc | What it covers |
 |-----|----------------|
-| [What problem we solve](problems-solved.md) | Pain points and before/after diagrams |
+| [Why Sortie Deck](why-sortie-deck.md) | Pain, before/after diagrams, and the answer |
 | [Transformation plan](transformation.md) | Principles and landing points |
 | [Goals & non-goals](goals.md) | Problem statement and boundaries |
 | [Pipeline & graph](pipeline-and-graph.md) | Planning, parallel branches, artifact contracts |
@@ -18,7 +18,7 @@ Architecture overview: [architecture/overview.md](../architecture/overview.md). 
 
 ## Suggested reading order
 
-1. What problem we solve / Transformation plan  
+1. Why Sortie Deck / Transformation plan  
 2. Goals & non-goals  
 3. Architecture overview + data flow  
 4. Pipeline & graph, HITL  

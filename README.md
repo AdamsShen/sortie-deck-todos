@@ -14,10 +14,22 @@ The workbench provides a mission board, squad chat rooms, Codex knowledge, memor
 
 ## Why Sortie Deck
 
+Teams already use AI — but Product → Eng → QA still runs as a **telephone over IM**: each role opens a private chat window, requirements get re-forwarded after clarification meetings, and screenshots become contracts.
+
+**Before** — IM as the bus, humans as the relay:
+
+![Before · telephone-style AI collaboration](docs/assets/sortie-before-relay-handdrawn.jpg)
+
+**After** — confirmable pipeline, artifact contracts, HITL gates, visible squad rooms:
+
+![After · Sortie Deck control plane](docs/assets/sortie-after-control-plane-handdrawn.jpg)
+
 - **Control plane, not another chatbot** — missions, stages, HITL, and artifacts are first-class.
 - **Pluggable executors** — `mock`, `claude_code`, `cursor_cli`, `deploy_shell`, optional LLM product.
 - **Confirmable pipelines** — an internal **pipeline planner** proposes stages from the brief; humans confirm or edit before launch.
 - **Composable loadout** — published agents, role toolkits, and memory compound across missions.
+
+Full before/after narrative: [Why Sortie Deck](docs/en/design/why-sortie-deck.md) · [改造方案](docs/zh/design/transformation.md).
 
 ## Features
 
@@ -183,11 +195,10 @@ mkdocs serve
 # → http://127.0.0.1:8000
 ```
 
-- Design index: [`DESIGN.md`](DESIGN.md) · `docs/en/design/` · `docs/zh/design/`
-- Architecture: [`ARCHITECTURE.md`](ARCHITECTURE.md)
-- English: `docs/en/` · 简体中文: `docs/zh/`
+- English: `docs/en/`
+- 简体中文: `docs/zh/`
 
-Also: [CONTRIBUTING](CONTRIBUTING.md) · [SECURITY](SECURITY.md) · [CODE OF CONDUCT](CODE_OF_CONDUCT.md) · [CHANGELOG](CHANGELOG.md) · [TODO](TODO.md)
+Also: [CONTRIBUTING](CONTRIBUTING.md) · [SECURITY](SECURITY.md) · [CODE OF CONDUCT](CODE_OF_CONDUCT.md) · [CHANGELOG](CHANGELOG.md)
 
 ## Contributing
 
@@ -202,7 +213,3 @@ Please report vulnerabilities per [SECURITY.md](SECURITY.md). Do not open public
 Copyright 2026 Sortie Deck contributors.
 
 Licensed under the [Apache License, Version 2.0](LICENSE).
-
-## 后续规划
-
-下一阶段能力 backlog 见 [TODO.md](./TODO.md)。
