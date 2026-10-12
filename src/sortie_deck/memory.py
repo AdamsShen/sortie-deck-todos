@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import threading
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -246,3 +246,166 @@ class MemoryStore:
             return body
         trimmed = body[: CONTEXT_BLOCK_MAX_CHARS - 3].rstrip()
         return trimmed + "..."
+
+
+class Mem0Memory:
+    """mem0 shared-memory backend (REST) — runs *alongside* the local store.
+
+    Entries are isolated per initiative via ``user_id = "<prefix>:<initiative_id>"``.
+    All calls degrade silently (network failures never break a stage); the local
+    :class:`MemoryStore` remains the source of truth.
+    """
+
+    def __init__(self, *, base_url: str, api_key: str | None, user_prefix: str, timeout: float = 5.0) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+        self.user_prefix = user_prefix or "sortie"
+        self.timeout = timeout
+
+    def _headers(self) -> dict[str, str]:
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
+
+    def _user_id(self, initiative_id: str | None) -> str:
+        return f"{self.user_prefix}:{initiative_id or 'global'}"
+
+    def add(self, content: str, *, initiative_id: str | None, tags: list[str] | None = None) -> bool:
+        try:
+            import httpx
+
+            resp = httpx.post(
+                f"{self.base_url}/v2/memories",
+                json={
+                    "memory": content.strip(),
+                    "user_id": self._user_id(initiative_id),
+                    "metadata": {"tags": tags or []},
+                },
+                headers=self._headers(),
+                timeout=self.timeout,
+            )
+            return resp.status_code < 500
+        except Exception:  # noqa: BLE001 — mem0 is an enhancement, never a dependency
+            return False
+
+    def search(self, query: str, *, initiative_id: str | None, limit: int = 8) -> list[str]:
+        try:
+            import httpx
+
+            resp = httpx.post(
+                f"{self.base_url}/v2/memories/search",
+                json={
+                    "query": query,
+                    "user_id": self._user_id(initiative_id),
+                    "limit": limit,
+                },
+                headers=self._headers(),
+                timeout=self.timeout,
+            )
+            if resp.status_code >= 500:
+                return []
+            rows = resp.json()
+            if isinstance(rows, dict):
+                rows = rows.get("results") or rows.get("memories") or []
+            out: list[str] = []
+            for row in rows or []:
+                if isinstance(row, dict):
+                    text = row.get("memory") or row.get("text") or ""
+                    if text:
+                        out.append(str(text))
+                elif isinstance(row, str):
+                    out.append(row)
+            return out
+        except Exception:  # noqa: BLE001
+            return []
+
+    def health(self) -> bool:
+        try:
+            import httpx
+
+            resp = httpx.get(f"{self.base_url}/health", headers=self._headers(), timeout=self.timeout)
+            return resp.status_code < 500
+        except Exception:  # noqa: BLE001
+            return False
+
+
+class CompositeMemory:
+    """Local :class:`MemoryStore` + optional mem0 — one interface for all callers.
+
+    Writes always hit the local store; mem0 receives a mirror when configured.
+    Reads merge mem0 search hits into the context block (dedup by content).
+    """
+
+    def __init__(self, local: MemoryStore, mem0: Mem0Memory | None = None) -> None:
+        self.local = local
+        self.mem0 = mem0
+
+    # --- delegated local store API ------------------------------------------
+
+    def list(self, **kwargs: Any) -> list[MemoryEntry]:
+        return self.local.list(**kwargs)
+
+    def get(self, mem_id: str) -> MemoryEntry:
+        return self.local.get(mem_id)
+
+    def create(self, req: CreateMemoryRequest, *, author_id: str, author_name: str) -> MemoryEntry:
+        entry = self.local.create(req, author_id=author_id, author_name=author_name)
+        if self.mem0 is not None and entry.scope == "mission":
+            self.mem0.add(entry.content, initiative_id=entry.scope_id, tags=entry.tags)
+        return entry
+
+    def update(self, mem_id: str, req: UpdateMemoryRequest) -> MemoryEntry:
+        return self.local.update(mem_id, req)
+
+    def delete(self, mem_id: str) -> None:
+        self.local.delete(mem_id)
+
+    def list_for_stage(self, **kwargs: Any) -> list[MemoryEntry]:
+        return self.local.list_for_stage(**kwargs)
+
+    # --- merged context --------------------------------------------------------
+
+    def context_block(
+        self,
+        *,
+        user_id: str | None = None,
+        mission_id: str | None = None,
+        agent_ids: list[str] | None = None,
+        stage: str | None = None,
+        limit: int = 12,
+    ) -> str:
+        block = self.local.context_block(
+            user_id=user_id,
+            mission_id=mission_id,
+            agent_ids=agent_ids,
+            stage=stage,
+            limit=limit,
+        )
+        if self.mem0 is None:
+            return block
+        query = " ".join(x for x in (mission_id, stage) if x).strip() or "mission context"
+        hits = self.mem0.search(query, initiative_id=mission_id, limit=6)
+        if not hits:
+            return block
+        mem0_section = "Shared memory (mem0):\n" + "\n".join(f"- {h}" for h in hits)
+        merged = f"{block}\n\n{mem0_section}".strip()
+        if len(merged) <= CONTEXT_BLOCK_MAX_CHARS:
+            return merged
+        return merged[: CONTEXT_BLOCK_MAX_CHARS - 3].rstrip() + "..."
+
+
+def build_memory_store(path: Path | None = None) -> MemoryStore | CompositeMemory:
+    """Factory honouring ``TDT_MEMORY_BACKEND`` — local only, or local + mem0."""
+    from sortie_deck.settings import settings
+
+    store = MemoryStore(path or settings.memory_db)
+    if settings.memory_backend.strip().lower() == "mem0" and settings.mem0_base_url:
+        mem0 = Mem0Memory(
+            base_url=settings.mem0_base_url,
+            api_key=settings.mem0_api_key,
+            user_prefix=settings.mem0_user_prefix,
+            timeout=settings.mem0_timeout,
+        )
+        return CompositeMemory(local=store, mem0=mem0)
+    return store
