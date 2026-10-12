@@ -100,12 +100,32 @@ class HitlAction(str, Enum):
     EDIT_INSTRUCTION = "edit_instruction"
     STOP = "stop"
     REROUTE = "reroute"
+    # Human-authorised harness switch (mid-run unlock, see HarnessLockedError)
+    SWITCH_HARNESS = "switch_harness"
 
 
 class PipelineNotConfirmedError(RuntimeError):
     code = "pipeline_not_confirmed"
 
     def __init__(self, message: str = "Pipeline not confirmed — confirm or edit stages first") -> None:
+        super().__init__(message)
+        self.message = message
+
+
+class HarnessLockedError(RuntimeError):
+    """Raised when the mission harness is changed after the mission started."""
+
+    code = "harness_locked"
+
+    def __init__(self, message: str = "Harness is locked once the mission has started") -> None:
+        super().__init__(message)
+        self.message = message
+
+
+class UnknownHarnessError(RuntimeError):
+    code = "unknown_harness"
+
+    def __init__(self, message: str = "Unknown harness provider") -> None:
         super().__init__(message)
         self.message = message
 
@@ -183,6 +203,7 @@ class HitlRequest(BaseModel):
             HitlAction.EDIT_INSTRUCTION,
             HitlAction.STOP,
             HitlAction.REROUTE,
+            HitlAction.SWITCH_HARNESS,
         ]
     )
     artifacts: list[ArtifactRef] = Field(default_factory=list)
@@ -193,6 +214,8 @@ class HitlDecision(BaseModel):
     instruction: str | None = None
     next_stage: str | None = None
     note: str | None = None
+    # Target harness for `switch_harness` decisions
+    harness: str | None = None
 
 
 class ActorKind(str, Enum):
@@ -220,6 +243,11 @@ class Initiative(BaseModel):
     current_stage: str = "intake"
     thread_id: str = Field(default_factory=lambda: new_id("thr_"))
     room_id: str = Field(default_factory=lambda: new_id("squad_"))
+    # Agent harness this mission runs on (claude_code | opencode | codex | cursor | mock).
+    # Selected at creation; locked (harness_locked) once the pipeline starts —
+    # a mid-run change requires the HITL `switch_harness` action.
+    harness: str = "claude_code"
+    harness_locked: bool = False
     roles: list[RoleAgent] = Field(default_factory=list)
     participants: list[RoomParticipant] = Field(default_factory=list)
     artifacts: list[ArtifactRef] = Field(default_factory=list)
@@ -252,6 +280,9 @@ class StageContext(BaseModel):
     # Layered memory brief injected into the agent prompt. Sub-room conclusions
     # arrive here, scoped to the stage that requested them.
     memory_brief: str = ""
+    # Initiative-level agent harness (claude_code | opencode | codex | cursor | mock)
+    harness: str = ""
+    harness_locked: bool = False
     # Roles this agent's contract allows it to hand off to (read-only hint)
     handoff_targets: list[str] = Field(default_factory=list)
 
@@ -274,6 +305,9 @@ class CreateInitiativeRequest(BaseModel):
     # auto | trivial | normal | complex — feeds planner when track unset
     complexity: Literal["auto", "trivial", "normal", "complex"] = "auto"
     coding_executor: Literal["mock", "claude_code", "cursor_cli", "auto"] = "auto"
+    # Agent harness for the whole mission; None → TDT_DEFAULT_HARNESS.
+    # Locked on start; mid-run change requires HITL switch_harness approval.
+    harness: str | None = None
     webhook_url: str | None = None
     auto_start: bool = False
     # When true with auto_start, skip human confirm (CLI/tests)
@@ -323,6 +357,8 @@ class HitlSubmitRequest(BaseModel):
     next_stage: str | None = None
     note: str | None = None
     author_name: str | None = None
+    # Target harness for `switch_harness` decisions
+    harness: str | None = None
 
 
 class RoomMessage(BaseModel):
