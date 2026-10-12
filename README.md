@@ -18,11 +18,11 @@ Teams already use AI — but Product → Eng → QA still runs as a **telephone 
 
 **Before** — IM as the bus, humans as the relay:
 
-![Before · telephone-style AI collaboration](docs/assets/sortie-before-relay-handdrawn.jpg)
+![Before · telephone-style AI collaboration](docs/assets/sortie-before-relay-handdrawn-en.jpg)
 
 **After** — confirmable pipeline, artifact contracts, HITL gates, visible squad rooms:
 
-![After · Sortie Deck control plane](docs/assets/sortie-after-control-plane-handdrawn.jpg)
+![After · Sortie Deck control plane](docs/assets/sortie-after-control-plane-handdrawn-en.jpg)
 
 - **Control plane, not another chatbot** — missions, stages, HITL, and artifacts are first-class.
 - **Pluggable executors** — `mock`, `claude_code`, `cursor_cli`, `deploy_shell`, optional LLM product.

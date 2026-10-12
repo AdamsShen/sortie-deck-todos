@@ -15,7 +15,7 @@ Typical path:
 3. Dev / QA **each** dump the same doc into their own AI
 4. Integration and release still rely on **IM relays**
 
-![Before · telephone-style AI collaboration](../../assets/sortie-before-relay-handdrawn.jpg)
+![Before · telephone-style AI collaboration](../../assets/sortie-before-relay-handdrawn-en.jpg)
 
 > Product → AI → requirements → clarification → IM relay → each side’s AI → ready for test?
 
@@ -29,7 +29,7 @@ Typical path:
 | Oral “pipeline” agreements | Brief → planner proposes → **human confirms** → launch |
 | Group @ as a gate | LangGraph `interrupt()` HITL (resumable, auditable) |
 
-![After · Sortie Deck control plane](../../assets/sortie-after-control-plane-handdrawn.jpg)
+![After · Sortie Deck control plane](../../assets/sortie-after-control-plane-handdrawn-en.jpg)
 
 > Brief → confirmable pipeline → role agents deliver by contract → HITL → visible squad collab → ship
 

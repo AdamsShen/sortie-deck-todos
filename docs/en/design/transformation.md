@@ -16,7 +16,7 @@ The path “uses AI”, but the bus is still people + IM:
 
 Pain: no shared pipeline, no artifact contracts, gates = “@ me in the group”, versions diverge.
 
-![Before · telephone-style AI collaboration](../../assets/sortie-before-relay-handdrawn.jpg)
+![Before · telephone-style AI collaboration](../../assets/sortie-before-relay-handdrawn-en.jpg)
 
 ### Before in one line
 
@@ -34,7 +34,7 @@ Replace chat relays with a **confirmable pipeline + artifact contracts + HITL ga
 | Meeting notes re-forwarded | Brief → pipeline planner proposes → **human confirms** → launch |
 | Group @ as a gate | LangGraph `interrupt()` HITL (approve / rewrite / reject) |
 
-![After · Sortie Deck control plane](../../assets/sortie-after-control-plane-handdrawn.jpg)
+![After · Sortie Deck control plane](../../assets/sortie-after-control-plane-handdrawn-en.jpg)
 
 ### After in one line
 
