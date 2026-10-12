@@ -19,6 +19,8 @@ TRACK_FILES = {
     "default": "default_pipeline.yaml",
     "express": "express_pipeline.yaml",
     "standard": "standard_pipeline.yaml",
+    # Non-engineering requests (研究 / 育儿 / 股票 …) run on the same machinery
+    "research": "research_pipeline.yaml",
 }
 
 COMPLEXITY_TO_TRACK: dict[str, PipelineTrack] = {
@@ -243,7 +245,14 @@ def catalog_by_id() -> dict[str, dict[str, Any]]:
 
 def list_tracks() -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
-    for track in ("express", "standard", "default"):
+    # Built-in order first, then any extra registered track (e.g. research)
+    order = [
+        "express",
+        "standard",
+        "default",
+        *[k for k in TRACK_FILES if k not in {"express", "standard", "default"}],
+    ]
+    for track in order:
         tpl = load_pipeline_template(track)
         stages = [_stage_from_yaml(s) for s in tpl.get("stages", [])]
         out.append(
