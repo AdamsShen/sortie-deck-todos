@@ -3232,6 +3232,43 @@ textarea {
   gap: 0.5rem;
 }
 
+.briefing-repos {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.briefing-repos-hint {
+  font-size: 0.7rem;
+  margin: 0;
+}
+
+.briefing-repo-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.briefing-repo-row {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.briefing-repo-row input {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.75rem;
+  padding: 0.25rem 0.4rem;
+}
+
+.briefing-repo-row input.briefing-repo-branch {
+  flex: 0 0 9rem;
+}
+
 @media (max-width: 900px) {
   .briefing-layout {
     grid-template-columns: 1fr;
