@@ -2479,6 +2479,22 @@ textarea {
   background: color-mix(in srgb, var(--accent, #6ec8ff) 18%, transparent);
 }
 
+.harness-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.25rem;
+}
+
+.harness-row select {
+  max-width: 16rem;
+}
+
+.harness-row .panel-label {
+  margin: 0;
+}
+
 .hitl-inline {
   display: flex;
   flex-wrap: wrap;

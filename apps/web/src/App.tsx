@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { api } from "./api";
+import { api, listHarnesses, updateInitiativeHarness } from "./api";
 import { OperatorChip } from "./components/OperatorChip";
 import { PipelineEditor } from "./components/PipelineEditor";
 import { ChatComposer, type MentionOption } from "./components/ChatComposer";
@@ -27,6 +27,7 @@ import {
 import type {
   AgentSlot,
   Dashboard,
+  HarnessInfo,
   Initiative,
   InitiativeStatus,
   KnowledgeCategory,
@@ -100,6 +101,9 @@ export default function App() {
   const [dash, setDash] = useState<Dashboard | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<Initiative | null>(null);
+  const [harnesses, setHarnesses] = useState<HarnessInfo[]>([]);
+  const [harnessPick, setHarnessPick] = useState("");
+  const [harnessSwitchPick, setHarnessSwitchPick] = useState("");
   const [messages, setMessages] = useState<RoomMessage[]>([]);
   const [filter, setFilter] = useState<"all" | InitiativeStatus>("all");
   const [stageCatalog, setStageCatalog] = useState<PipelineStageInfo[]>([]);
@@ -620,6 +624,43 @@ export default function App() {
     prevArtCountRef.current = artCount;
   }, [selectedId, artCount]);
 
+  // Agent harness providers + the mission's current pick (draft selector state)
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    listHarnesses(token)
+      .then((res) => {
+        if (!cancelled) setHarnesses(res.harnesses || []);
+      })
+      .catch(() => setHarnesses([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  useEffect(() => {
+    setHarnessPick(String(selected?.harness || ""));
+    setHarnessSwitchPick("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sync on mission change
+  }, [selected?.id, selected?.harness]);
+
+  const harnessLocked = Boolean(selected?.harness_locked) && selected?.status !== "draft";
+
+  async function saveHarness(harness: string) {
+    if (!selectedId || !harness) return;
+    setBusy(true);
+    try {
+      const data = await updateInitiativeHarness(token, selectedId, harness);
+      setDetail(data);
+      await refreshList();
+    } catch (err) {
+      setError(errMsg(err));
+      playSfx("warn");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   useEffect(() => {
     if (!token || !selectedId || (!lootOpen && view !== "squad")) return;
     void loadWorkspace(selectedId);
@@ -849,14 +890,14 @@ export default function App() {
     }
   }, [selected?.id, selected?.meta?.pipeline_specs, selected?.meta?.pipeline_confirmed, pipelineEditing]);
 
-  async function submitHitl(action: string) {
+  async function submitHitl(action: string, harness?: string) {
     setBusy(true);
     playSfx(action === "approve" ? "gate" : "warn");
     try {
       const data = await api<Initiative>(`/api/initiatives/${selectedId}/hitl`, {
         token,
         method: "POST",
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ action, harness: harness || null }),
       });
       setDetail(data);
       await refreshList();
@@ -1818,6 +1859,36 @@ export default function App() {
                 {selected.meta?.pipeline_track ? ` · ${String(selected.meta.pipeline_track)}` : ""}
               </p>
               <h2 className="mission-title">{selected.title}</h2>
+              <div className="harness-row" title={tr("harnessDraftHint")}>
+                <span className="panel-label">{tr("harness")}</span>
+                {selected.status === "draft" || selected.status === "stopped" ? (
+                  <>
+                    <select
+                      value={harnessPick}
+                      disabled={busy || harnesses.length === 0}
+                      onChange={(e) => {
+                        setHarnessPick(e.target.value);
+                        void saveHarness(e.target.value);
+                      }}
+                    >
+                      {(harnesses.length
+                        ? harnesses
+                        : [{ name: String(selected.harness || "claude_code"), label: String(selected.harness || "claude_code"), available: true, probe: { status: "ok", detail: "" } }]
+                      ).map((h) => (
+                        <option key={h.name} value={h.name}>
+                          {h.label} ({h.available ? tr("harnessAvailable") : tr("harnessUnavailable")})
+                        </option>
+                      ))}
+                    </select>
+                    {harnessLocked && <span className="st">🔒 {tr("harnessLocked")}</span>}
+                  </>
+                ) : (
+                  <span className="st">
+                    {String(selected.harness || "claude_code")}
+                    {harnessLocked ? ` · 🔒 ${tr("harnessLocked")}` : ""}
+                  </span>
+                )}
+              </div>
             </div>
             <div className="topbar-actions">
               <span className={`st large ${selected.status}`}>{statusLabel(lang, selected.status)}</span>
@@ -2001,6 +2072,36 @@ export default function App() {
                   <button type="button" className="btn" disabled={busy} onClick={() => submitHitl("reject")}>
                     {tr("reject")}
                   </button>
+                  {(!selected.pending_hitl.allowed_actions ||
+                    selected.pending_hitl.allowed_actions.includes("switch_harness")) && (
+                    <>
+                      <select
+                        value={harnessSwitchPick}
+                        disabled={busy || harnesses.length === 0}
+                        onChange={(e) => setHarnessSwitchPick(e.target.value)}
+                      >
+                        <option value="">{tr("harnessSwitchTarget")}…</option>
+                        {harnesses
+                          .filter((h) => h.name !== selected.harness)
+                          .map((h) => (
+                            <option key={h.name} value={h.name}>
+                              {h.label} ({h.available ? tr("harnessAvailable") : tr("harnessUnavailable")})
+                            </option>
+                          ))}
+                      </select>
+                      <button
+                        type="button"
+                        className="btn"
+                        disabled={busy || !harnessSwitchPick}
+                        onClick={() => {
+                          void submitHitl("switch_harness", harnessSwitchPick);
+                          setHarnessSwitchPick("");
+                        }}
+                      >
+                        {tr("harnessSwitch")}
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
               <ChatComposer

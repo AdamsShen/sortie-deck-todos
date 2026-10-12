@@ -207,6 +207,23 @@ export interface TimelineEvent {
   data?: Record<string, unknown>;
 }
 
+export interface HarnessProbe {
+  status: string;
+  detail: string;
+}
+
+export interface HarnessInfo {
+  name: string;
+  label: string;
+  probe: HarnessProbe;
+  available: boolean;
+}
+
+export interface HarnessesResponse {
+  harnesses: HarnessInfo[];
+  default: string;
+}
+
 export interface Initiative {
   id: string;
   title: string;
@@ -216,6 +233,9 @@ export interface Initiative {
   current_stage: string;
   thread_id?: string;
   room_id?: string;
+  // Initiative-locked agent harness (claude_code | opencode | codex | cursor | mock)
+  harness?: string;
+  harness_locked?: boolean;
   roles: RoleAgent[];
   participants: RoomParticipant[];
   artifacts: ArtifactRef[];

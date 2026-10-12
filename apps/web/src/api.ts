@@ -2,7 +2,9 @@ import { ApiError } from "./types";
 import type {
   DecisionAnswerResult,
   ForgeDraft,
+  HarnessesResponse,
   HumanDecisionRecord,
+  Initiative,
   RoleSpec,
   SubRoomRecord,
 } from "./types";
@@ -35,6 +37,25 @@ export async function api<T = unknown>(path: string, { token, ...options }: ApiO
 
 export async function listRoles(token: string): Promise<RoleSpec[]> {
   return api<RoleSpec[]>("/api/roles", { token });
+}
+
+// --- agent harnesses --------------------------------------------------------
+
+export async function listHarnesses(token: string, refresh = false): Promise<HarnessesResponse> {
+  const query = refresh ? "?refresh=true" : "";
+  return api<HarnessesResponse>(`/api/harnesses${query}`, { token });
+}
+
+export async function updateInitiativeHarness(
+  token: string,
+  initiativeId: string,
+  harness: string,
+): Promise<Initiative> {
+  return api<Initiative>(`/api/initiatives/${encodeURIComponent(initiativeId)}/harness`, {
+    token,
+    method: "PATCH",
+    body: JSON.stringify({ harness }),
+  });
 }
 
 export async function createRole(
