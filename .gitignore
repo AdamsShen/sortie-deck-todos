@@ -19,3 +19,6 @@ apps/web/.vite/
 htmlcov/
 site/
 tmp/
+
+# CodeBuddy local project data
+.codebuddy/
