@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Agent harness capability (system-wide)**: pluggable harness providers — `claude_code` (claude-agent-sdk), `opencode` (serve + HTTP), `codex` (headless JSON protocol), `cursor` (cursor-agent headless), `mock` (fallback) — all running cloud-side via SDK/protocol, never the user's local machine (`harness_providers/`). Selected per mission at creation, locked on `/start` (`Initiative.harness` / `harness_locked`, `TDT_DEFAULT_HARNESS=claude_code`); every stage conversation routes through the generic `HarnessStageExecutor` (legacy mock/coding executors remain as degraded fallback, `TDT_HARNESS_FALLBACK`); mid-run switch requires the HITL `switch_harness` action. Probe API `GET /api/harnesses` (TTL-cached), draft-time `PATCH /api/initiatives/{id}/harness`
+- **Mission-bound memory**: `mission_memory.py` — per-initiative files under `data/missions/<id>/memory/` (`memory.md` rolling summary, `sessions/*.jsonl` multi-session transcripts, `context/*.md` bound files like brief/plan/harness). New sessions auto-load memory + bound files (`bootstrap_context`), token budget `TDT_MISSION_CONTEXT_TOKEN_LIMIT` triggers LLM auto-summary written back to `memory.md`
+- **mem0 shared-memory backend**: `TDT_MEMORY_BACKEND=mem0` (`TDT_MEM0_BASE_URL` / `TDT_MEM0_API_KEY` / `TDT_MEM0_USER_PREFIX`) runs alongside the local `MemoryStore` (`CompositeMemory`), initiative-scoped isolation, hits merged into context blocks; RAG (`knowledge_gateway`) results are injected into harness context packs
+- Workbench: harness selector with probe status on draft missions, locked-harness badge, HITL "switch harness" approval action
+
 - Apache-2.0 license and open-source project docs (EN/ZH README, MkDocs Material i18n site)
 - Architecture overview, data-flow diagrams, and per-module technical + implementation plans
 - Expanded per-module specs (entry → core → platform) with API contracts, sequences, P0–P2 task tables and acceptance criteria
