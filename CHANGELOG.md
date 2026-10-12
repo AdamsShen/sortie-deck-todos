@@ -18,12 +18,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Toolkit examples under `packages/examples/`; executor soft-fail when CLI missing
 - P1: `TDT_STORAGE=sqlite` initiative repository, optional LLM planner / room LLM / MCP runtime flags
 - P2: sqlite run queue + leases, S3 artifact backend, org policy, Slack/Feishu bridges, `sortie_deck.executors` entry points
+- **Multi-agent collaboration**: `AgentContract` + persona front-matter contracts (`agent_contract.py`), open `RoleRegistry` (`roles.py`), LLM agent forge with human review (`agent_forge.py`), narrow-scope manager (`manager.py`), temporary sub-rooms (`subroom.py`), just-in-time capability loading (`loadout.py`), skill script execution (`skill_runtime.py`), human decision centre (`decisions.py`), multi-channel notify (`notify.py`), mission guardrails (`guardrails.py`)
+- **Agent-driven hand-off**: a finishing agent may hand off to a plan node inside its contract whitelist (conditional edges; HITL gates and the frozen plan are never bypassed)
+- **Manager join decision**: parallel waves arbitrate through the manager when branches disagree
+- **Plan freezing**: `plan_digest` is written on start and verified on resume; a changed plan refuses to resume
+- **Human escalation**: DingTalk bot + Feishu/webhook channels, `decision_id` idempotency, decider authorisation, SLA timeout fallback, redacted outbound content
+- **Toolkit metadata**: `capabilities` / `executable` / `read_only` on toolkit items for loadout recall and degradation
+- **Research track**: `research_pipeline.yaml` (采集 → 结论 → 建议) proves non-engineering requests use the same machinery
+- **Workbench views**: Role Forge review, Sub-rooms panel, Decision centre
+- **API**: `/api/roles`, `/api/forge/drafts*`, `/api/subrooms*`, `/api/decisions*`, `/api/bridges/dingtalk`
+- **Mission code repos**: `CreateInitiativeRequest.role_repos` (slot → list of `RepoConfig{url, branch, name, token}`) — dev agents clone & read the configured git/github repos into their workspace (`workspace/repos/<name>`) before iterating; diffs from those checkouts are collected into `diff.patch`; briefing UI lets you bind repos & branches per dev slot before confirming (`PATCH /api/briefing/sessions/{id}/repos`)
+- Docs: `design/multi-agent-collaboration.md` and `modules/collaboration.md` (ZH/EN)
 
 ### Changed
 
 - Product rename: **Rally** → **Sortie Deck**; Python package `trusted-dev-teams` → `sortie-deck` (`sortie_deck`); CLI `sortie` (legacy `tdt` alias); legacy `rally_*` storage keys / `rally.executors` still accepted
 - Orchestrator `startup()` recompiles confirmed custom graphs for HITL resume after restart
 - Structured API error `pipeline_not_confirmed` when starting an unconfirmed mission
+- **Routing is now conditional edges** rather than node `Command(goto=…)`: this LangGraph version still follows a node's static edges when it returns a `Command`, so both destinations would run in one superstep and collide on the shared state channels
+- `RoleId` accepts unregistered role keys as first-class members; `AgentSlot` is no longer a closed union
+- `compile_pipelines()` compiles every registered track by default; `list_tracks()` appends tracks beyond express/standard/default
+- Executors gained an optional `run_session(ctx, host)` entry point; `run()`-only executors are unaffected
+- **Collaboration capabilities are enabled by default** (`subroom_enabled`, `loadout_auto`, `mcp_call_enabled`, `skill_run_enabled`, `im_escalation`); each degrades safely when its dependency is missing, and setting it to `false` disables it
+- **Agent switching is a graph node jump and the only routing mechanism**: there are no static edges between stages any more — every node announces its next hop in `handoff_target` and a conditional edge consumes it, with the frozen plan as the router's default. Agent hand-offs, manager join decisions and HITL verdicts all travel through that one router; the legacy `TDT_AGENT_HANDOFF` / `TDT_MANAGER_JOIN_DECISION` switches were removed
 
 ## [0.1.0] — 2026-09-23
 
