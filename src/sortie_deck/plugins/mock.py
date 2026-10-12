@@ -311,6 +311,47 @@ class MockIntakeExecutor:
         )
 
 
+class MockCollaborativeExecutor:
+    """Demo session-capable executor.
+
+    Shows the pause/resume contract: mid-step the agent opens a temporary
+    sub-room, waits for the conclusion, and then finishes its own work with that
+    conclusion folded in. Registered as ``mock_collab`` for demos and tests.
+    """
+
+    name = "mock_collab"
+
+    def __init__(self, *, question: str = "对齐验收边界与失败路径") -> None:
+        self.question = question
+
+    async def run(self, ctx: StageContext) -> StageResult:
+        return StageResult(
+            status="ok",
+            message=f"{ctx.stage} ran (single-shot)",
+            artifacts={f"{ctx.stage}.md": f"# {ctx.stage}\n"},
+        )
+
+    async def run_session(self, ctx: StageContext, host) -> StageResult:
+        conclusion = await host.open_subroom(
+            goal=f"`{ctx.stage}` 上的疑问：{self.question}",
+            questions=[self.question],
+        )
+        body = json.dumps(
+            {
+                "stage": ctx.stage,
+                "question": self.question,
+                "subroom_conclusion": conclusion,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        return StageResult(
+            status="ok",
+            message=f"{ctx.stage} ran with a sub-room consult",
+            artifacts={f"{ctx.stage}.md": body},
+        )
+
+
 class MockQaCasesExecutor:
     name = "mock_qa_cases"
 

@@ -9,6 +9,7 @@ from langgraph.types import Command
 from sortie_deck.agents import AgentCatalog
 from sortie_deck.artifacts_s3 import build_artifact_store
 from sortie_deck.graph import build_graph_from_template, compile_pipelines
+from sortie_deck.manager import plan_digest, plan_digest_matches
 from sortie_deck.memory import MemoryStore
 from sortie_deck.models import (
     CODING_ROLE_VALUES,
@@ -22,6 +23,7 @@ from sortie_deck.models import (
     Initiative,
     InitiativeStatus,
     PipelineNotConfirmedError,
+    RepoConfig,
     RoleAgent,
     RoleId,
     RoomMessage,
@@ -77,6 +79,31 @@ def bind_catalogs(
         _toolkit_store = toolkit
 
 
+def mission_guardrails(ini: Initiative) -> Any:
+    """Guardrails for one mission (budget + wait graph + causal chain)."""
+    from sortie_deck.guardrails import guardrails_from_meta
+
+    return guardrails_from_meta(ini.meta)
+
+
+def mission_memory_brief(*, initiative_id: str, stage: str, user_id: str | None = None) -> str:
+    """Layered memory brief for one stage of one mission.
+
+    Stage-scoped entries (sub-room conclusions) only surface for the stage that
+    owns them, so sibling parallel branches are not polluted.
+    """
+    if _memory_store is None:
+        return ""
+    try:
+        return _memory_store.context_block(
+            user_id=user_id,
+            mission_id=initiative_id,
+            stage=stage,
+        )
+    except Exception:  # noqa: BLE001 — memory must never break a stage run
+        return ""
+
+
 class Orchestrator:
     def __init__(self, cfg: Settings | None = None) -> None:
         self.cfg = cfg or settings
@@ -117,8 +144,67 @@ class Orchestrator:
         for ini in self.store.list():
             if ini.meta.get("pipeline_confirmed") and ini.meta.get("pipeline_specs"):
                 self._compile_custom_graph(ini)
+        self._wire_subrooms()
+        self._wire_decisions()
         if self.run_queue is not None:
             self._worker_task = asyncio.create_task(self._worker_loop())
+
+    def _wire_decisions(self) -> None:
+        """Expose the human decision centre (escalation ladder's last resort)."""
+        from sortie_deck.decisions import DecisionService, DecisionStore, set_decision_service
+        from sortie_deck.notify import NotificationChannel, Notifier
+
+        channels: list[Any] = []
+        if self.cfg.dingtalk_webhook_url:
+            channels.append(
+                NotificationChannel(
+                    provider="dingtalk",
+                    url=self.cfg.dingtalk_webhook_url,
+                    secret=self.cfg.dingtalk_secret,
+                    label="dingtalk",
+                )
+            )
+        if self.cfg.feishu_webhook_url:
+            channels.append(
+                NotificationChannel(
+                    provider="feishu", url=self.cfg.feishu_webhook_url, label="feishu"
+                )
+            )
+        enabled = bool(getattr(self.cfg, "im_escalation", False))
+        fallback = str(getattr(self.cfg, "decision_fallback_action", "pause") or "pause")
+        if fallback not in {"pause", "continue", "abort"}:
+            fallback = "pause"
+        set_decision_service(
+            DecisionService(
+                store=DecisionStore(self.cfg.data_dir / "decisions.json"),
+                notifier=Notifier(
+                    channels=channels, timeout=self.cfg.webhook_timeout, enabled=enabled
+                ),
+                default_sla_seconds=float(
+                    getattr(self.cfg, "decision_sla_seconds", 1800) or 1800
+                ),
+                default_fallback=fallback,
+                enabled=enabled,
+            )
+        )
+
+    def _wire_subrooms(self) -> None:
+        """Expose the sub-room service to stage executors (via the graph host)."""
+        from sortie_deck.subroom import build_subroom_service, set_subroom_service
+
+        set_subroom_service(
+            build_subroom_service(
+                rooms=self.rooms,
+                memory=_memory_store,
+                path=self.cfg.data_dir / "subrooms.json",
+                enabled=bool(getattr(self.cfg, "subroom_enabled", False)),
+                max_tokens=int(getattr(self.cfg, "subroom_max_tokens", 20000) or 20000),
+                max_rounds=int(getattr(self.cfg, "subroom_max_rounds", 2) or 2),
+                timeout_seconds=float(getattr(self.cfg, "subroom_timeout_seconds", 300) or 300),
+                guardrails_load=self.guardrails_for_id,
+                guardrails_save=self._save_guardrails_for_id,
+            )
+        )
 
     async def shutdown(self) -> None:
         if self._worker_task is not None:
@@ -158,6 +244,73 @@ class Orchestrator:
         if graph is None:
             raise RuntimeError("pipeline graphs not compiled — call startup()")
         return graph
+
+    def _stages_for(self, ini: Initiative) -> list[dict[str, Any]]:
+        """The frozen plan stages this initiative is compiled from."""
+        meta = ini.meta or {}
+        specs = meta.get("pipeline_specs") or []
+        if specs and meta.get("pipeline_confirmed"):
+            try:
+                return list(materialize_template(specs, name=f"custom-{ini.id}")["stages"])
+            except Exception:  # noqa: BLE001 — fall back to the track template
+                pass
+        track = str(meta.get("pipeline_track") or ini.template or "default")
+        try:
+            return list(load_pipeline_template(track)["stages"])
+        except Exception:  # noqa: BLE001 — unknown track must not break resume checks
+            return []
+
+    def _assert_plan_unchanged(self, ini: Initiative) -> None:
+        """Refuse to resume a run whose plan was edited after it started."""
+        if not bool(getattr(self.cfg, "plan_digest_check", True)):
+            return
+        expected = str((ini.meta or {}).get("plan_digest") or "")
+        if not expected:
+            return
+        stages = self._stages_for(ini)
+        if not stages:
+            return
+        if not plan_digest_matches(expected, stages):
+            raise RuntimeError(
+                "pipeline changed after this run started — re-confirm the plan before "
+                f"resuming (expected {expected}, got {plan_digest(stages)})"
+            )
+
+    def guardrails_for(self, ini: Initiative) -> Any:
+        """Mission guardrails, seeded from the configured budget on first use."""
+        from sortie_deck.guardrails import MissionBudget, guardrails_from_meta
+
+        rails = guardrails_from_meta(ini.meta)
+        if not isinstance((ini.meta or {}).get("guardrails"), dict):
+            rails.budget = MissionBudget(
+                max_tokens=int(
+                    getattr(self.cfg, "guardrail_max_tokens", 2_000_000) or 2_000_000
+                ),
+                max_seconds=float(
+                    getattr(self.cfg, "guardrail_max_seconds", 21600) or 21600
+                ),
+                max_subrooms=int(getattr(self.cfg, "guardrail_max_subrooms", 20) or 20),
+                max_handoffs=int(getattr(self.cfg, "guardrail_max_handoffs", 40) or 40),
+            )
+            self.save_guardrails(ini, rails)
+        return rails
+
+    def save_guardrails(self, ini: Initiative, rails: Any) -> None:
+        from sortie_deck.guardrails import guardrails_to_meta
+
+        ini.meta = guardrails_to_meta(ini.meta, rails)
+        self.store.upsert(ini)
+
+    def guardrails_for_id(self, initiative_id: str) -> Any | None:
+        ini = self.store.get(initiative_id)
+        if ini is None:
+            return None
+        return self.guardrails_for(ini)
+
+    def _save_guardrails_for_id(self, initiative_id: str, rails: Any) -> None:
+        ini = self.store.get(initiative_id)
+        if ini is not None:
+            self.save_guardrails(ini, rails)
 
     def _compile_custom_graph(self, ini: Initiative) -> None:
         specs = ini.meta.get("pipeline_specs") or []
@@ -264,6 +417,7 @@ class Orchestrator:
         role_agents: dict[str, str] | None = None,
         role_toolkits: dict[str, list[str]] | None = None,
         template: str = "default",
+        role_repos: dict[str, list[RepoConfig]] | None = None,
     ) -> list[RoleAgent]:
         from sortie_deck.llm import LlmClient, resolve_coding_executor
 
@@ -310,6 +464,7 @@ class Orchestrator:
                     persona=persona,
                     executor=executor,
                     toolkit_ids=toolkit_ids,
+                    repos=list((role_repos or {}).get(role.value) or []),
                     catalog_agent_id=published.id if published else None,
                     avatar=(
                         (published.avatar if published and published.avatar else None)
@@ -380,12 +535,94 @@ class Orchestrator:
             brief = self._toolkit_brief(ids)
             if brief:
                 toolkit_briefs[f"stage:{stage}"] = brief
+        role_repos: dict[str, list[dict[str, Any]]] = {
+            r.role.value: [repo.model_dump(mode="json") for repo in r.repos]
+            for r in ini.roles
+            if r.repos
+        }
+        meta_repos = ini.meta.get("role_repos") or {}
+        for slot, repos in meta_repos.items():
+            if repos:
+                role_repos[slot] = [RepoConfig.model_validate(r).model_dump(mode="json") for r in repos]
         return {
             "role_personas": role_personas,
             "role_toolkits": role_toolkits,
             "stage_toolkits": stage_toolkits,
             "toolkit_briefs": toolkit_briefs,
+            "role_repos": role_repos,
         }
+
+    async def _apply_dynamic_loadout(self, ini: Initiative, loadout: dict[str, Any]) -> None:
+        """JIT capability loading: recall → select → probe → merge into the loadout.
+
+        Off by default (``TDT_LOADOUT_AUTO``). Manual pre-binding still wins: the
+        dynamic pass only *adds* items a stage asked for by capability.
+        """
+        if not bool(getattr(self.cfg, "loadout_auto", False)):
+            return
+        try:
+            from sortie_deck.loadout import CapabilityNeed, build_loadout
+        except Exception:  # noqa: BLE001 — optional capability
+            return
+
+        client = None
+        try:
+            from sortie_deck.llm import LlmClient
+
+            client = LlmClient(cli_fallback=bool(self.cfg.llm_cli_fallback))
+        except Exception:  # noqa: BLE001 — heuristic selection is a valid fallback
+            client = None
+
+        stage_toolkits = dict(loadout.get("stage_toolkits") or {})
+        briefs = dict(loadout.get("toolkit_briefs") or {})
+        plans: list[dict[str, Any]] = []
+        for stage in self._stages_for(ini):
+            name = str(stage.get("name") or stage.get("id") or "")
+            if not name or name == "done":
+                continue
+            role = str(stage.get("role") or "")
+            label = str(stage.get("label") or stage.get("label_en") or "")
+            needs = [
+                CapabilityNeed(capability=f"{role} {name}", reason="stage role and node id"),
+                CapabilityNeed(capability=label or name, reason="stage label"),
+            ]
+            try:
+                plan = await build_loadout(
+                    store=_toolkit_store,
+                    needs=needs,
+                    stage=name,
+                    role=role,
+                    brief=ini.brief,
+                    use_llm=bool(self.cfg.pipeline_llm),
+                    client=client,
+                )
+            except Exception:  # noqa: BLE001 — loadout must never block a start
+                continue
+            loaded = [c.item_id for c in plan.selected if c.loaded]
+            if loaded:
+                existing = list(stage_toolkits.get(name) or [])
+                stage_toolkits[name] = existing + [i for i in loaded if i not in existing]
+            if plan.manifest:
+                key = f"stage:{name}"
+                briefs[key] = f"{briefs.get(key) or ''}\n{plan.manifest}".strip()
+            if plan.selected or plan.rejected:
+                plans.append(
+                    {
+                        "stage": name,
+                        "role": role,
+                        "planner": plan.planner,
+                        "loaded": loaded,
+                        "selected": [c.model_dump(mode="json") for c in plan.selected],
+                        "rejected": plan.rejected,
+                        "manifest": plan.manifest,
+                    }
+                )
+        loadout["stage_toolkits"] = stage_toolkits
+        loadout["toolkit_briefs"] = briefs
+        loadout["loadout_plans"] = plans
+        if plans:
+            ini.meta = {**(ini.meta or {}), "loadout_plans": plans}
+            self.store.upsert(ini)
 
     def _seed_participants(self, ini: Initiative, creator_name: str) -> None:
         humans = [
@@ -498,6 +735,11 @@ class Orchestrator:
             k: filter_toolkit_ids(self.org_policy, list(v))
             for k, v in (req.stage_toolkits or {}).items()
         }
+        role_repos: dict[str, list[RepoConfig]] = {
+            slot: [RepoConfig.model_validate(r) for r in repos]
+            for slot, repos in (req.role_repos or {}).items()
+            if repos
+        }
 
         ini = Initiative(
             title=req.title,
@@ -505,7 +747,8 @@ class Orchestrator:
             template=role_template,
             status=InitiativeStatus.DRAFT,
             roles=self._roles_from_template(
-                coding, req.role_agents, role_toolkits, template=role_template
+                coding, req.role_agents, role_toolkits, template=role_template,
+                role_repos=role_repos,
             ),
             webhook_url=req.webhook_url,
             meta=apply_defaults(
@@ -513,6 +756,10 @@ class Orchestrator:
                 {
                     "coding_executor": coding,
                     "role_agents": req.role_agents or {},
+                    "role_repos": {
+                        slot: [repo.model_dump(mode="json") for repo in repos]
+                        for slot, repos in role_repos.items()
+                    },
                     "role_toolkits": role_toolkits,
                     "stage_toolkits": stage_toolkits,
                     "complexity": req.complexity,
@@ -1146,6 +1393,15 @@ class Orchestrator:
             try:
                 if resume is None:
                     loadout = self._pipeline_loadout(ini)
+                    await self._apply_dynamic_loadout(ini, loadout)
+                    self.guardrails_for(ini)
+                    digest = plan_digest(self._stages_for(ini))
+                    meta = dict(ini.meta or {})
+                    if meta.get("plan_digest") != digest:
+                        # Freeze the plan fingerprint for every later resume
+                        meta["plan_digest"] = digest
+                        ini.meta = meta
+                        self.store.upsert(ini)
                     payload: Any = {
                         "initiative_id": ini.id,
                         "thread_id": ini.thread_id,
@@ -1163,9 +1419,11 @@ class Orchestrator:
                         "status": "running",
                         "stopped": False,
                         "pipeline_track": ini.meta.get("pipeline_track", ini.template),
+                        "plan_digest": digest,
                         **loadout,
                     }
                 else:
+                    self._assert_plan_unchanged(ini)
                     payload = resume
 
                 final = None
@@ -1264,6 +1522,175 @@ class Orchestrator:
             return self.store.get(initiative_id) or ini
         cmd = Command(resume=decision_payload)
         return await self._run_until_interrupt(initiative_id, resume=cmd)
+
+    # --- human escalation (last resort) ---------------------------------
+
+    async def escalate_to_human(
+        self,
+        initiative_id: str,
+        question: str,
+        *,
+        stage: str | None = None,
+        context: str = "",
+        options: list[str] | None = None,
+        assignee: str = "",
+        channel: str = "",
+        requested_by: str = "manager",
+    ) -> Any | None:
+        """Hand an undecidable question to a human and pause until they answer.
+
+        Returns the :class:`~sortie_deck.decisions.HumanDecision`, or ``None``
+        when IM escalation is disabled (the request is still recorded so the
+        mission does not silently swallow it).
+        """
+        from sortie_deck.decisions import get_decision_service
+
+        ini = self.store.get(initiative_id)
+        if not ini:
+            raise KeyError(initiative_id)
+        stage_name = stage or ini.current_stage
+        service = get_decision_service()
+        if service is None or not bool(getattr(self.cfg, "im_escalation", False)):
+            self._append_timeline(
+                ini,
+                TimelineEvent(
+                    stage=stage_name,
+                    kind="hitl",
+                    message=f"escalation requested but IM is disabled: {question}",
+                    data={"requested_by": requested_by},
+                ),
+            )
+            self.store.upsert(ini)
+            return None
+
+        fallback = str(getattr(self.cfg, "decision_fallback_action", "pause") or "pause")
+        if fallback not in {"pause", "continue", "abort"}:
+            fallback = "pause"
+        decision = await service.raise_decision(
+            initiative_id=ini.id,
+            stage=stage_name,
+            question=question,
+            context=context or f"brief: {ini.brief[:400]}",
+            options=options,
+            assignee=assignee,
+            channel=channel,
+            sla_seconds=float(getattr(self.cfg, "decision_sla_seconds", 1800) or 1800),
+            fallback_action=fallback,
+        )
+        ini.pending_hitl = HitlRequest(
+            stage=stage_name,
+            prompt=f"[human-decision {decision.decision_id}] {question}",
+            artifacts=[],
+        )
+        ini.status = InitiativeStatus.WAITING_HITL
+        ini.meta = {**(ini.meta or {}), "pending_decision_id": decision.decision_id}
+        self._append_timeline(
+            ini,
+            TimelineEvent(
+                stage=stage_name,
+                kind="hitl",
+                message=f"escalated to a human: {question}",
+                data={
+                    "decision_id": decision.decision_id,
+                    "assignee": assignee,
+                    "sla_seconds": decision.sla_seconds,
+                    "channels": [n.get("provider") for n in decision.notifications],
+                },
+            ),
+        )
+        self.store.upsert(ini)
+        await self._post_room(
+            ini.id,
+            text=f"⏸ 需要真人决策（`{decision.decision_id}`）：{question}",
+            actor_kind=ActorKind.SYSTEM,
+            actor_name="Sortie",
+            msg_type="decision",
+        )
+        await self._emit(ini.id, {"type": "update", "initiative": ini.model_dump(mode="json")})
+        return decision
+
+    async def resolve_decision(
+        self,
+        decision_id: str,
+        *,
+        answer: str,
+        by: str,
+        channel: str = "",
+        is_admin: bool = False,
+    ) -> Any:
+        """Record a human answer and hand it back to the paused mission."""
+        from sortie_deck.decisions import get_decision_service
+
+        service = get_decision_service()
+        if service is None:
+            raise RuntimeError("decision centre is not wired")
+        outcome = service.answer(
+            decision_id, answer=answer, by=by, channel=channel, is_admin=is_admin
+        )
+        if not outcome.accepted:
+            return outcome
+
+        ini = self.store.get(outcome.decision.initiative_id)
+        if ini is None:
+            return outcome
+        if (ini.meta or {}).get("pending_decision_id") != decision_id:
+            return outcome
+        ini.meta = {**(ini.meta or {}), "pending_decision_id": None}
+        self.store.upsert(ini)
+        if ini.status == InitiativeStatus.WAITING_HITL:
+            try:
+                await self.submit_hitl(
+                    ini.id,
+                    HitlDecision(
+                        action=HitlAction.EDIT_INSTRUCTION,
+                        instruction=f"[human-decision {decision_id}] {answer}",
+                        note=f"answered by {by}",
+                    ),
+                    author_name=by,
+                )
+            except Exception as exc:  # noqa: BLE001 — a reply must not 500 the IM webhook
+                self._append_timeline(
+                    ini,
+                    TimelineEvent(
+                        stage=ini.current_stage,
+                        kind="error",
+                        message=f"decision {decision_id} recorded but resume failed: {exc}",
+                        data={"decision_id": decision_id},
+                    ),
+                )
+                ini.status = InitiativeStatus.FAILED
+                self.store.upsert(ini)
+        return outcome
+
+    async def sweep_decisions(self) -> list[Any]:
+        """Expire overdue decisions and apply their documented fallback."""
+        from sortie_deck.decisions import get_decision_service
+
+        service = get_decision_service()
+        if service is None:
+            return []
+        expired = service.expire_due()
+        for decision in expired:
+            ini = self.store.get(decision.initiative_id)
+            if ini is None:
+                continue
+            self._append_timeline(
+                ini,
+                TimelineEvent(
+                    stage=decision.stage,
+                    kind="hitl",
+                    message=decision.fallback_reason,
+                    data={
+                        "decision_id": decision.decision_id,
+                        "fallback": decision.fallback_action,
+                    },
+                ),
+            )
+            if decision.fallback_action == "abort" and ini.status == InitiativeStatus.WAITING_HITL:
+                ini.status = InitiativeStatus.STOPPED
+                ini.pending_hitl = None
+            self.store.upsert(ini)
+        return expired
 
     async def stop(self, initiative_id: str, author_name: str = "Operator") -> Initiative:
         ini = self.store.get(initiative_id)

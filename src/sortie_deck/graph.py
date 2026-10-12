@@ -1,28 +1,33 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any, TypedDict
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import Command, interrupt
+from langgraph.types import interrupt
 
+from sortie_deck.agent_contract import ContractError, validate_handoff
 from sortie_deck.artifacts import ArtifactStore
 from sortie_deck.contracts import validate_stage_artifacts
+from sortie_deck.manager import BranchStatus, MissionManager
 from sortie_deck.models import (
     CODING_ROLE_VALUES,
     ENG_BUILD_STAGES,
     HitlAction,
     HitlDecision,
+    RepoConfig,
     RoleId,
     StageContext,
     StageResult,
+    role_key,
 )
-from sortie_deck.plugins.queue import ENG_QUEUE
 from sortie_deck.parallel import collapse_to_waves, wave_node_name
-from sortie_deck.registry import ExecutorRegistry
-from sortie_deck.templates import load_persona, load_pipeline_template
+from sortie_deck.plugins.queue import ENG_QUEUE
+from sortie_deck.registry import ExecutorRegistry, run_executor
+from sortie_deck.templates import load_agent_contract, load_persona, load_pipeline_template
 
 
 def _coding_perm_from_instruction(instruction: str | None) -> dict[str, str]:
@@ -69,14 +74,51 @@ class PipelineState(TypedDict, total=False):
     pipeline_track: str
     role_personas: dict[str, str]
     role_toolkits: dict[str, list[str]]
+    # Mission-scoped git repos per role slot (slot -> list of repo dicts)
+    role_repos: dict[str, list[dict[str, Any]]]
     stage_toolkits: dict[str, list[str]]
     toolkit_briefs: dict[str, str]
+    # Frozen plan fingerprint — lets a resume detect an edited pipeline
+    plan_digest: str
+    # Node the current step routes to (agent handoff / manager join decision)
+    handoff_target: str
+    # Autonomous handoff budget per target node (prevents A→B→A loops)
+    handoff_counts: dict[str, int]
+    # Mission-wide handoff budget (runaway protection)
+    handoff_total: int
+    # Manager-driven parallel wave retry budget per group
+    wave_attempts: dict[str, int]
+    # Stop the run without marking the initiative as `stopped`
+    halt: bool
+
+
+# Autonomous handoff / wave reroute safety caps (guardrails layer generalises this)
+_MAX_HANDOFF_PER_TARGET = 3
+_MAX_HANDOFF_TOTAL = 40
+_MAX_WAVE_ATTEMPTS = 2
+
+
+# Built-in role → mock executor fallback. Custom roles are resolved through
+# ``sortie_deck.roles.RoleRegistry`` instead of being hard-coded here.
+_BUILTIN_ROLE_EXECUTORS: dict[str, str] = {
+    "product": "mock_product",
+    "design": "mock_design",
+    "eng": "mock_eng",
+    "qa": "mock_qa",
+    "deploy": "mock_deploy",
+}
 
 
 def _role_id(role: str) -> RoleId:
+    """Role key → :class:`RoleId`.
+
+    ``RoleId`` materialises unknown keys on first use, so registered custom
+    roles (``parenting``, ``stocks``, …) survive here instead of silently
+    collapsing to ``product``. Only empty / non-string input falls back.
+    """
     try:
         return RoleId(role)
-    except ValueError:
+    except (ValueError, TypeError):
         return RoleId.PRODUCT
 
 
@@ -115,13 +157,18 @@ def _executor_name(stage: str, role: str, state: PipelineState, stage_cfg: dict[
     # fallback by role
     if role in CODING_ROLE_VALUES:
         return "mock_eng"
-    return {
-        "product": "mock_product",
-        "design": "mock_design",
-        "eng": "mock_eng",
-        "qa": "mock_qa",
-        "deploy": "mock_deploy",
-    }.get(role, "mock_intake")
+    try:
+        from sortie_deck.roles import get_role_registry
+
+        role_registry = get_role_registry()
+        hint = role_registry.executor_hint(role)
+        if hint:
+            return hint
+        if role not in _BUILTIN_ROLE_EXECUTORS and role_registry.is_coding(role):
+            return "mock_eng"
+    except Exception:  # noqa: BLE001 — registry unavailable must not break routing
+        pass
+    return _BUILTIN_ROLE_EXECUTORS.get(role, "mock_intake")
 
 
 def _linear_next(stages: list[dict[str, Any]], index: int) -> str:
@@ -204,6 +251,252 @@ def build_graph_from_template(
     stage_by_name = {s["name"]: s for s in stages}
     stage_index = {s["name"]: i for i, s in enumerate(stages)}
 
+    # Narrow-scope manager: join arbitration / conflict / escalation only.
+    mission_manager = MissionManager(stages, use_llm=True)
+
+    def _stage_role(name: str) -> str:
+        return str((stage_by_name.get(name) or {}).get("role") or "")
+
+    def _deny_handoff(st: PipelineState, stage_name: str, target: str, reason: str) -> None:
+        events = list(st.get("events") or [])
+        events.append(
+            {
+                "stage": stage_name,
+                "kind": "transition",
+                "message": f"handoff to `{target}` denied — {reason}",
+                "data": {"handoff": "denied", "target": target, "reason": reason},
+            }
+        )
+        st["events"] = events
+
+    def _apply_handoff(stage_name: str, st: PipelineState) -> None:
+        """Record an agent-initiated handoff on the state, when it is plan-legal.
+
+        Agent switching *is* a graph node jump: the agent's proposal is stored in
+        ``handoff_target`` and consumed by the node's conditional edge. Nothing is
+        written when the move is not explicitly allowed, so the frozen plan stays
+        the floor and HITL gates are never bypassed by an agent.
+        """
+        cfg = stage_by_name.get(stage_name) or {}
+        if cfg.get("hitl_after"):
+            # a human gate must stay between this agent and the next stage
+            return
+        result = st.get("last_result") or {}
+        if str(result.get("status") or "ok") != "ok":
+            return
+        target = str(result.get("proposed_next") or "").strip()
+        if not target or target == stage_name or target not in stage_by_name:
+            return
+        if target == "done":
+            # terminal node is reached through the frozen edge / gate, never a jump
+            return
+        src_role = _stage_role(stage_name)
+        dst_role = _stage_role(target)
+        try:
+            validate_handoff(load_agent_contract(src_role), dst_role)
+        except ContractError as exc:
+            _deny_handoff(st, stage_name, target, str(exc))
+            return
+        counts = dict(st.get("handoff_counts") or {})
+        if counts.get(target, 0) >= _MAX_HANDOFF_PER_TARGET:
+            _deny_handoff(st, stage_name, target, "handoff budget exhausted")
+            return
+        total = int(st.get("handoff_total") or 0)
+        if total >= _MAX_HANDOFF_TOTAL:
+            _deny_handoff(st, stage_name, target, "mission handoff budget exhausted")
+            return
+        counts[target] = counts.get(target, 0) + 1
+        events = list(st.get("events") or [])
+        events.append(
+            {
+                "stage": stage_name,
+                "kind": "transition",
+                "message": f"`{src_role}` handed off to `{target}` (`{dst_role}`)",
+                "data": {
+                    "handoff": "accepted",
+                    "from": src_role,
+                    "to": dst_role,
+                    "target_stage": target,
+                },
+            }
+        )
+        st["handoff_counts"] = counts
+        st["handoff_total"] = total + 1
+        st["events"] = events
+        st["handoff_target"] = _resolve_goto(stages, target)
+
+    async def _apply_join_decision(
+        group: str,
+        last_member: str,
+        branches: list[dict[str, Any]],
+        results: list[PipelineState],
+        state: PipelineState,
+        base: PipelineState,
+        default_next: str,
+    ) -> None:
+        """Manager decides the next node after a parallel wave.
+
+        Two (or more) agents finished at once and neither may arbitrate for the
+        other — this is exactly the case the manager owns. The chosen target is
+        written to ``handoff_target`` and consumed by the wave's conditional edge.
+        """
+        statuses: list[BranchStatus] = []
+        for br, st in zip(branches, results, strict=True):
+            member = br["members"][-1]["name"]
+            res = st.get("last_result") or {}
+            statuses.append(
+                BranchStatus(
+                    stage=member,
+                    role=_stage_role(member),
+                    status=str(res.get("status") or "ok"),
+                    message=str(res.get("message") or "")[:200],
+                )
+            )
+        decision = await mission_manager.decide_join(
+            group=group,
+            last_member=last_member,
+            branches=statuses,
+            brief=str(state.get("brief") or ""),
+            upstream_keys=list((base.get("upstream") or {}).keys()),
+        )
+        events: list[dict[str, Any]] = list(base.get("events") or [])
+        base["events"] = events
+        if not decision.target_stage:
+            return
+        goto = _resolve_goto(stages, decision.target_stage)
+        events.append(
+            {
+                "stage": last_member,
+                "kind": "transition",
+                "message": (
+                    f"manager join decision → `{decision.target_stage}` "
+                    f"({decision.action}, confidence {decision.confidence:.2f})"
+                ),
+                "data": decision.model_dump(mode="json"),
+            }
+        )
+        if goto in {default_next, last_member}:
+            # identical to the frozen plan — the default conditional edge wins
+            return
+        if goto == wave_node_name(group):
+            attempts = dict(state.get("wave_attempts") or {})
+            used = attempts.get(group, 0)
+            if used >= _MAX_WAVE_ATTEMPTS:
+                events.append(
+                    {
+                        "stage": last_member,
+                        "kind": "info",
+                        "message": f"wave `{group}` reroute suppressed — retry budget exhausted",
+                        "data": {"parallel_group": group, "wave_attempts": used},
+                    }
+                )
+                return
+            attempts[group] = used + 1
+            base["wave_attempts"] = attempts
+        base["handoff_target"] = goto
+
+    async def _run_mcp_calls(
+        state: PipelineState,
+        stage: str,
+        toolkit_ids: list[str],
+        calls: Any,
+    ) -> dict[str, str]:
+        """Execute tool calls an executor *requested* (whitelist + confirm gate).
+
+        Executors declare intent via ``StageResult.meta["mcp_calls"]``; the
+        orchestration layer performs the actual call so authorisation lives in
+        one place instead of inside every plugin.
+        """
+        from sortie_deck.settings import settings as _settings
+
+        if not bool(getattr(_settings, "mcp_call_enabled", False)):
+            return {}
+        if not isinstance(calls, list) or not calls:
+            return {}
+        try:
+            from sortie_deck.mcp_runtime import McpToolInvoker, resolve_mcp_items
+            from sortie_deck.orchestrator import _toolkit_store
+        except Exception:  # noqa: BLE001 — MCP path is optional
+            return {}
+        items = resolve_mcp_items(_toolkit_store, list(toolkit_ids))
+        invoker = McpToolInvoker(enabled=True)
+        results: list[dict[str, Any]] = []
+        try:
+            await invoker.open(items)
+            for raw in calls[:10]:
+                if not isinstance(raw, dict):
+                    continue
+                tool = str(raw.get("tool") or "").strip()
+                if not tool:
+                    continue
+                arguments = raw.get("arguments") if isinstance(raw.get("arguments"), dict) else {}
+                outcome = await invoker.call(
+                    tool, arguments, confirmed=bool(raw.get("confirmed"))
+                )
+                results.append({"stage": stage, "tool": tool, "arguments": arguments, **outcome})
+        except Exception as exc:  # noqa: BLE001 — tool failure must not break the stage
+            results.append({"stage": stage, "tool": "*", "ok": False, "error": str(exc)})
+        finally:
+            await invoker.close()
+        if not results:
+            return {}
+        return {"mcp_calls.json": json.dumps(results, ensure_ascii=False, indent=2)}
+
+    def _build_session_host(
+        state: PipelineState,
+        stage: str,
+        role: RoleId,
+        subroom_events: list[dict[str, Any]],
+    ) -> Any | None:
+        """Host handed to session-capable executors so they can open a sub-room."""
+        from sortie_deck.settings import settings as _settings
+
+        if not bool(getattr(_settings, "subroom_enabled", False)):
+            return None
+        try:
+            from sortie_deck.orchestrator import get_orchestrator
+            from sortie_deck.subroom import StageSessionHost, get_subroom_service
+
+            service = get_subroom_service()
+            if service is None:
+                return None
+            orch = get_orchestrator()
+            ini = orch.get(state["initiative_id"])
+            if ini is None or not ini.roles:
+                return None
+            roster = [role_key(r.role) for r in ini.roles if role_key(r.role) != role.value]
+
+            async def _ask(role_id: str, prompt: str) -> str:
+                target = next((r for r in ini.roles if role_key(r.role) == role_id), None)
+                if target is None:
+                    return ""
+                return await orch._discussion_reply(ini, target, prompt, role.value)
+
+            def _on_event(payload: dict[str, Any]) -> None:
+                subroom_events.append({"stage": stage, "role": role.value, **payload})
+
+            async def _escalate(question: str) -> str:
+                """Hand the question to a human (pauses the mission until answered)."""
+                decision = await orch.escalate_to_human(
+                    ini.id, question, stage=stage, requested_by=role.value
+                )
+                if decision is None:
+                    return "escalation unavailable (IM is not configured)"
+                return f"escalated to a human — decision `{decision.decision_id}`"
+
+            return StageSessionHost(
+                initiative_id=ini.id,
+                stage=stage,
+                role=role.value,
+                participants=roster,
+                reply=_ask,
+                service=service,
+                on_event=_on_event,
+                escalate_fn=_escalate,
+            )
+        except Exception:  # noqa: BLE001 — absent host simply means a single-shot executor
+            return None
+
     async def run_stage(state: PipelineState, stage: str) -> PipelineState:
         if state.get("stopped"):
             return {**state, "status": "stopped", "stage": stage}
@@ -224,6 +517,7 @@ def build_graph_from_template(
 
         role_personas = state.get("role_personas") or {}
         role_toolkits = state.get("role_toolkits") or {}
+        role_repos_state = state.get("role_repos") or {}
         stage_toolkits = state.get("stage_toolkits") or {}
         toolkit_briefs = state.get("toolkit_briefs") or {}
         persona = role_personas.get(role.value) or load_persona(role.value)
@@ -332,6 +626,20 @@ def build_graph_from_template(
         except Exception:
             consult_artifacts = {}
 
+        # Layered memory + contract hints for this stage (incl. sub-room conclusions
+        # scoped to this exact stage).
+        memory_brief = ""
+        contract_targets: list[str] = []
+        try:
+            from sortie_deck.orchestrator import mission_memory_brief
+
+            memory_brief = mission_memory_brief(initiative_id=state["initiative_id"], stage=stage)
+        except Exception:  # noqa: BLE001 — memory is an enhancement, not a dependency
+            memory_brief = ""
+        contract = load_agent_contract(role.value)
+        if contract is not None:
+            contract_targets = list(contract.handoff_targets)
+
         ctx = StageContext(
             initiative_id=state["initiative_id"],
             thread_id=state["thread_id"],
@@ -349,10 +657,21 @@ def build_graph_from_template(
             },
             toolkit_ids=toolkit_ids,
             toolkit_brief=toolkit_brief,
+            repos=[
+                RepoConfig.model_validate(r)
+                for r in (role_repos_state.get(role.value) or [])
+            ],
+            memory_brief=memory_brief,
+            handoff_targets=contract_targets,
         )
 
+        # Session-capable executors get a host so they can pull a sub-room
+        # mid-step, wait for the conclusion, then continue.
+        subroom_events: list[dict[str, Any]] = []
+        session_host = _build_session_host(state, stage, role, subroom_events)
+
         async def _execute() -> StageResult:
-            return await executor.run(ctx)
+            return await run_executor(executor, ctx, session_host)
 
         from sortie_deck.settings import settings as _settings
 
@@ -375,8 +694,12 @@ def build_graph_from_template(
         else:
             result = await _execute_with_timeout()
 
+        mcp_artifacts = await _run_mcp_calls(
+            state, stage, toolkit_ids, (result.meta or {}).get("mcp_calls")
+        )
+
         written: dict[str, str] = dict(upstream_paths)
-        for filename, content in {**consult_artifacts, **result.artifacts}.items():
+        for filename, content in {**consult_artifacts, **result.artifacts, **mcp_artifacts}.items():
             ref = artifact_store.write_text(state["initiative_id"], stage, filename, content)
             written[filename] = ref.path
 
@@ -400,6 +723,8 @@ def build_graph_from_template(
                 },
             }
         )
+        # Sub-room conclusions are surfaced for observability; the transcript is not.
+        events.extend(subroom_events)
 
         return {
             **state,
@@ -409,10 +734,12 @@ def build_graph_from_template(
             "events": events,
             "status": "running",
             "human_instruction": None,
+            # consumed by this node's conditional edge; cleared on every entry
+            "handoff_target": None,
         }
 
     def make_stage_node(stage_name: str):
-        async def node(state: PipelineState) -> PipelineState | Command:
+        async def node(state: PipelineState) -> PipelineState:
             if stage_name == "qa_verify":
                 attempt = int(state.get("qa_attempt", 1))
                 st = await run_stage({**state, "qa_attempt": attempt}, stage_name)
@@ -422,6 +749,9 @@ def build_graph_from_template(
 
             result = st.get("last_result") or {}
             if result.get("status") != "needs_hitl":
+                # Serial step: the agent itself may hand off (contract-checked);
+                # otherwise the frozen plan's default edge decides.
+                _apply_handoff(stage_name, st)
                 return st
 
             # Coding / tool permission block → force HITL so Teams can prompt
@@ -459,11 +789,12 @@ def build_graph_from_template(
             if decision.action == HitlAction.STOP:
                 update["stopped"] = True
                 update["status"] = "stopped"
-                return Command(update=update, goto=END)
+                return update
 
             if decision.action in {HitlAction.REJECT}:
                 update["human_instruction"] = decision.instruction or "Rejected permission grant"
-                return Command(update=update, goto=END)
+                update["halt"] = True
+                return update
 
             # approve / rewrite → retry same stage with elevated permission mode
             retry_mode = payload.get("retry_permission_mode") or "bypassPermissions"
@@ -471,7 +802,9 @@ def build_graph_from_template(
             update["human_instruction"] = (
                 f"{instr}\n[sortie:coding_permission_mode={retry_mode}]".strip()
             )
-            return Command(update=update, goto=stage_name)
+            # self-loop through the conditional edge
+            update["handoff_target"] = stage_name
+            return update
 
         return node
 
@@ -493,7 +826,7 @@ def build_graph_from_template(
         on_reject = _resolve_goto(stages, cfg.get("on_reject") or stage_name)
         on_fail = _resolve_goto(stages, cfg.get("on_fail") or on_reject)
 
-        async def hitl_gate(state: PipelineState) -> Command:
+        async def hitl_gate(state: PipelineState) -> PipelineState:
             stage = state.get("stage", stage_name)
             result = state.get("last_result") or {}
             payload = {
@@ -526,28 +859,34 @@ def build_graph_from_template(
                 "events": events,
                 "hitl_decision": decision.model_dump(mode="json"),
                 "status": "running",
+                "handoff_target": None,
             }
 
             if decision.action == HitlAction.STOP:
                 update["stopped"] = True
                 update["status"] = "stopped"
-                return Command(update=update, goto=END)
+                return update
 
             if decision.action == HitlAction.EDIT_INSTRUCTION:
                 update["human_instruction"] = decision.instruction
-                return Command(update=update, goto=stage)
+                update["handoff_target"] = _resolve_goto(stages, stage)
+                return update
 
             if decision.action == HitlAction.REJECT:
                 update["human_instruction"] = decision.instruction or "Rejected — revise"
-                return Command(update=update, goto=on_reject)
+                update["handoff_target"] = on_reject
+                return update
 
             if decision.action == HitlAction.REROUTE and decision.next_stage:
-                return Command(update=update, goto=_resolve_goto(stages, decision.next_stage))
+                update["handoff_target"] = _resolve_goto(stages, decision.next_stage)
+                return update
 
             # approve
             if stage == "qa_verify" and not bool(result.get("qa_passed")):
-                return Command(update=update, goto=on_fail)
-            return Command(update=update, goto=approve_next)
+                update["handoff_target"] = on_fail
+            else:
+                update["handoff_target"] = approve_next
+            return update
 
         return hitl_gate
 
@@ -557,7 +896,7 @@ def build_graph_from_template(
         member_names = [m["name"] for m in members]
         branches = group_wave_branches(members)
 
-        async def wave(state: PipelineState) -> PipelineState | Command:
+        async def wave(state: PipelineState) -> PipelineState:
             if state.get("stopped"):
                 return {**state, "status": "stopped"}
 
@@ -620,6 +959,8 @@ def build_graph_from_template(
                 "last_result": last_result,
                 "status": "running",
                 "human_instruction": None,
+                # consumed by this wave's conditional edge
+                "handoff_target": None,
             }
             branch_summary = " ∥ ".join(
                 "→".join(m["name"] for m in br["members"]) for br in branches
@@ -639,6 +980,18 @@ def build_graph_from_template(
                     },
                 }
             ]
+
+            if hitl_member is None:
+                # Parallel join: nobody can arbitrate for a sibling — the manager decides.
+                await _apply_join_decision(
+                    group,
+                    tip,
+                    branches,
+                    results,
+                    state,
+                    base,
+                    _wave_default_next(tip),
+                )
 
             if hitl_member and hitl_state is not None:
                 # Re-enter the blocked member for permission HITL (single-branch resume)
@@ -665,31 +1018,24 @@ def build_graph_from_template(
                 else:
                     decision = HitlDecision(action=HitlAction.APPROVE)
                 if decision.action == HitlAction.STOP:
-                    return Command(
-                        update={**base, "stopped": True, "status": "stopped"},
-                        goto=END,
-                    )
+                    return {**base, "stopped": True, "status": "stopped"}
                 if decision.action == HitlAction.REJECT:
-                    return Command(
-                        update={
-                            **base,
-                            "human_instruction": decision.instruction or "Rejected permission grant",
-                            "status": "stopped",
-                            "stopped": True,
-                        },
-                        goto=END,
-                    )
+                    return {
+                        **base,
+                        "human_instruction": decision.instruction or "Rejected permission grant",
+                        "status": "stopped",
+                        "stopped": True,
+                    }
                 retry_mode = payload.get("retry_permission_mode") or "bypassPermissions"
                 instr = decision.instruction or ""
-                return Command(
-                    update={
-                        **base,
-                        "human_instruction": (
-                            f"{instr}\n[sortie:coding_permission_mode={retry_mode}]".strip()
-                        ),
-                    },
-                    goto=wave_node_name(group),
-                )
+                return {
+                    **base,
+                    "human_instruction": (
+                        f"{instr}\n[sortie:coding_permission_mode={retry_mode}]".strip()
+                    ),
+                    # re-enter this same wave through the conditional edge
+                    "handoff_target": wave_node_name(group),
+                }
 
             return base
 
@@ -698,8 +1044,10 @@ def build_graph_from_template(
     graph = StateGraph(PipelineState)
     waves = collapse_to_waves(stages)
 
-    # Register nodes
+    # Register nodes. Gates remember their plan-declared "approve" target so the
+    # edge section can wire them with the same conditional-edge router.
     registered: set[str] = set()
+    gates: list[tuple[str, str]] = []
     for wave in waves:
         if wave["kind"] == "single":
             s = wave["stage"]
@@ -711,8 +1059,10 @@ def build_graph_from_template(
             graph.add_node(name, make_stage_node(name))
             registered.add(name)
             if s.get("hitl_after"):
-                graph.add_node(f"hitl__{name}", make_hitl_gate(name))
-                registered.add(f"hitl__{name}")
+                gate = f"hitl__{name}"
+                graph.add_node(gate, make_hitl_gate(name))
+                registered.add(gate)
+                gates.append((gate, _linear_next(stages, stage_index[name])))
         else:
             group = wave["group"]
             members = wave["members"]
@@ -725,8 +1075,50 @@ def build_graph_from_template(
                 if mname not in registered:
                     graph.add_node(mname, make_stage_node(mname))
                     registered.add(mname)
+            last = members[-1]["name"]
+            if members[-1].get("hitl_after") and f"hitl__{last}" not in registered:
+                gate = f"hitl__{last}"
+                graph.add_node(gate, make_hitl_gate(last))
+                registered.add(gate)
+                gates.append((gate, _wave_next(stages, last)))
 
-    # Edges across waves
+    node_names = set(registered)
+
+    def _router(default_next: str):
+        """Route on the node's own decision, falling back to the frozen plan.
+
+        Agent switching *is* a graph node jump: every node announces its next hop
+        in ``handoff_target`` and this conditional edge consumes it. A static edge
+        would race the jump in LangGraph (both destinations run in one superstep
+        and collide on the shared state channels), so there are no static edges
+        between stages at all — the frozen plan is simply the router's default.
+        """
+
+        def route(state: PipelineState) -> str:
+            if state.get("stopped") or state.get("halt"):
+                return END
+            target = str(state.get("handoff_target") or "").strip()
+            if target and target in node_names:
+                return target
+            return default_next
+
+        return route
+
+    def _next_after(wi: int) -> str:
+        if wi + 1 >= len(waves):
+            return "done"
+        nw = waves[wi + 1]
+        return nw["stage"]["name"] if nw["kind"] == "single" else wave_node_name(nw["group"])
+
+    def _wave_default_next(last_member: str) -> str:
+        """Plan-declared successor of a parallel wave (gate first when present)."""
+        if (stage_by_name.get(last_member) or {}).get("hitl_after"):
+            return f"hitl__{last_member}"
+        return _wave_next(stages, last_member)
+
+    # Edges across waves. There are **no static edges between stages**: every hop
+    # is a conditional edge whose default is the frozen plan, so an agent handoff,
+    # a manager join decision and a HITL verdict all travel through one mechanism.
     first_wave = waves[0]
     if first_wave["kind"] == "single":
         graph.add_edge(START, first_wave["stage"]["name"])
@@ -740,42 +1132,21 @@ def build_graph_from_template(
             if name == "done":
                 graph.add_edge("done", END)
                 continue
-            # Next entry
-            if wi + 1 >= len(waves):
-                nxt = "done"
-            else:
-                nw = waves[wi + 1]
-                nxt = (
-                    nw["stage"]["name"]
-                    if nw["kind"] == "single"
-                    else wave_node_name(nw["group"])
-                )
-            if s.get("hitl_after"):
-                graph.add_edge(name, f"hitl__{name}")
-            else:
-                graph.add_edge(name, nxt)
+            default_next = f"hitl__{name}" if s.get("hitl_after") else _next_after(wi)
+            graph.add_conditional_edges(name, _router(default_next))
         else:
             group = wave["group"]
             wname = wave_node_name(group)
             last = wave["members"][-1]["name"]
-            if wi + 1 >= len(waves):
-                nxt = "done"
-            else:
-                nw = waves[wi + 1]
-                nxt = (
-                    nw["stage"]["name"]
-                    if nw["kind"] == "single"
-                    else wave_node_name(nw["group"])
-                )
-            # If catalog still marked hitl on last member, route via its gate
-            if wave["members"][-1].get("hitl_after"):
-                gate = f"hitl__{last}"
-                if gate not in registered:
-                    graph.add_node(gate, make_hitl_gate(last))
-                    registered.add(gate)
-                graph.add_edge(wname, gate)
-            else:
-                graph.add_edge(wname, nxt)
+            # If the catalog still marks hitl on the last member, enter via its gate
+            default_next = (
+                f"hitl__{last}" if wave["members"][-1].get("hitl_after") else _next_after(wi)
+            )
+            graph.add_conditional_edges(wname, _router(default_next))
+
+    # Gates route on the human verdict; the plan's approve target is the default.
+    for gate, approve_next in gates:
+        graph.add_conditional_edges(gate, _router(approve_next))
 
     return graph
 
@@ -813,7 +1184,12 @@ async def compile_pipelines(
     """Compile multiple track graphs sharing one checkpointer."""
     import aiosqlite
 
-    track_list = tracks or ["default", "express", "standard"]
+    if tracks is None:
+        from sortie_deck.pipeline import TRACK_FILES
+
+        track_list = list(TRACK_FILES)
+    else:
+        track_list = tracks
     resources: dict = {}
     saver = None
 

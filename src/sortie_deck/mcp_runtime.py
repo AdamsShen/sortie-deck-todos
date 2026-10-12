@@ -177,3 +177,86 @@ def resolve_mcp_items(store: Any, toolkit_ids: list[str]) -> list[ToolkitItem]:
         if item and item.kind == "mcp" and item.enabled:
             items.append(item)
     return items
+
+
+# Tool names that look like they mutate state (heuristic, documented as such).
+_WRITE_TOOL_PREFIXES = ("write", "create", "update", "delete", "remove", "set", "put", "post", "move")
+
+
+def tool_looks_like_write(tool_name: str) -> bool:
+    lowered = (tool_name or "").strip().lower()
+    return lowered.startswith(_WRITE_TOOL_PREFIXES)
+
+
+class McpToolInvoker:
+    """Call MCP tools with a per-server whitelist and a write-confirmation gate.
+
+    Fails closed: a server that declares no whitelist exposes **no** callable
+    tools, and write-looking tools require an explicit ``confirmed=True``.
+    """
+
+    def __init__(self, *, enabled: bool = False) -> None:
+        self.enabled = enabled
+        self._manager = McpSessionManager()
+        self._allowed: dict[str, set[str]] = {}
+        self._server_of: dict[str, str] = {}
+
+    async def open(self, items: list[ToolkitItem]) -> None:
+        if not self.enabled:
+            return
+        sessions = await self._manager.open_for_items(items)
+        for session in sessions:
+            allow_all = bool((session.item.config or {}).get("allow_all_tools"))
+            declared = {
+                str(t).strip()
+                for t in ((session.item.config or {}).get("allowed_tools") or [])
+                if str(t).strip()
+            }
+            for tool in session.tools:
+                self._server_of[tool.name] = session.item.name
+                if allow_all or tool.name in declared:
+                    self._allowed.setdefault(tool.name, set()).add(session.item.name)
+
+    def available_tools(self) -> list[str]:
+        return sorted(self._allowed)
+
+    def is_allowed(self, tool_name: str) -> bool:
+        return bool(self._allowed.get(tool_name))
+
+    async def call(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any] | None = None,
+        *,
+        confirmed: bool = False,
+    ) -> dict[str, Any]:
+        if not self.enabled:
+            return {"ok": False, "blocked": True, "reason": "MCP calling is disabled"}
+        if not self.is_allowed(tool_name):
+            return {
+                "ok": False,
+                "blocked": True,
+                "reason": f"tool `{tool_name}` is not on any server whitelist",
+            }
+        if tool_looks_like_write(tool_name) and not confirmed:
+            return {
+                "ok": False,
+                "blocked": True,
+                "reason": f"tool `{tool_name}` looks like a write — confirmation required",
+            }
+        session = next(
+            (s for s in self._manager.sessions if s.item.name in self._allowed[tool_name]),
+            None,
+        )
+        if session is None:
+            return {"ok": False, "reason": f"no live session for `{tool_name}`"}
+        try:
+            result = await session.call_tool(tool_name, arguments or {})
+        except Exception as exc:  # noqa: BLE001 — a failing tool must not break the stage
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "result": result}
+
+    async def close(self) -> None:
+        await self._manager.close_all()
+        self._allowed.clear()
+        self._server_of.clear()

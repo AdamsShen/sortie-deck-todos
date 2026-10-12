@@ -15,6 +15,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from sortie_deck.agent_forge import AgentForge, ForgeRequest
 from sortie_deck.agents import AgentCatalog, CreateAgentRequest
 from sortie_deck.harness import (
     EventKind,
@@ -27,7 +28,7 @@ from sortie_deck.harness import (
     new_session_id,
 )
 from sortie_deck.knowledge_gateway import KnowledgeGateway, gateway_from_settings
-from sortie_deck.models import CreateInitiativeRequest, Initiative, utc_now
+from sortie_deck.models import CreateInitiativeRequest, Initiative, RepoConfig, utc_now
 from sortie_deck.pipeline import apply_proposal_to_meta
 from sortie_deck.settings import Settings
 from sortie_deck.settings import settings as default_settings
@@ -182,6 +183,7 @@ class MissionBriefingAgent:
         store: BriefingStore | None = None,
         agents: AgentCatalog | None = None,
         knowledge: KnowledgeGateway | None = None,
+        forge: AgentForge | None = None,
         create_initiative: CreateFn | None = None,
         list_initiatives: ListFn | None = None,
         save_initiative: SaveFn | None = None,
@@ -189,6 +191,9 @@ class MissionBriefingAgent:
         self.cfg = settings or default_settings
         self.store = store or BriefingStore(self.cfg.data_dir / "briefings.json")
         self.agents = agents
+        self.forge = forge
+        # Brief of the mission currently being planned — used to seed forge drafts
+        self._current_brief = ""
         self.knowledge = knowledge or gateway_from_settings(self.cfg)
         self._create_initiative = create_initiative
         self._list_initiatives = list_initiatives
@@ -272,6 +277,7 @@ class MissionBriefingAgent:
                 elif name == "ensure_missing_roles":
                     created = result.data.get("created") or []
                     state.context["created_agents"] = created
+                    state.context["forged_agents"] = result.data.get("forged") or []
                     role_agents = dict(state.context.get("role_agents") or {})
                     for c in created:
                         role_agents[c["slot"]] = c["id"]
@@ -297,6 +303,7 @@ class MissionBriefingAgent:
         composed = _compose_brief(text, atts)
         sess.title = (text.split("\n", 1)[0] if text else (atts[0].name if atts else "Untitled"))[:48]
         sess.brief = composed
+        self._current_brief = composed
         state.status = "planning"
         state.goal = composed
         if atts:
@@ -332,6 +339,7 @@ class MissionBriefingAgent:
             "history_hits": state.context.get("history_hits") or [],
             "knowledge_hits": state.context.get("knowledge_hits") or [],
             "created_agents": state.context.get("created_agents") or [],
+            "forged_agents": state.context.get("forged_agents") or [],
             "attachments": [
                 {"name": a.name, "mime": a.mime, "kind": a.kind, "size": a.size} for a in atts
             ],
@@ -348,6 +356,7 @@ class MissionBriefingAgent:
                 "stages": [s.get("id") for s in (draft["stages"] or [])],
                 "roles": list((draft["role_agents"] or {}).keys()),
                 "created_agents": draft["created_agents"],
+                "forged_agents": draft.get("forged_agents") or [],
                 "attachments": draft["attachments"],
             },
         )
@@ -378,6 +387,39 @@ class MissionBriefingAgent:
             sess.status = "awaiting_confirm"
         return self.store.save(sess)
 
+    def set_role_repos(
+        self,
+        session_id: str,
+        role_repos: dict[str, list[dict[str, Any]]],
+    ) -> BriefingSession:
+        """Attach per-slot git repos to the pending draft (UI edit before confirm).
+
+        Each entry: ``{"url": ..., "branch": ..., "name": ..., "token": ...}``.
+        Empty ``url`` rows are dropped; only slots keep non-empty lists.
+        """
+        sess = self.store.get(session_id)
+        clean: dict[str, list[dict[str, Any]]] = {}
+        for slot, repos in (role_repos or {}).items():
+            rows = []
+            for r in repos or []:
+                if not isinstance(r, dict):
+                    continue
+                url = str(r.get("url") or "").strip()
+                if not url:
+                    continue
+                rows.append(
+                    {
+                        "url": url,
+                        "branch": str(r.get("branch") or "").strip(),
+                        "name": str(r.get("name") or "").strip(),
+                        "token": str(r.get("token") or "").strip() or None,
+                    }
+                )
+            if rows:
+                clean[str(slot)] = rows
+        sess.draft = {**(sess.draft or {}), "role_repos": clean}
+        return self.store.save(sess)
+
     async def _commit(
         self,
         sess: BriefingSession,
@@ -396,6 +438,11 @@ class MissionBriefingAgent:
             brief=str(draft.get("brief") or sess.brief),
             coding_executor=str(draft.get("coding_executor") or self._coding_executor()),  # type: ignore[arg-type]
             role_agents=dict(draft.get("role_agents") or {}),
+            role_repos={
+                slot: [RepoConfig.model_validate(r) for r in repos]
+                for slot, repos in (draft.get("role_repos") or {}).items()
+                if repos
+            },
             creator_name=user_name,
             auto_confirm_pipeline=False,
             auto_start=False,
@@ -527,38 +574,74 @@ class MissionBriefingAgent:
 
 
     async def _tool_ensure_roles(self, args: dict[str, Any]) -> ToolResult:
-        slots = list(args.get("slots") or [])
+        slots = [str(s) for s in (args.get("slots") or []) if str(s).strip()]
         created: list[dict[str, str]] = []
+        forged: list[dict[str, Any]] = []
         if self.agents is None:
             return ToolResult(ok=True, summary="无角色目录，跳过", data={"created": []})
+        from sortie_deck.roles import get_role_registry
+
+        registry = get_role_registry()
         for slot in slots:
             if self.agents.list(slot=slot):
                 continue
+            title = _SLOT_TITLES.get(slot) or (registry.maybe(slot).title if registry.maybe(slot) else "")
+            title = title or f"{slot} specialist"
             try:
                 persona = load_persona(slot)
-            except Exception:
+            except Exception:  # noqa: BLE001 — persona is optional
+                persona = ""
+            tags = [slot, "auto", "briefing"]
+            # Unknown role key → forge a pending-review draft instead of faking a persona
+            if self.forge is not None and not registry.is_known(slot):
                 try:
-                    persona = load_persona("eng")
-                except Exception:
-                    persona = f"You are the fireteam specialist for `{slot}`."
+                    draft = await self.forge.propose(
+                        ForgeRequest(
+                            capability=f"{slot} role for mission: {(self._current_brief or title)[:400]}",
+                            title=title,
+                            role_key=slot,
+                            requested_by="mission-briefing",
+                        )
+                    )
+                    forged.append(
+                        {
+                            "slot": slot,
+                            "draft_id": draft.id,
+                            "role_key": draft.role_key,
+                            "issues": draft.issues,
+                            "similar": draft.similar,
+                        }
+                    )
+                    title = draft.title or title
+                    persona = draft.persona or persona
+                    tags = [slot, "forge", "pending-review"]
+                except Exception:  # noqa: BLE001 — forge failure falls back to placeholder
+                    pass
+            if not persona:
+                persona = f"You are the fireteam specialist for `{slot}`."
+            is_pending = "pending-review" in tags
             agent = self.agents.create(
                 CreateAgentRequest(
-                    title=_SLOT_TITLES.get(slot, f"{slot} specialist"),
-                    slot=slot,  # type: ignore[arg-type]
+                    title=title,
+                    slot=slot,
                     summary=f"Auto-created by mission briefing (slot={slot})",
                     persona=persona,
-                    tags=[slot, "auto", "briefing"],
+                    tags=tags,
                     visibility="public",
+                    # Unverified forged personas must be reviewed before going live
+                    published=not is_pending,
                 ),
                 author_id="harness",
                 author_name="Mission Briefing",
             )
             created.append({"slot": slot, "id": agent.id, "title": agent.title})
-        return ToolResult(
-            ok=True,
-            summary=f"新建角色 {len(created)} 个" if created else "编制角色齐全",
-            data={"created": created},
-        )
+        if created:
+            summary = f"新建角色 {len(created)} 个"
+            if forged:
+                summary += f"（其中 {len(forged)} 个待审核 forge 草稿）"
+        else:
+            summary = "编制角色齐全"
+        return ToolResult(ok=True, summary=summary, data={"created": created, "forged": forged})
 
     def _format_plan_reply(self, draft: dict[str, Any]) -> str:
         stages = draft.get("stages") or []
@@ -567,6 +650,7 @@ class MissionBriefingAgent:
         hist = draft.get("history_hits") or []
         kb = draft.get("knowledge_hits") or []
         created = draft.get("created_agents") or []
+        forged = draft.get("forged_agents") or []
         lines = [
             f"**提案：{draft.get('title') or '未命名'}**",
             "",
@@ -579,6 +663,9 @@ class MissionBriefingAgent:
             lines.append(f"知识库：{', '.join(h['title'] for h in kb[:3])}")
         if created:
             lines.append(f"新建角色：{', '.join(c['title'] for c in created)}")
+        if forged:
+            keys = ", ".join(str(f.get("role_key")) for f in forged)
+            lines.append(f"⚙ 新角色草稿待审核（未发布）：{keys}")
         atts = draft.get("attachments") or []
         if atts:
             lines.append(f"附件：{', '.join(a['name'] for a in atts[:5])}")
@@ -589,5 +676,12 @@ class MissionBriefingAgent:
         coding = draft.get("coding_executor")
         if coding:
             lines.append(f"工程执行器：`{coding}`")
+        role_repos = draft.get("role_repos") or {}
+        if role_repos:
+            lines.append("代码仓库：")
+            for slot, repos in role_repos.items():
+                for r in repos:
+                    branch = r.get("branch") or "默认分支"
+                    lines.append(f"- {slot}：`{r.get('url')}` @ {branch}")
         lines.extend(["", "回复 **确认** 组建小队，或 **驳回** 后重述需求。"])
         return "\n".join(lines)

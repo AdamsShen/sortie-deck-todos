@@ -8,6 +8,9 @@ import { MissionBriefingChat } from "./components/MissionBriefingChat";
 import { RoleAvatar, AVATAR_PRESET_OPTIONS } from "./components/RoleAvatar";
 import { StageInspect } from "./components/StageInspect";
 import { PipelineRail, railFromInitiative } from "./components/PipelineRail";
+import { ForgeReview } from "./components/ForgeReview";
+import { SubRoomPanel } from "./components/SubRoomPanel";
+import { DecisionCenter } from "./components/DecisionCenter";
 import { unlockSfx, playSfx, loadSfxMuted, setSfxMuted, loadBgmMuted, setBgmMuted, startBgm } from "./sfx";
 import { categoryLabel, statusLabel, t, type I18nKey } from "./i18n";
 import { RippleField } from "./RippleField";
@@ -1595,6 +1598,39 @@ export default function App() {
           >
             {tr("toolkit")}
           </button>
+          <button
+            type="button"
+            className={view === "forge" ? "on" : ""}
+            onClick={() => {
+              unlockSfx();
+              playSfx("whoosh");
+              setView("forge");
+            }}
+          >
+            {tr("forge")}
+          </button>
+          <button
+            type="button"
+            className={view === "subrooms" ? "on" : ""}
+            onClick={() => {
+              unlockSfx();
+              playSfx("whoosh");
+              setView("subrooms");
+            }}
+          >
+            {tr("subrooms")}
+          </button>
+          <button
+            type="button"
+            className={view === "decisions" ? "on" : ""}
+            onClick={() => {
+              unlockSfx();
+              playSfx("whoosh");
+              setView("decisions");
+            }}
+          >
+            {tr("decisions")}
+          </button>
           {user.role === "admin" && (
             <button
               type="button"
@@ -2950,6 +2986,24 @@ export default function App() {
             )}
           </main>
         </div>
+      )}
+
+      {view === "forge" && (
+        <main className="main page-pad">
+          <ForgeReview token={token} lang={lang} />
+        </main>
+      )}
+
+      {view === "subrooms" && (
+        <main className="main page-pad">
+          <SubRoomPanel token={token} lang={lang} initiativeId={selectedId} />
+        </main>
+      )}
+
+      {view === "decisions" && (
+        <main className="main page-pad">
+          <DecisionCenter token={token} lang={lang} />
+        </main>
       )}
 
       {view === "admin" && user.role === "admin" && (

@@ -8,7 +8,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from sortie_deck.models import StageContext, StageResult
+from sortie_deck.models import RepoConfig, StageContext, StageResult
 
 _PERM_RE = re.compile(
     r"(haven'?t granted|permission(?:s)? blocker|approve the (?:file-)?write|write permission|"
@@ -45,10 +45,15 @@ async def _mcp_prompt_and_log(ctx: StageContext) -> tuple[str, str]:
         log = mgr.combined_log()
         extra = ""
         if manifest:
-            extra = (
-                "\n\nAvailable MCP tools (list only — invoke via your CLI if supported):\n"
-                f"{manifest}\n"
-            )
+            if bool(getattr(settings, "mcp_call_enabled", False)):
+                note = (
+                    "You may request a call: emit "
+                    '`StageResult.meta["mcp_calls"] = [{"tool": "...", "arguments": {...}}]` '
+                    "and the orchestrator will execute it (whitelist + write confirmation apply)."
+                )
+            else:
+                note = "Tool invocation is disabled — treat this as a read-only manifest."
+            extra = "\n\nAvailable MCP tools:\n" f"{manifest}\n" f"({note})\n"
         return extra, log
     finally:
         await mgr.close_all()
@@ -114,7 +119,7 @@ async def _run_cmd(args: list[str], cwd: Path, timeout: int | None = None) -> tu
     )
 
 
-async def _git_diff(workspace: Path, repo_root: Path) -> str:
+async def _git_diff(workspace: Path, repo_root: Path, repos: list[RepoConfig] | None = None) -> str:
     if not _which("git"):
         return "# (git not available)\n"
     has_git = (workspace / ".git").exists() or (repo_root / ".git").exists()
@@ -126,7 +131,82 @@ async def _git_diff(workspace: Path, repo_root: Path) -> str:
             return f"# worktree files (no git)\n{listing}\n"
         return "# (no git repository)\n"
     _code, out, err = await _run_cmd(["git", "diff", "--no-ext-diff"], cwd=workspace, timeout=60)
-    return out or err or "# (empty diff)\n"
+    diff = out or err or "# (empty diff)\n"
+    # Mission repos cloned under workspace/repos: collect per-repo diffs too
+    for repo in repos or []:
+        target = workspace / "repos" / _repo_dirname(repo)
+        if not (target / ".git").exists():
+            continue
+        rcode, rout, rerr = await _run_cmd(
+            ["git", "diff", "--no-ext-diff"], cwd=target, timeout=60
+        )
+        rdiff = rout or rerr or ""
+        if rdiff.strip():
+            diff += f"\n# diff in repo {target.name}\n{rdiff}\n"
+    return diff
+
+
+def _repo_dirname(repo: RepoConfig) -> str:
+    """Checkout dir name for a repo: explicit name → url basename minus .git."""
+    if repo.name:
+        return repo.name
+    base = repo.url.rstrip("/").split("/")[-1]
+    if base.endswith(".git"):
+        base = base[: -len(".git")]
+    return base or "repo"
+
+
+def _clone_url(repo: RepoConfig) -> str:
+    """Insert the access token into https URLs (never log the result)."""
+    if repo.token and repo.url.startswith("https://"):
+        return repo.url.replace("https://", f"https://{repo.token}@", 1)
+    return repo.url
+
+
+async def clone_repos(
+    repos: list[RepoConfig], workspace: Path
+) -> tuple[str, list[str]]:
+    """Clone each mission repo into ``workspace/repos/<name>`` before coding.
+
+    Returns ``(prompt_section, log_lines)``. Already-present checkouts are
+    kept (idempotent on retry); clone failures are logged but do not abort the
+    stage — the agent is told which checkouts exist.
+    """
+    if not repos:
+        return "", []
+    repos_root = workspace / "repos"
+    repos_root.mkdir(parents=True, exist_ok=True)
+    log: list[str] = [f"mission_repos={len(repos)}"]
+    entries: list[str] = []
+    for repo in repos:
+        target = repos_root / _repo_dirname(repo)
+        display = repo.branch or "(default branch)"
+        if (target / ".git").exists():
+            log.append(f"repo {target.name}: reuse existing checkout")
+        elif _which("git"):
+            args = ["git", "clone", "--depth", "50"]
+            if repo.branch:
+                args += ["--branch", repo.branch, "--single-branch"]
+            args += [_clone_url(repo), str(target)]
+            code, out, err = await _run_cmd(args, cwd=workspace)
+            log.append(f"repo {target.name}: clone exit={code}")
+            if code != 0:
+                log.append(f"clone stderr={(err or out)[:500]}")
+        else:
+            log.append(f"repo {target.name}: git not available, clone skipped")
+        if (target / ".git").exists():
+            entries.append(f"- `{target}` (branch: {display})")
+        else:
+            entries.append(f"- `{target}` (branch: {display}) — CHECKOUT FAILED, see log")
+    section = (
+        "\n\nMission code repositories (read these first, then iterate on them):\n"
+        + "\n".join(entries)
+        + "\nExplore the code, implement the PRD changes inside these checkouts.\n"
+    )
+    return section, log
+
+
+
 
 
 def ensure_worktree(repo_root: Path, initiative_id: str, worktrees_root: Path) -> Path:
@@ -165,7 +245,7 @@ def ensure_worktree(repo_root: Path, initiative_id: str, worktrees_root: Path) -
 
 
 def _count_impl_files(workspace: Path) -> int:
-    skip = {".git", "__pycache__", "node_modules", ".write_probe"}
+    skip = {".git", "__pycache__", "node_modules", ".write_probe", "repos"}
     n = 0
     for p in workspace.rglob("*"):
         if not p.is_file():
@@ -213,6 +293,7 @@ class ClaudeCodeExecutor:
         workspace = ensure_worktree(self.repo_root, ctx.initiative_id, self.worktrees_root)
         prd = ctx.upstream_artifacts.get("prd.md", ctx.brief)
         mcp_extra, mcp_log = await _mcp_prompt_and_log(ctx)
+        repo_section, repo_log = await clone_repos(ctx.repos, workspace)
         mode = _permission_mode(ctx)
         prompt = (
             f"{ctx.persona}\n\n"
@@ -222,10 +303,13 @@ class ClaudeCodeExecutor:
             f"Do not ask the user to approve writes — permission mode is `{mode}`.\n"
             f"Human instruction: {ctx.human_instruction or 'none'}\n\n"
             f"PRD:\n{prd}\n"
+            f"{repo_section}"
             f"{mcp_extra}"
         )
         claude = _which("claude")
         log_parts: list[str] = []
+        if repo_log:
+            log_parts.append("\n".join(repo_log))
         if mcp_log:
             log_parts.append(mcp_log)
         ok = False
@@ -262,7 +346,7 @@ class ClaudeCodeExecutor:
             )
             log_parts.append(msg)
 
-        diff = await _git_diff(workspace, self.repo_root)
+        diff = await _git_diff(workspace, self.repo_root, ctx.repos)
         tasks = {
             "tasks": [
                 {
@@ -274,6 +358,10 @@ class ClaudeCodeExecutor:
             "workspace": str(workspace),
             "permission_mode": mode,
             "files_written": _count_impl_files(workspace),
+            "repos": [
+                {"url": r.url, "branch": r.branch or "default", "name": _repo_dirname(r)}
+                for r in ctx.repos
+            ],
         }
         implementation = f"""# Claude Code run
 
@@ -357,6 +445,7 @@ class CursorCliExecutor:
     async def run(self, ctx: StageContext) -> StageResult:
         workspace = ensure_worktree(self.repo_root, ctx.initiative_id, self.worktrees_root)
         prd = ctx.upstream_artifacts.get("prd.md", ctx.brief)
+        repo_section, repo_log = await clone_repos(ctx.repos, workspace)
         query = f"{ctx.brief}\n{prd}\n{ctx.human_instruction or ''}"
         kb_meta: dict[str, str] = {}
         try:
@@ -383,11 +472,14 @@ class CursorCliExecutor:
             f"Workspace: {workspace}\n"
             f"You may create/edit files here without asking for write approval.\n"
             f"Instruction: {ctx.human_instruction or 'none'}\n\n{prd}\n"
+            f"{repo_section}"
             f"{kb_hint}"
             f"{mcp_extra}"
         )
         binary, prefix = _resolve_cursor_binary()
         log_parts: list[str] = []
+        if repo_log:
+            log_parts.append("\n".join(repo_log))
         if kb_meta:
             log_parts.append(f"knowledge_pack={kb_meta}")
         if mcp_log:
@@ -416,7 +508,7 @@ class CursorCliExecutor:
             )
         log = "\n".join(log_parts)
 
-        diff = await _git_diff(workspace, self.repo_root)
+        diff = await _git_diff(workspace, self.repo_root, ctx.repos)
         task_status = "done" if ok else (
             "needs_auth" if needs_auth else ("needs_permission" if needs_perm else "failed")
         )
@@ -430,6 +522,10 @@ class CursorCliExecutor:
             ],
             "workspace": str(workspace),
             "files_written": _count_impl_files(workspace),
+            "repos": [
+                {"url": r.url, "branch": r.branch or "default", "name": _repo_dirname(r)}
+                for r in ctx.repos
+            ],
         }
         implementation = f"""# Cursor CLI run
 

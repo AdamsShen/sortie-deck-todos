@@ -9,11 +9,14 @@ from typing import Any
 
 from pydantic import BaseModel
 
+# Providers that can carry an inbound human decision back into a mission
+PROVIDERS: tuple[str, ...] = ("slack", "feishu", "dingtalk")
+
 
 class BridgeMapping(BaseModel):
     channel_id: str
     initiative_id: str
-    provider: str  # slack | feishu
+    provider: str  # slack | feishu | dingtalk
     label: str = ""
 
 
@@ -118,6 +121,28 @@ def feishu_text_from_payload(payload: dict[str, Any]) -> tuple[str | None, str, 
         text = text.split(" ", 1)[-1].strip() if " " in text else text
     _ = header
     return (chat_id or None), author, text
+
+
+def dingtalk_text_from_payload(payload: dict[str, Any]) -> tuple[str | None, str, str]:
+    """Return (conversation_id, author_name, text) for DingTalk bot callbacks.
+
+    Handles both the outgoing robot callback shape (``conversationId`` +
+    ``text.content``) and the plain ``{"text": {"content": ...}}`` shape used by
+    simple webhook relays.
+    """
+    text_block = payload.get("text")
+    if isinstance(text_block, dict):
+        text = str(text_block.get("content") or "")
+    else:
+        text = str(payload.get("content") or text_block or "")
+    channel = str(
+        payload.get("conversationId")
+        or payload.get("conversation_id")
+        or payload.get("chatbotUserId")
+        or ""
+    )
+    author = str(payload.get("senderNick") or payload.get("senderId") or "dingtalk")
+    return (channel or None), author, text.strip()
 
 
 class MapBridgeRequest(BaseModel):

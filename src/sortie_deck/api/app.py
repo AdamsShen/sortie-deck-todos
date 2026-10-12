@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
+from sortie_deck.agent_forge import ForgeRequest, get_agent_forge
 from sortie_deck.agents import (
     AgentCatalog,
     CreateAgentRequest,
@@ -53,6 +54,7 @@ from sortie_deck.models import (
 )
 from sortie_deck.orchestrator import Orchestrator, bind_catalogs, get_orchestrator
 from sortie_deck.pipeline import list_tracks, stage_catalog
+from sortie_deck.roles import RoleSpec, get_role_registry, normalize_role_key
 from sortie_deck.settings import settings
 from sortie_deck.toolkit import (
     CreateToolkitRequest,
@@ -128,6 +130,7 @@ def get_briefing():
             settings=settings,
             agents=get_agents(),
             knowledge=get_knowledge_gateway(),
+            forge=get_agent_forge(),
             create_initiative=o.create_initiative,
             list_initiatives=o.list_initiatives,
             save_initiative=_save,
@@ -615,6 +618,157 @@ async def delete_agent(agent_id: str, user: PublicUser = Depends(require_user)) 
         raise HTTPException(403, str(exc)) from exc
 
 
+class CreateRoleRequest(BaseModel):
+    role_key: str
+    title: str = ""
+    summary: str = ""
+    coding: bool = False
+    executor: str | None = None
+    handoff_targets: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+
+
+class ForgeProposeRequest(BaseModel):
+    capability: str
+    title: str = ""
+    role_key: str | None = None
+    summary: str = ""
+    tags: list[str] = Field(default_factory=list)
+
+
+class ForgeUpdateRequest(BaseModel):
+    title: str | None = None
+    summary: str | None = None
+    persona: str | None = None
+    role_key: str | None = None
+    tags: list[str] | None = None
+    contract: dict[str, Any] | None = None
+
+
+class ForgeApproveRequest(BaseModel):
+    publish_agent: bool = False
+    coding: bool = False
+    toolkit_ids: list[str] = Field(default_factory=list)
+
+
+@app.get("/api/roles")
+async def list_roles(
+    q: str | None = Query(default=None),
+    source: str | None = Query(default=None),
+    _user: PublicUser = Depends(require_user),
+) -> list[dict[str, Any]]:
+    return [s.model_dump(mode="json") for s in get_role_registry().list(q=q, source=source)]
+
+
+@app.post("/api/roles")
+async def create_role(
+    req: CreateRoleRequest, _user: PublicUser = Depends(require_user)
+) -> dict[str, Any]:
+    key = normalize_role_key(req.role_key) or req.role_key
+    try:
+        spec = get_role_registry().register(
+            RoleSpec(
+                role_key=key,
+                title=req.title.strip() or key,
+                summary=req.summary.strip(),
+                source="custom",
+                coding=req.coding,
+                executor=(req.executor or None),
+                handoff_targets=list(req.handoff_targets),
+                tags=[t.strip() for t in req.tags if t.strip()],
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return spec.model_dump(mode="json")
+
+
+@app.delete("/api/roles/{role_key}")
+async def delete_role(role_key: str, _user: PublicUser = Depends(require_user)) -> dict[str, str]:
+    try:
+        get_role_registry().delete(role_key)
+    except KeyError:
+        raise HTTPException(404, "role not found") from None
+    return {"status": "deleted"}
+
+
+@app.get("/api/forge/drafts")
+async def list_forge_drafts(
+    status: str | None = Query(default=None),
+    _user: PublicUser = Depends(require_user),
+) -> list[dict[str, Any]]:
+    return [d.model_dump(mode="json") for d in get_agent_forge().list(status=status)]
+
+
+@app.post("/api/forge/drafts")
+async def propose_forge_draft(
+    req: ForgeProposeRequest, user: PublicUser = Depends(require_user)
+) -> dict[str, Any]:
+    draft = await get_agent_forge().propose(
+        ForgeRequest(**req.model_dump(), requested_by=user.display_name)
+    )
+    return draft.model_dump(mode="json")
+
+
+@app.get("/api/forge/drafts/{draft_id}")
+async def get_forge_draft(
+    draft_id: str, _user: PublicUser = Depends(require_user)
+) -> dict[str, Any]:
+    try:
+        return get_agent_forge().get(draft_id).model_dump(mode="json")
+    except KeyError:
+        raise HTTPException(404, "draft not found") from None
+
+
+@app.patch("/api/forge/drafts/{draft_id}")
+async def update_forge_draft(
+    draft_id: str, req: ForgeUpdateRequest, _user: PublicUser = Depends(require_user)
+) -> dict[str, Any]:
+    try:
+        draft = get_agent_forge().update(draft_id, req.model_dump(exclude_unset=True))
+    except KeyError:
+        raise HTTPException(404, "draft not found") from None
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return draft.model_dump(mode="json")
+
+
+@app.post("/api/forge/drafts/{draft_id}/approve")
+async def approve_forge_draft(
+    draft_id: str, req: ForgeApproveRequest, user: PublicUser = Depends(require_user)
+) -> dict[str, Any]:
+    try:
+        draft, role_spec, published = get_agent_forge().approve(
+            draft_id,
+            reviewer=user.display_name,
+            publish_agent=req.publish_agent,
+            toolkit_ids=list(req.toolkit_ids),
+            coding=req.coding,
+        )
+    except KeyError:
+        raise HTTPException(404, "draft not found") from None
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {
+        "draft": draft.model_dump(mode="json"),
+        "role": role_spec.model_dump(mode="json") if role_spec else None,
+        "agent": published.model_dump(mode="json") if published else None,
+    }
+
+
+@app.post("/api/forge/drafts/{draft_id}/reject")
+async def reject_forge_draft(
+    draft_id: str,
+    note: str = Query(default=""),
+    user: PublicUser = Depends(require_user),
+) -> dict[str, Any]:
+    try:
+        draft = get_agent_forge().reject(draft_id, note=note, reviewer=user.display_name)
+    except KeyError:
+        raise HTTPException(404, "draft not found") from None
+    return draft.model_dump(mode="json")
+
+
 @app.get("/api/toolkit")
 async def list_toolkit(
     kind: str | None = Query(default=None),
@@ -786,6 +940,28 @@ async def post_briefing_message(
             user_name=user.display_name or user.username,
             attachments=atts,
         )
+    except KeyError:
+        raise HTTPException(404, "briefing session not found") from None
+    return sess.model_dump(mode="json")
+
+
+class BriefingReposBody(BaseModel):
+    role_repos: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+
+
+@app.patch("/api/briefing/sessions/{session_id}/repos")
+async def set_briefing_repos(
+    session_id: str,
+    body: BriefingReposBody,
+    _user: PublicUser = Depends(require_user),
+) -> dict[str, Any]:
+    """Attach per-slot git/github repos & branches to the pending briefing draft.
+
+    Called before the briefing confirm; each slot's dev agent clones & reads
+    these repos in its workspace before iterating.
+    """
+    try:
+        sess = get_briefing().set_role_repos(session_id, body.role_repos)
     except KeyError:
         raise HTTPException(404, "briefing session not found") from None
     return sess.model_dump(mode="json")
@@ -1198,6 +1374,118 @@ async def feishu_bridge(request: Request) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(400, str(exc)) from exc
     return {"code": 0}
+
+
+@app.post("/api/bridges/dingtalk")
+async def dingtalk_bridge(request: Request) -> dict[str, Any]:
+    from sortie_deck.bridges import dingtalk_text_from_payload
+
+    payload = await request.json()
+    channel, author, text = dingtalk_text_from_payload(payload)
+    if not channel or not text:
+        return {"errcode": 0, "ignored": True}
+    mapping = _bridges().resolve("dingtalk", channel)
+    if not mapping:
+        return {"errcode": 0, "errmsg": "conversation not mapped"}
+    try:
+        await orch().post_human_message(mapping.initiative_id, text, author_name=author)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(400, str(exc)) from exc
+    return {"errcode": 0}
+
+
+@app.get("/api/subrooms")
+async def list_subrooms(
+    initiative_id: str | None = Query(default=None),
+    _user: PublicUser = Depends(require_user),
+) -> list[dict[str, Any]]:
+    """Sub-room records (transcripts stay behind their own endpoint)."""
+    from sortie_deck.subroom import get_subroom_service
+
+    service = get_subroom_service()
+    if service is None:
+        return []
+    return [
+        r.model_dump(mode="json") for r in service.store.list(initiative_id=initiative_id)
+    ]
+
+
+@app.get("/api/subrooms/{subroom_id}/transcript")
+async def get_subroom_transcript(
+    subroom_id: str, _user: PublicUser = Depends(require_user)
+) -> list[dict[str, Any]]:
+    from sortie_deck.subroom import get_subroom_service
+
+    service = get_subroom_service()
+    if service is None:
+        raise HTTPException(404, "sub-rooms are not wired")
+    try:
+        messages = service.transcript(subroom_id)
+    except KeyError:
+        raise HTTPException(404, "sub-room not found") from None
+    return [m.model_dump(mode="json") for m in messages]
+
+
+class AnswerDecisionRequest(BaseModel):
+    answer: str
+    by: str = ""
+    channel: str = "ui"
+
+
+@app.get("/api/decisions")
+async def list_decisions(
+    initiative_id: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    _user: PublicUser = Depends(require_user),
+) -> list[dict[str, Any]]:
+    from sortie_deck.decisions import get_decision_service
+
+    service = get_decision_service()
+    if service is None:
+        return []
+    return [
+        d.model_dump(mode="json")
+        for d in service.list(initiative_id=initiative_id, status=status)
+    ]
+
+
+@app.get("/api/decisions/{decision_id}")
+async def get_decision(
+    decision_id: str, _user: PublicUser = Depends(require_user)
+) -> dict[str, Any]:
+    from sortie_deck.decisions import get_decision_service
+
+    service = get_decision_service()
+    if service is None:
+        raise HTTPException(404, "decision centre is not wired")
+    try:
+        return service.get(decision_id).model_dump(mode="json")
+    except KeyError:
+        raise HTTPException(404, "decision not found") from None
+
+
+@app.post("/api/decisions/{decision_id}/answer")
+async def answer_decision(
+    decision_id: str,
+    req: AnswerDecisionRequest,
+    user: PublicUser = Depends(require_user),
+) -> dict[str, Any]:
+    """Record a human answer; idempotent and authorised against the assignee."""
+    outcome = await orch().resolve_decision(
+        decision_id,
+        answer=req.answer,
+        by=req.by or user.display_name,
+        channel=req.channel,
+        is_admin=user.role == "admin",
+    )
+    return outcome.model_dump(mode="json")
+
+
+@app.post("/api/decisions/sweep")
+async def sweep_decisions(_user: PublicUser = Depends(require_user)) -> dict[str, Any]:
+    """Expire overdue decisions and report the fallback that was applied."""
+    expired = await orch().sweep_decisions()
+    return {"expired": [d.model_dump(mode="json") for d in expired]}
 
 
 @app.get("/api/org-policy")

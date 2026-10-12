@@ -16,6 +16,26 @@ MemoryKind = Literal["fact", "preference", "episode", "lesson"]
 CONTEXT_BLOCK_MAX_CHARS = 6000
 
 
+def stage_tag(entry: MemoryEntry) -> str | None:
+    """The ``stage:<name>`` tag a memory is scoped to, if any."""
+    for tag in entry.tags:
+        if tag.startswith("stage:"):
+            return tag.split(":", 1)[1].strip()
+    return None
+
+
+def stage_applies(entry: MemoryEntry, stage: str | None) -> bool:
+    """Stage-scoped memories only reach the stage that owns them.
+
+    Untagged memories apply everywhere; tagged ones are hidden from sibling
+    parallel stages so a sub-room conclusion cannot leak across branches.
+    """
+    tagged = stage_tag(entry)
+    if tagged is None:
+        return True
+    return bool(stage) and tagged == stage
+
+
 class MemoryEntry(BaseModel):
     id: str = Field(default_factory=lambda: new_id("mem_"))
     scope: MemoryScope = "workspace"
@@ -176,12 +196,32 @@ class MemoryStore:
                 raise KeyError(mem_id)
             self._write(next_entries)
 
+    def list_for_stage(
+        self,
+        *,
+        mission_id: str,
+        stage: str,
+        limit: int = 12,
+    ) -> list[MemoryEntry]:
+        """Mission memories that may be injected into ``stage``.
+
+        Used for sub-room conclusions: they are stored with a ``stage:<name>``
+        tag so only the requesting step sees them.
+        """
+        out = [
+            e
+            for e in self.list(scope="mission", scope_id=mission_id)
+            if stage_applies(e, stage)
+        ]
+        return out[:limit]
+
     def context_block(
         self,
         *,
         user_id: str | None = None,
         mission_id: str | None = None,
         agent_ids: list[str] | None = None,
+        stage: str | None = None,
         limit: int = 12,
     ) -> str:
         """Compact memory brief for agent prompts / chat injection."""
@@ -193,6 +233,8 @@ class MemoryStore:
                 chunks.append(f"- [you/{e.kind}] {e.content}")
         if mission_id:
             for e in self.list(scope="mission", scope_id=mission_id):
+                if not stage_applies(e, stage):
+                    continue
                 chunks.append(f"- [mission/{e.kind}] {e.content}")
         for aid in agent_ids or []:
             for e in self.list(scope="agent", scope_id=aid):

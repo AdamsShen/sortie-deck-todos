@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from sortie_deck.llm import LlmClient
+from sortie_deck.models import RoleId
 from sortie_deck.pipeline import (
     PLANNER_AGENT,
     PLANNER_TITLE,
@@ -30,28 +31,39 @@ Human confirmation is mandatory after your proposal — never assume start.
 Return ONLY JSON.
 """
 
-_LOADOUT_SYSTEM = """You are Sortie Deck's squad loadout planner.
-Given a mission brief and proposed pipeline stages, return JSON:
-  needed_slots: array of role ids from
-    [product, design, eng, eng_ios, eng_android, eng_web, eng_backend, eng_agent, qa, deploy]
+_LOADOUT_SYSTEM_TEMPLATE = """You are Sortie Deck's squad loadout planner.
+Given a mission brief, a role catalog, and proposed pipeline stages, return JSON:
+  needed_slots: array of role ids chosen from the provided role catalog
   rationale: short explanation in the same language as the brief
 Only include slots that the stages / brief actually need. Always include product, qa, deploy
 when those stages exist. Prefer specialized eng_* over generic eng when platforms are clear.
+Never invent a role id that is not in the catalog.
 Return ONLY JSON.
 """
 
-_VALID_SLOTS = {
-    "product",
-    "design",
-    "eng",
-    "eng_ios",
-    "eng_android",
-    "eng_web",
-    "eng_backend",
-    "eng_agent",
-    "qa",
-    "deploy",
-}
+_COLLAB_SYSTEM = """You are Sortie Deck's mission intake assessor.
+Decide whether a request needs a *multi-agent* squad at all, and if so which roles.
+Return JSON:
+  multi_agent: bool — false when a single role can deliver the whole request
+  roles: array of role ids from the provided role catalog
+  rationale: short explanation in the same language as the brief
+When multi_agent is false, roles must be empty or contain exactly one role.
+Never invent a role id that is not in the catalog.
+Return ONLY JSON.
+"""
+
+# Built-in fallback used when the role registry is unavailable.
+_BUILTIN_SLOTS: frozenset[str] = frozenset(m.value for m in RoleId)
+
+
+def valid_loadout_slots() -> set[str]:
+    """Role keys the loadout planner may pick — registry-driven, not a closed set."""
+    try:
+        from sortie_deck.roles import get_role_registry
+
+        return set(get_role_registry().known_role_keys())
+    except Exception:  # noqa: BLE001 — registry failure must not block planning
+        return set(_BUILTIN_SLOTS)
 
 
 async def plan_pipeline_llm(
@@ -121,9 +133,11 @@ async def propose_loadout_llm(
     llm = client or LlmClient()
     if not llm.enabled:
         return None
+    allowed = valid_loadout_slots()
     user = json.dumps(
         {
             "brief": brief,
+            "role_catalog": sorted(allowed),
             "stages": [
                 {"id": s.get("id"), "role": s.get("role"), "label": s.get("label")}
                 for s in (stages or [])
@@ -133,10 +147,10 @@ async def propose_loadout_llm(
         ensure_ascii=False,
     )
     try:
-        data = await llm.chat_json(system=_LOADOUT_SYSTEM, user=user)
+        data = await llm.chat_json(system=_LOADOUT_SYSTEM_TEMPLATE, user=user)
     except Exception:
         return None
-    slots = [str(s) for s in (data.get("needed_slots") or []) if str(s) in _VALID_SLOTS]
+    slots = [str(s) for s in (data.get("needed_slots") or []) if str(s) in allowed]
     if not slots:
         return None
     seen: set[str] = set()
@@ -147,6 +161,76 @@ async def propose_loadout_llm(
             ordered.append(s)
     return {
         "needed_slots": ordered,
+        "rationale": str(data.get("rationale") or ""),
+        "planner": "llm",
+        "planner_backend": llm.backend,
+    }
+
+
+async def assess_collaboration(
+    *,
+    title: str = "",
+    brief: str = "",
+    use_llm: bool = True,
+    client: LlmClient | None = None,
+) -> dict[str, Any]:
+    """Decide whether the mission needs a multi-agent squad, and which roles.
+
+    The model may only *narrow* the squad — the fallback keeps today's behaviour
+    (multi-agent) so an unavailable LLM never silently degrades a mission to a
+    single agent. Role ids are validated against the registry catalog.
+    """
+    allowed = valid_loadout_slots()
+    proposal = plan_pipeline(title=title, brief=brief, complexity="auto")
+    heuristic_roles: list[str] = []
+    for stage in proposal.get("stages") or []:
+        role = str((stage or {}).get("role") or "").strip()
+        if role and role in allowed and role not in heuristic_roles:
+            heuristic_roles.append(role)
+    for required in ("product", "qa", "deploy"):
+        if required in allowed and required not in heuristic_roles:
+            heuristic_roles.append(required)
+    fallback = {
+        "multi_agent": True,
+        "roles": heuristic_roles,
+        "rationale": "heuristic: pipeline stages imply a multi-agent squad",
+        "planner": "heuristic",
+        "planner_backend": None,
+    }
+    if not use_llm:
+        return fallback
+    llm = client or LlmClient()
+    if not llm.enabled:
+        return fallback
+    user = json.dumps(
+        {
+            "title": title,
+            "brief": brief,
+            "role_catalog": sorted(allowed),
+            "stage_roles": heuristic_roles,
+        },
+        ensure_ascii=False,
+    )
+    try:
+        data = await llm.chat_json(system=_COLLAB_SYSTEM, user=user)
+    except Exception:
+        return fallback
+    if not isinstance(data, dict):
+        return fallback
+
+    roles: list[str] = []
+    for item in data.get("roles") or []:
+        key = str(item).strip()
+        if key and key in allowed and key not in roles:
+            roles.append(key)
+    multi = bool(data.get("multi_agent"))
+    if not multi:
+        roles = roles[:1]
+    if not roles:
+        roles = heuristic_roles[:1] if not multi else heuristic_roles
+    return {
+        "multi_agent": multi,
+        "roles": roles,
         "rationale": str(data.get("rationale") or ""),
         "planner": "llm",
         "planner_backend": llm.backend,

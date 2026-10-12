@@ -6,6 +6,7 @@ from sortie_deck.plugins.coding import ClaudeCodeExecutor, CursorCliExecutor
 from sortie_deck.plugins.deploy import DeployShellExecutor, LlmProductExecutor
 from sortie_deck.plugins.entrypoints import load_entry_point_executors
 from sortie_deck.plugins.mock import (
+    MockCollaborativeExecutor,
     MockDeployExecutor,
     MockDesignExecutor,
     MockEngExecutor,
@@ -38,6 +39,7 @@ def build_default_registry(
         MockIntegrateExecutor(),
         MockHandoffExecutor(),
         MockDeployExecutor(),
+        MockCollaborativeExecutor(),
         LlmProductExecutor(),
         ClaudeCodeExecutor(root, worktrees),
         CursorCliExecutor(root, worktrees),
