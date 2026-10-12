@@ -17,6 +17,7 @@ from sortie_deck.models import (
     ArtifactRef,
     ConfirmPipelineRequest,
     CreateInitiativeRequest,
+    HarnessLockedError,
     HitlAction,
     HitlDecision,
     HitlRequest,
@@ -29,6 +30,7 @@ from sortie_deck.models import (
     RoomMessage,
     RoomParticipant,
     TimelineEvent,
+    UnknownHarnessError,
     UpdatePipelineRequest,
     new_id,
     utc_now,
@@ -696,6 +698,9 @@ class Orchestrator:
     async def create_initiative(self, req: CreateInitiativeRequest) -> Initiative:
         from sortie_deck.llm import LlmClient, resolve_coding_executor
 
+        # Resolve the mission-level agent harness (user choice → global default)
+        harness = self._resolve_harness(req.harness)
+
         # Apply org defaults / track allowlist before planning
         hint = req.pipeline_track
         if self.org_policy and self.org_policy.default_track and not hint:
@@ -746,6 +751,7 @@ class Orchestrator:
             brief=req.brief,
             template=role_template,
             status=InitiativeStatus.DRAFT,
+            harness=harness,
             roles=self._roles_from_template(
                 coding, req.role_agents, role_toolkits, template=role_template,
                 role_repos=role_repos,
@@ -755,6 +761,7 @@ class Orchestrator:
                 self.org_policy,
                 {
                     "coding_executor": coding,
+                    "harness": harness,
                     "role_agents": req.role_agents or {},
                     "role_repos": {
                         slot: [repo.model_dump(mode="json") for repo in repos]
@@ -959,6 +966,88 @@ class Orchestrator:
         req.auto_confirm_pipeline = True
         return await self.create_initiative(req)
 
+    # --- agent harness selection & lock ----------------------------------
+
+    def _resolve_harness(self, preferred: str | None) -> str:
+        """User choice → TDT_DEFAULT_HARNESS; validates against the provider registry."""
+        from sortie_deck.harness_providers import get_harness_registry, is_valid_harness
+        from sortie_deck.settings import settings
+
+        harness = (preferred or settings.default_harness or "claude_code").strip()
+        if not is_valid_harness(harness) or not get_harness_registry().has(harness):
+            raise UnknownHarnessError(f"Unknown harness provider: `{harness}`")
+        return harness
+
+    async def update_harness(self, initiative_id: str, harness: str) -> Initiative:
+        """Change the mission harness — draft only; started missions are locked."""
+        ini = self.store.get(initiative_id)
+        if not ini:
+            raise KeyError(initiative_id)
+        if ini.harness_locked or ini.status not in {InitiativeStatus.DRAFT, InitiativeStatus.STOPPED}:
+            raise HarnessLockedError(
+                "Harness is locked once the mission has started — use HITL `switch_harness`"
+            )
+        target = self._resolve_harness(harness)
+        ini.harness = target
+        meta = dict(ini.meta or {})
+        meta["harness"] = target
+        ini.meta = meta
+        self.store.upsert(ini)
+        await self._post_room(
+            ini.id,
+            text=f"harness 已切换为 `{target}`（任务未开始，可直接生效）。",
+            actor_kind=ActorKind.SYSTEM,
+            actor_name="Sortie",
+            msg_type="system",
+        )
+        return ini
+
+    async def switch_harness_via_hitl(
+        self, ini: Initiative, decision: HitlDecision
+    ) -> Initiative:
+        """Mid-run harness change — only reachable through HITL approval."""
+        target = self._resolve_harness(decision.harness or "")
+        meta = dict(ini.meta or {})
+        meta["harness"] = target
+        ini.harness = target
+        ini.meta = meta
+        self._append_timeline(
+            ini,
+            TimelineEvent(
+                stage=ini.current_stage,
+                kind="hitl",
+                message=f"Harness switched to `{target}` (HITL authorised)",
+            ),
+        )
+        await self._post_room(
+            ini.id,
+            text=f"HITL 授权：harness 已切换为 `{target}`，后续阶段将在新 harness 中运行。",
+            actor_kind=ActorKind.HUMAN,
+            actor_name="Sortie",
+            msg_type="decision",
+        )
+        return ini
+
+    def _bind_mission_context_files(self, ini: Initiative) -> None:
+        """Persist requirement-bound context files at start (loaded by new sessions)."""
+        try:
+            from sortie_deck.mission_memory import MissionMemoryStore
+
+            mm = MissionMemoryStore(self.cfg.missions_dir)
+            mm.bind_context_file(ini.id, "brief.md", f"# Brief\n\n{ini.brief}")
+            rail = ini.meta.get("pipeline_rail") or ini.meta.get("pipeline_stages") or []
+            if rail:
+                lines = [s.get("label", s) if isinstance(s, dict) else str(s) for s in rail]
+                numbered = "\n".join(f"{i + 1}. {label}" for i, label in enumerate(lines))
+                mm.bind_context_file(ini.id, "plan.md", f"# Pipeline plan\n\n{numbered}")
+            mm.bind_context_file(
+                ini.id,
+                "harness.md",
+                f"# Harness\n\nThis mission runs on harness `{ini.harness}` (locked).",
+            )
+        except Exception:  # noqa: BLE001 — mission memory must never block start
+            pass
+
     async def start_pipeline(self, initiative_id: str, author_name: str = "Operator") -> Initiative:
         ini = self.store.get(initiative_id)
         if not ini:
@@ -975,6 +1064,13 @@ class Orchestrator:
         # Ensure custom graph exists for confirmed specs
         if f"custom:{ini.id}" not in self.graphs and ini.meta.get("pipeline_specs"):
             self._compile_custom_graph(ini)
+        # Lock the harness for the lifetime of the mission (HITL unlock only).
+        if not ini.harness_locked:
+            ini.harness_locked = True
+            meta = dict(ini.meta or {})
+            meta["harness_locked"] = True
+            ini.meta = meta
+            self._bind_mission_context_files(ini)
         ini.status = InitiativeStatus.RUNNING
         self.store.upsert(ini)
         await self._post_room(
@@ -1410,6 +1506,8 @@ class Orchestrator:
                         "stage": "intake",
                         "human_instruction": ini.human_instruction,
                         "coding_executor": ini.meta.get("coding_executor", "mock"),
+                        "harness": ini.harness or ini.meta.get("harness") or self.cfg.default_harness,
+                        "harness_locked": bool(ini.harness_locked),
                         "deploy_executor": self.cfg.deploy_executor,
                         "artifact_root": str(self.cfg.artifacts_dir),
                         "workspace_dir": str(self.cfg.worktrees_dir / ini.id),
@@ -1504,6 +1602,9 @@ class Orchestrator:
         )
         if decision.action == HitlAction.EDIT_INSTRUCTION and decision.instruction:
             ini.human_instruction = decision.instruction
+        if decision.action == HitlAction.SWITCH_HARNESS:
+            # Only an explicit HITL decision may unlock/switch the harness mid-run.
+            ini = await self.switch_harness_via_hitl(ini, decision)
         ini.pending_hitl = None
         ini.status = InitiativeStatus.RUNNING
         self.store.upsert(ini)

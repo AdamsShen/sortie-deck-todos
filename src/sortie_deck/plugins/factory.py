@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from sortie_deck.harness_providers.executor import HarnessStageExecutor
 from sortie_deck.plugins.coding import ClaudeCodeExecutor, CursorCliExecutor
 from sortie_deck.plugins.deploy import DeployShellExecutor, LlmProductExecutor
 from sortie_deck.plugins.entrypoints import load_entry_point_executors
@@ -43,6 +44,7 @@ def build_default_registry(
         LlmProductExecutor(),
         ClaudeCodeExecutor(root, worktrees),
         CursorCliExecutor(root, worktrees),
+        HarnessStageExecutor(),
         DeployShellExecutor(),
     ):
         registry.register(executor)

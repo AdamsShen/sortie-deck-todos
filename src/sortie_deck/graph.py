@@ -123,6 +123,10 @@ def _role_id(role: str) -> RoleId:
 
 
 def _executor_name(stage: str, role: str, state: PipelineState, stage_cfg: dict[str, Any]) -> str:
+    # Initiative-locked agent harness: when set, EVERY stage conversation runs
+    # through the generic harness executor (mock/LLM stay as in-executor fallback).
+    if str(state.get("harness") or "").strip():
+        return "harness_stage"
     explicit = stage_cfg.get("executor")
     if explicit:
         return str(explicit)
@@ -662,6 +666,8 @@ def build_graph_from_template(
                 for r in (role_repos_state.get(role.value) or [])
             ],
             memory_brief=memory_brief,
+            harness=str(state.get("harness") or ""),
+            harness_locked=bool(state.get("harness_locked")),
             handoff_targets=contract_targets,
         )
 
@@ -796,6 +802,17 @@ def build_graph_from_template(
                 update["halt"] = True
                 return update
 
+            if decision.action == HitlAction.SWITCH_HARNESS:
+                # Human authorised a harness change: swap it into the state and
+                # re-run this stage on the new harness.
+                target = (decision.harness or "").strip()
+                if target:
+                    update["harness"] = target
+                if decision.instruction:
+                    update["human_instruction"] = decision.instruction
+                update["handoff_target"] = stage_name
+                return update
+
             # approve / rewrite → retry same stage with elevated permission mode
             retry_mode = payload.get("retry_permission_mode") or "bypassPermissions"
             instr = decision.instruction or ""
@@ -880,6 +897,15 @@ def build_graph_from_template(
             if decision.action == HitlAction.REROUTE and decision.next_stage:
                 update["handoff_target"] = _resolve_goto(stages, decision.next_stage)
                 return update
+
+            if decision.action == HitlAction.SWITCH_HARNESS:
+                # Authorised harness change between stages: swap, then continue
+                # with the normal approve routing.
+                target = (decision.harness or "").strip()
+                if target:
+                    update["harness"] = target
+                if decision.instruction:
+                    update["human_instruction"] = decision.instruction
 
             # approve
             if stage == "qa_verify" and not bool(result.get("qa_passed")):
@@ -1026,6 +1052,17 @@ def build_graph_from_template(
                         "status": "stopped",
                         "stopped": True,
                     }
+                resume_base: PipelineState = {**base}
+                if decision.action == HitlAction.SWITCH_HARNESS:
+                    # Authorised harness change inside a parallel wave: swap into
+                    # state and re-enter the wave (member re-runs on new harness).
+                    target = (decision.harness or "").strip()
+                    if target:
+                        resume_base["harness"] = target
+                    if decision.instruction:
+                        resume_base["human_instruction"] = decision.instruction
+                    resume_base["handoff_target"] = wave_node_name(group)
+                    return resume_base
                 retry_mode = payload.get("retry_permission_mode") or "bypassPermissions"
                 instr = decision.instruction or ""
                 return {

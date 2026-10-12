@@ -97,7 +97,10 @@ def get_knowledge_gateway() -> KnowledgeGateway:
 def get_memory() -> MemoryStore:
     global _memory
     if _memory is None:
-        _memory = MemoryStore(settings.memory_db)
+        # Pluggable shared-memory backend: local, or local + mem0 in parallel.
+        from sortie_deck.memory import build_memory_store
+
+        _memory = build_memory_store(settings.memory_db)  # type: ignore[assignment]
     return _memory
 
 
@@ -850,6 +853,49 @@ async def list_executors(_user: PublicUser = Depends(require_user)) -> dict[str,
     }
 
 
+@app.get("/api/harnesses")
+async def list_harnesses(refresh: bool = Query(default=False)) -> dict[str, Any]:
+    """Available agent harness providers + probe status (TTL-cached)."""
+    from sortie_deck.harness_providers import (
+        HARNESS_LABELS,
+        get_harness_registry,
+    )
+
+    registry = get_harness_registry()
+    items: list[dict[str, Any]] = []
+    for name in registry.names():
+        probe = registry.probe(name, refresh=refresh)
+        items.append(
+            {
+                "name": name,
+                "label": HARNESS_LABELS.get(name, name),
+                "probe": probe.as_dict(),
+                "available": probe.ok,
+            }
+        )
+    return {"harnesses": items, "default": settings.default_harness}
+
+
+class UpdateHarnessRequest(BaseModel):
+    harness: str
+
+
+@app.patch("/api/initiatives/{initiative_id}/harness")
+async def patch_initiative_harness(
+    initiative_id: str,
+    req: UpdateHarnessRequest,
+    user: PublicUser = Depends(require_user),
+) -> dict[str, Any]:
+    """Draft-only harness change; started missions require HITL switch_harness."""
+    try:
+        ini = await orch().update_harness(initiative_id, req.harness)
+        return ini.model_dump(mode="json")
+    except KeyError:
+        raise HTTPException(404, "Initiative not found") from None
+    except RuntimeError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @app.get("/api/pipelines")
 async def list_pipelines(_user: PublicUser = Depends(require_user)) -> dict[str, Any]:
     return {"tracks": list_tracks(), "catalog": stage_catalog()}
@@ -1055,6 +1101,7 @@ async def submit_hitl(
             instruction=req.instruction,
             next_stage=req.next_stage,
             note=req.note,
+            harness=req.harness,
         )
         ini = await orch().submit_hitl(
             initiative_id, decision, author_name=req.author_name or user.display_name
