@@ -618,10 +618,15 @@ async def delete_agent(agent_id: str, user: PublicUser = Depends(require_user)) 
 @app.get("/api/toolkit")
 async def list_toolkit(
     kind: str | None = Query(default=None),
+    category: str | None = Query(default=None),
     q: str | None = Query(default=None),
+    featured: bool | None = Query(default=None),
     _user: PublicUser = Depends(require_user),
 ) -> list[dict[str, Any]]:
-    return [i.model_dump(mode="json") for i in get_toolkit().list(kind=kind, q=q)]
+    return [
+        i.model_dump(mode="json")
+        for i in get_toolkit().list(kind=kind, category=category, q=q, featured=featured)
+    ]
 
 
 @app.get("/api/toolkit/{item_id}")

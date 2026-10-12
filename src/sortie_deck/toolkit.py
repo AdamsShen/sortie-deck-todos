@@ -43,7 +43,9 @@ class ToolkitItem(BaseModel):
     scripts: list[SkillScript] = Field(default_factory=list)
     # shared
     config: dict[str, Any] = Field(default_factory=dict)
+    category: str = ""  # domain directory, e.g. engineering / product / qa
     tags: list[str] = Field(default_factory=list)
+    featured: bool = False
     enabled: bool = True
     source: str = ""  # import provenance
     author_id: str = ""
@@ -66,7 +68,9 @@ class CreateToolkitRequest(BaseModel):
     body: str = ""
     scripts: list[SkillScript] = Field(default_factory=list)
     config: dict[str, Any] = Field(default_factory=dict)
+    category: str = ""
     tags: list[str] = Field(default_factory=list)
+    featured: bool = False
     enabled: bool = True
     source: str = ""
 
@@ -84,7 +88,9 @@ class UpdateToolkitRequest(BaseModel):
     body: str | None = None
     scripts: list[SkillScript] | None = None
     config: dict[str, Any] | None = None
+    category: str | None = None
     tags: list[str] | None = None
+    featured: bool | None = None
     enabled: bool | None = None
     source: str | None = None
 
@@ -98,6 +104,17 @@ class ImportToolkitRequest(BaseModel):
     overwrite: bool = False
 
 
+# Domain directories for marketplace-style browsing (UI + optional API filter).
+TOOLKIT_CATEGORIES: tuple[str, ...] = (
+    "engineering",
+    "product",
+    "qa",
+    "ops",
+    "knowledge",
+    "browser",
+    "office",
+)
+
 _SEED: list[dict] = [
     {
         "kind": "tool",
@@ -105,7 +122,9 @@ _SEED: list[dict] = [
         "summary": "查看工作区 diff，供 ENG 专精位引用",
         "runtime": "cli",
         "endpoint": "git diff --stat",
+        "category": "engineering",
         "tags": ["git", "eng"],
+        "featured": True,
     },
     {
         "kind": "tool",
@@ -113,6 +132,7 @@ _SEED: list[dict] = [
         "summary": "探测预发健康检查",
         "runtime": "http",
         "endpoint": "GET /api/health",
+        "category": "ops",
         "tags": ["deploy", "health"],
     },
     {
@@ -122,7 +142,9 @@ _SEED: list[dict] = [
         "transport": "stdio",
         "command": "npx",
         "args": ["-y", "@modelcontextprotocol/server-filesystem", "./"],
+        "category": "engineering",
         "tags": ["mcp", "fs"],
+        "featured": True,
     },
     {
         "kind": "mcp",
@@ -130,6 +152,7 @@ _SEED: list[dict] = [
         "summary": "浏览器 MCP，用于验收截图与页面巡检",
         "transport": "sse",
         "url": "http://127.0.0.1:8931/sse",
+        "category": "browser",
         "tags": ["mcp", "qa"],
     },
     {
@@ -142,7 +165,9 @@ _SEED: list[dict] = [
             "2. 写清非目标\n"
             "3. 每条验收标准可测\n"
         ),
+        "category": "product",
         "tags": ["product", "skill"],
+        "featured": True,
     },
     {
         "kind": "skill",
@@ -168,6 +193,7 @@ _SEED: list[dict] = [
                 ),
             }
         ],
+        "category": "qa",
         "tags": ["qa", "skill"],
     },
 ]
@@ -359,7 +385,9 @@ class ToolkitStore:
                     env=s.get("env", {}),
                     body=s.get("body", ""),
                     scripts=[SkillScript.model_validate(x) for x in s.get("scripts", [])],
+                    category=str(s.get("category") or ""),
                     tags=s.get("tags", []),
+                    featured=bool(s.get("featured", False)),
                     author_name="Sortie",
                 )
                 for s in _SEED
@@ -375,21 +403,38 @@ class ToolkitStore:
             encoding="utf-8",
         )
 
-    def list(self, *, kind: str | None = None, q: str | None = None) -> list[ToolkitItem]:
+    def list(
+        self,
+        *,
+        kind: str | None = None,
+        category: str | None = None,
+        q: str | None = None,
+        featured: bool | None = None,
+    ) -> list[ToolkitItem]:
         with self._lock:
             items = self._read()
         out: list[ToolkitItem] = []
         for item in items:
             if kind and item.kind != kind:
                 continue
+            if category and (item.category or "").lower() != category.lower():
+                continue
+            if featured is True and not item.featured:
+                continue
             if q:
                 needle = q.lower()
                 script_blob = " ".join(s.path + " " + s.content for s in item.scripts)
-                blob = f"{item.name} {item.summary} {' '.join(item.tags)} {item.body} {script_blob}".lower()
+                blob = (
+                    f"{item.name} {item.summary} {item.category} {' '.join(item.tags)} "
+                    f"{item.body} {script_blob}"
+                ).lower()
                 if needle not in blob:
                     continue
             out.append(item)
-        return sorted(out, key=lambda x: x.updated_at, reverse=True)
+        # Newest first, then pin featured to the front (stable).
+        out.sort(key=lambda x: x.updated_at, reverse=True)
+        out.sort(key=lambda x: 0 if x.featured else 1)
+        return out
 
     def get(self, item_id: str) -> ToolkitItem:
         for item in self._read():
@@ -412,7 +457,9 @@ class ToolkitStore:
             body=req.body,
             scripts=list(req.scripts),
             config=req.config,
+            category=req.category.strip(),
             tags=[t.strip() for t in req.tags if t.strip()],
+            featured=req.featured,
             enabled=req.enabled,
             source=req.source,
             author_id=author_id,
@@ -453,7 +500,7 @@ class ToolkitStore:
                     continue
                 data = item.model_dump()
                 patch = req.model_dump(exclude_unset=True)
-                for key in ("name", "summary", "endpoint", "command", "url", "source"):
+                for key in ("name", "summary", "endpoint", "command", "url", "source", "category"):
                     if key in patch and patch[key] is not None:
                         patch[key] = str(patch[key]).strip()
                 if "tags" in patch and patch["tags"] is not None:

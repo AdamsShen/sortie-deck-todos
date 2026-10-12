@@ -16,8 +16,10 @@ Catalog of Tools, MCP servers, and Skills (with scripts). Bound to agents / role
 | Kind | Key fields | Import |
 |------|------------|--------|
 | tool | runtime, endpoint | manual |
-| mcp | transport, command/url, args, env | mcp.json `mcpServers` |
+| mcp (connectors) | transport, command/url, args, env | mcp.json `mcpServers` |
 | skill | body markdown, scripts[] | SKILL.md / zip package |
+
+Workbench browses **Tools / Skills / Connectors** tabs with optional `category` domain chips (`engineering` · `product` · `qa` · `ops` · `knowledge` · `browser` · `office`). `featured` items surface in a featured row.
 
 ## 3. Binding resolution
 

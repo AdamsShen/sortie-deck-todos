@@ -81,6 +81,16 @@ export interface SkillScript {
   description?: string;
 }
 
+export type ToolkitCategory =
+  | "engineering"
+  | "product"
+  | "qa"
+  | "ops"
+  | "knowledge"
+  | "browser"
+  | "office"
+  | string;
+
 export interface ToolkitItem {
   id: string;
   kind: ToolkitKind;
@@ -96,7 +106,9 @@ export interface ToolkitItem {
   body?: string;
   scripts?: SkillScript[];
   config?: Record<string, unknown>;
+  category?: string;
   tags: string[];
+  featured?: boolean;
   enabled: boolean;
   source?: string;
   author_id?: string;
@@ -104,6 +116,16 @@ export interface ToolkitItem {
   created_at?: string;
   updated_at?: string;
 }
+
+export const TOOLKIT_CATEGORIES: ToolkitCategory[] = [
+  "engineering",
+  "product",
+  "qa",
+  "ops",
+  "knowledge",
+  "browser",
+  "office",
+];
 
 export interface PublicUser {
   id: string;

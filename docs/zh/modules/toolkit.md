@@ -16,8 +16,10 @@ Tools / MCP / Skills（含脚本）目录。绑定到角色 / 编制位 / 阶段
 | 类型 | 关键字段 | 导入 |
 |------|----------|------|
 | tool | runtime、endpoint | 手工 |
-| mcp | transport、command/url… | mcp.json |
+| mcp（连接器） | transport、command/url… | mcp.json |
 | skill | body、scripts[] | SKILL.md / zip |
+
+工作台按 **工具 / 技能 / 连接器** 页签浏览，并可用 `category` 领域目录筛选（engineering · product · qa · ops · knowledge · browser · office），`featured` 进入精选区。
 
 ## 3. 绑定解析
 

@@ -48,6 +48,17 @@ import type {
   View,
   Visibility,
 } from "./types";
+import { TOOLKIT_CATEGORIES } from "./types";
+
+const CATEGORY_I18N: Record<string, I18nKey> = {
+  engineering: "catEngineering",
+  product: "catProduct",
+  qa: "catQa",
+  ops: "catOps",
+  knowledge: "catKnowledge",
+  browser: "catBrowser",
+  office: "catOffice",
+};
 
 const AGENT_SLOTS: AgentSlot[] = [
   "product",
@@ -192,6 +203,8 @@ export default function App() {
   const [rippleOn, setRippleOn] = useState(() => lsGet("sortie_ripple", "rally_ripple") !== "0");
   const [reduceMotion, setReduceMotion] = useState(false);
   const [toolkitTab, setToolkitTab] = useState<ToolkitKind>("tool");
+  const [toolkitCategory, setToolkitCategory] = useState<string>("");
+  const [toolkitQuery, setToolkitQuery] = useState("");
   const [toolkitItems, setToolkitItems] = useState<ToolkitItem[]>([]);
   const [toolkitSelectedId, setToolkitSelectedId] = useState<string | null>(null);
   const [toolkitEditing, setToolkitEditing] = useState(false);
@@ -204,7 +217,9 @@ export default function App() {
     command: "",
     url: "",
     body: "",
+    category: "engineering",
     tags: "",
+    featured: false,
     enabled: true,
     scripts: [] as SkillScript[],
   });
@@ -1258,9 +1273,12 @@ export default function App() {
 
   const refreshToolkit = useCallback(async () => {
     if (!token) return;
-    const data = await api<ToolkitItem[]>(`/api/toolkit?kind=${toolkitTab}`, { token });
+    const params = new URLSearchParams({ kind: toolkitTab });
+    if (toolkitCategory) params.set("category", toolkitCategory);
+    if (toolkitQuery.trim()) params.set("q", toolkitQuery.trim());
+    const data = await api<ToolkitItem[]>(`/api/toolkit?${params}`, { token });
     setToolkitItems(data);
-  }, [token, toolkitTab]);
+  }, [token, toolkitTab, toolkitCategory, toolkitQuery]);
 
   useEffect(() => {
     if (view === "toolkit" && token) {
@@ -1268,17 +1286,27 @@ export default function App() {
     }
   }, [view, token, refreshToolkit]);
 
-  useEffect(() => {
-    if (view !== "toolkit" || toolkitEditing) return;
-    if (toolkitSelectedId && toolkitItems.some((i) => i.id === toolkitSelectedId)) return;
-    if (toolkitItems[0]) setToolkitSelectedId(toolkitItems[0].id);
-    else setToolkitSelectedId(null);
-  }, [view, toolkitItems, toolkitSelectedId, toolkitEditing]);
-
   const toolkitSelected = useMemo(
     () => toolkitItems.find((i) => i.id === toolkitSelectedId) || null,
     [toolkitItems, toolkitSelectedId]
   );
+
+  const toolkitFeatured = useMemo(
+    () => toolkitItems.filter((i) => i.featured && i.enabled !== false),
+    [toolkitItems]
+  );
+
+  const toolkitGridItems = useMemo(() => {
+    // Prefer non-featured in the main grid when a featured row is shown; keep all if none featured.
+    if (!toolkitFeatured.length || toolkitCategory || toolkitQuery.trim()) return toolkitItems;
+    return toolkitItems.filter((i) => !i.featured);
+  }, [toolkitItems, toolkitFeatured, toolkitCategory, toolkitQuery]);
+
+  function toolkitCategoryLabel(cat: string) {
+    if (!cat) return tr("tkAllCategories");
+    const key = CATEGORY_I18N[cat];
+    return key ? tr(key) : cat;
+  }
 
   function startNewToolkit() {
     setToolkitEditing(true);
@@ -1292,7 +1320,9 @@ export default function App() {
       command: "",
       url: "",
       body: "",
+      category: toolkitCategory || "engineering",
       tags: "",
+      featured: false,
       enabled: true,
       scripts: [],
     });
@@ -1310,7 +1340,9 @@ export default function App() {
       command: item.command || "",
       url: item.url || "",
       body: item.body || "",
+      category: item.category || "",
       tags: (item.tags || []).join(", "),
+      featured: !!item.featured,
       enabled: item.enabled !== false,
       scripts: (item.scripts || []).map((s) => ({ ...s })),
     });
@@ -1330,10 +1362,12 @@ export default function App() {
       url: toolkitTab === "mcp" ? toolkitForm.url : "",
       body: toolkitTab === "skill" ? toolkitForm.body : "",
       scripts: toolkitTab === "skill" ? toolkitForm.scripts : [],
+      category: toolkitForm.category.trim(),
       tags: toolkitForm.tags
         .split(",")
         .map((s) => s.trim())
         .filter(Boolean),
+      featured: toolkitForm.featured,
       enabled: toolkitForm.enabled,
     };
     try {
@@ -2632,125 +2666,126 @@ export default function App() {
       )}
 
       {view === "toolkit" && (
-        <div className="deck-body workbench kb-layout">
-          <aside className="sidebar">
-            <div className="panel-label">{tr("toolkitTitle")}</div>
-            <p className="kb-hint">{tr("toolkitHint")}</p>
-            <div className="filters">
-              {(
-                [
-                  ["tool", "tabTools"],
-                  ["mcp", "tabMcp"],
-                  ["skill", "tabSkills"],
-                ] as const
-              ).map(([kind, label]) => (
+        <div className="deck-body workbench toolkit-market">
+          <header className="toolkit-head">
+            <div>
+              <div className="panel-label">{tr("toolkitTitle")}</div>
+              <p className="kb-hint">{tr("toolkitHint")}</p>
+            </div>
+            <div className="toolkit-head-actions">
+              <input
+                className="toolkit-search"
+                type="search"
+                placeholder={tr("tkSearch")}
+                value={toolkitQuery}
+                onChange={(e) => setToolkitQuery(e.target.value)}
+              />
+              <button className="btn primary" type="button" onClick={startNewToolkit}>
+                {tr("newToolkit")}
+              </button>
+              {(toolkitTab === "mcp" || toolkitTab === "skill") && (
                 <button
-                  key={kind}
+                  className="btn ghost"
                   type="button"
-                  className={`filter ${toolkitTab === kind ? "on" : ""}`}
                   onClick={() => {
-                    setToolkitTab(kind);
-                    setToolkitEditing(false);
-                    setToolkitSelectedId(null);
+                    setImportOpen((v) => !v);
+                    setImportText("");
+                    setImportZipB64("");
+                    setImportFilename("");
                   }}
                 >
-                  {tr(label)}
+                  {tr("importToolkit")}
                 </button>
-              ))}
+              )}
             </div>
-            <button className="btn primary" type="button" onClick={startNewToolkit}>
-              {tr("newToolkit")}
-            </button>
-            {(toolkitTab === "mcp" || toolkitTab === "skill") && (
+          </header>
+
+          <div className="filters toolkit-kind-tabs">
+            {(
+              [
+                ["tool", "tabTools"],
+                ["skill", "tabSkills"],
+                ["mcp", "tabMcp"],
+              ] as const
+            ).map(([kind, label]) => (
               <button
-                className="btn ghost"
+                key={kind}
                 type="button"
+                className={`filter ${toolkitTab === kind ? "on" : ""}`}
                 onClick={() => {
-                  setImportOpen((v) => !v);
-                  setImportText("");
-                  setImportZipB64("");
-                  setImportFilename("");
+                  setToolkitTab(kind);
+                  setToolkitEditing(false);
+                  setToolkitSelectedId(null);
                 }}
               >
-                {tr("importToolkit")}
+                {tr(label)}
               </button>
-            )}
-            {importOpen && (toolkitTab === "mcp" || toolkitTab === "skill") && (
-              <div className="import-box">
-                <p className="kb-hint">
-                  {toolkitTab === "mcp" ? tr("importHintMcp") : tr("importHintSkill")}
-                </p>
-                <textarea
-                  className="kb-body"
-                  placeholder={tr("importPaste")}
-                  value={importText}
-                  onChange={(e) => {
-                    setImportText(e.target.value);
-                    setImportZipB64("");
-                  }}
-                />
-                <div className="theme-panel-actions">
-                  <button type="button" className="btn ghost" onClick={() => importFileRef.current?.click()}>
-                    {tr("importFile")}
-                  </button>
-                  <label className="theme-toggle">
-                    <input
-                      type="checkbox"
-                      checked={importOverwrite}
-                      onChange={(e) => setImportOverwrite(e.target.checked)}
-                    />
-                    {tr("importOverwrite")}
-                  </label>
-                  <button
-                    type="button"
-                    className="btn primary"
-                    disabled={busy || (!importText.trim() && !importZipB64)}
-                    onClick={runToolkitImport}
-                  >
-                    {tr("importRun")}
-                  </button>
-                </div>
-                {importFilename && <p className="kb-meta">{importFilename}</p>}
-                <input
-                  ref={importFileRef}
-                  type="file"
-                  accept={toolkitTab === "skill" ? ".md,.json,.zip,text/markdown,application/json,application/zip" : ".json,application/json,text/plain"}
-                  hidden
-                  onChange={(e) => onToolkitImportFile(e.target.files?.[0])}
-                />
-              </div>
-            )}
-            <div className="list">
-              {toolkitItems.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={`mission ${item.id === toolkitSelectedId && !toolkitEditing ? "active" : ""}`}
-                  onClick={() => {
-                    setToolkitEditing(false);
-                    setToolkitSelectedId(item.id);
-                  }}
-                >
-                  <div className="mission-top">
-                    <span className="mission-id">{item.kind}</span>
-                    <span className={`st ${item.enabled ? "done" : "failed"}`}>
-                      {item.enabled ? tr("tkEnabled") : tr("tkDisabled")}
-                    </span>
-                  </div>
-                  <strong>{item.name}</strong>
-                  <span className="mission-stage">{item.summary || (item.tags || []).join(" · ")}</span>
+            ))}
+          </div>
+
+          {importOpen && (toolkitTab === "mcp" || toolkitTab === "skill") && (
+            <div className="import-box toolkit-import">
+              <p className="kb-hint">
+                {toolkitTab === "mcp" ? tr("importHintMcp") : tr("importHintSkill")}
+              </p>
+              <textarea
+                className="kb-body"
+                placeholder={tr("importPaste")}
+                value={importText}
+                onChange={(e) => {
+                  setImportText(e.target.value);
+                  setImportZipB64("");
+                }}
+              />
+              <div className="theme-panel-actions">
+                <button type="button" className="btn ghost" onClick={() => importFileRef.current?.click()}>
+                  {tr("importFile")}
                 </button>
-              ))}
-              {!toolkitItems.length && <div className="empty-queue">{tr("emptyToolkit")}</div>}
+                <label className="theme-toggle">
+                  <input
+                    type="checkbox"
+                    checked={importOverwrite}
+                    onChange={(e) => setImportOverwrite(e.target.checked)}
+                  />
+                  {tr("importOverwrite")}
+                </label>
+                <button
+                  type="button"
+                  className="btn primary"
+                  disabled={busy || (!importText.trim() && !importZipB64)}
+                  onClick={runToolkitImport}
+                >
+                  {tr("importRun")}
+                </button>
+              </div>
+              {importFilename && <p className="kb-meta">{importFilename}</p>}
+              <input
+                ref={importFileRef}
+                type="file"
+                accept={
+                  toolkitTab === "skill"
+                    ? ".md,.json,.zip,text/markdown,application/json,application/zip"
+                    : ".json,application/json,text/plain"
+                }
+                hidden
+                onChange={(e) => onToolkitImportFile(e.target.files?.[0])}
+              />
             </div>
-          </aside>
-          <main className="main page-pad">
+          )}
+
+          <main className="main page-pad toolkit-main">
             {toolkitEditing ? (
               <form className="form kb-form" onSubmit={saveToolkit}>
+                <button
+                  type="button"
+                  className="btn ghost toolkit-back"
+                  onClick={() => setToolkitEditing(false)}
+                >
+                  ← {tr("tkBackToCatalog")}
+                </button>
                 <h2 className="page-title">
-                  {toolkitSelectedId ? tr("editDoc") : tr("newToolkit")} · {tr(
-                    toolkitTab === "tool" ? "tabTools" : toolkitTab === "mcp" ? "tabMcp" : "tabSkills"
-                  )}
+                  {toolkitSelectedId ? tr("editDoc") : tr("newToolkit")} ·{" "}
+                  {tr(toolkitTab === "tool" ? "tabTools" : toolkitTab === "mcp" ? "tabMcp" : "tabSkills")}
                 </h2>
                 <label>
                   <span>{tr("tkName")}</span>
@@ -2766,6 +2801,19 @@ export default function App() {
                     value={toolkitForm.summary}
                     onChange={(e) => setToolkitForm({ ...toolkitForm, summary: e.target.value })}
                   />
+                </label>
+                <label>
+                  <span>{tr("tkCategory")}</span>
+                  <select
+                    value={toolkitForm.category}
+                    onChange={(e) => setToolkitForm({ ...toolkitForm, category: e.target.value })}
+                  >
+                    {TOOLKIT_CATEGORIES.map((cat) => (
+                      <option key={cat} value={cat}>
+                        {toolkitCategoryLabel(cat)}
+                      </option>
+                    ))}
+                  </select>
                 </label>
                 {toolkitTab === "tool" && (
                   <>
@@ -2875,6 +2923,14 @@ export default function App() {
                 <label className="theme-toggle">
                   <input
                     type="checkbox"
+                    checked={toolkitForm.featured}
+                    onChange={(e) => setToolkitForm({ ...toolkitForm, featured: e.target.checked })}
+                  />
+                  {tr("tkFeatured")}
+                </label>
+                <label className="theme-toggle">
+                  <input
+                    type="checkbox"
                     checked={toolkitForm.enabled}
                     onChange={(e) => setToolkitForm({ ...toolkitForm, enabled: e.target.checked })}
                   />
@@ -2891,11 +2947,27 @@ export default function App() {
               </form>
             ) : toolkitSelected ? (
               <article className="kb-article">
+                <button
+                  type="button"
+                  className="btn ghost toolkit-back"
+                  onClick={() => setToolkitSelectedId(null)}
+                >
+                  ← {tr("tkBackToCatalog")}
+                </button>
                 <div className="topbar">
                   <div>
                     <p className="eyebrow">
-                      {toolkitSelected.kind} ·{" "}
+                      {tr(
+                        toolkitSelected.kind === "tool"
+                          ? "tabTools"
+                          : toolkitSelected.kind === "mcp"
+                            ? "tabMcp"
+                            : "tabSkills"
+                      )}
+                      {toolkitSelected.category ? ` · ${toolkitCategoryLabel(toolkitSelected.category)}` : ""}
+                      {" · "}
                       {toolkitSelected.enabled ? tr("tkEnabled") : tr("tkDisabled")}
+                      {toolkitSelected.featured ? ` · ${tr("tkFeatured")}` : ""}
                     </p>
                     <h2 className="mission-title">{toolkitSelected.name}</h2>
                     <p className="kb-summary">{toolkitSelected.summary}</p>
@@ -2946,7 +3018,92 @@ export default function App() {
                 </p>
               </article>
             ) : (
-              <div className="empty-queue">{tr("emptyToolkit")}</div>
+              <>
+                <div className="toolkit-cat-row">
+                  <button
+                    type="button"
+                    className={`toolkit-cat ${!toolkitCategory ? "on" : ""}`}
+                    onClick={() => setToolkitCategory("")}
+                  >
+                    {tr("tkAllCategories")}
+                  </button>
+                  {TOOLKIT_CATEGORIES.map((cat) => (
+                    <button
+                      key={cat}
+                      type="button"
+                      className={`toolkit-cat ${toolkitCategory === cat ? "on" : ""}`}
+                      onClick={() => setToolkitCategory(cat)}
+                    >
+                      {toolkitCategoryLabel(cat)}
+                    </button>
+                  ))}
+                </div>
+
+                {!!toolkitFeatured.length && !toolkitCategory && !toolkitQuery.trim() && (
+                  <section className="toolkit-featured">
+                    <div className="panel-label">{tr("tkFeaturedSection")}</div>
+                    <div className="toolkit-featured-row">
+                      {toolkitFeatured.map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          className="toolkit-feature-card"
+                          onClick={() => setToolkitSelectedId(item.id)}
+                        >
+                          <span className="toolkit-card-kind">
+                            {tr(
+                              item.kind === "tool" ? "tabTools" : item.kind === "mcp" ? "tabMcp" : "tabSkills"
+                            )}
+                          </span>
+                          <strong>{item.name}</strong>
+                          <span className="toolkit-card-summary">{item.summary}</span>
+                          {item.category && (
+                            <span className="toolkit-card-cat">{toolkitCategoryLabel(item.category)}</span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                )}
+
+                <section className="toolkit-catalog">
+                  <div className="panel-label">{tr("tkCatalog")}</div>
+                  <div className="toolkit-grid">
+                    {toolkitGridItems.map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        className="toolkit-card"
+                        onClick={() => setToolkitSelectedId(item.id)}
+                      >
+                        <div className="toolkit-card-top">
+                          <span className={`toolkit-card-kind kind-${item.kind}`}>
+                            {tr(
+                              item.kind === "tool" ? "tabTools" : item.kind === "mcp" ? "tabMcp" : "tabSkills"
+                            )}
+                          </span>
+                          <span className={`st ${item.enabled ? "done" : "failed"}`}>
+                            {item.enabled ? tr("tkEnabled") : tr("tkDisabled")}
+                          </span>
+                        </div>
+                        <strong>{item.name}</strong>
+                        <span className="toolkit-card-summary">{item.summary}</span>
+                        <div className="toolkit-card-meta">
+                          {item.category && (
+                            <span className="toolkit-card-cat">{toolkitCategoryLabel(item.category)}</span>
+                          )}
+                          {(item.tags || []).slice(0, 3).map((tag) => (
+                            <span key={tag} className="toolkit-tag">
+                              {tag}
+                            </span>
+                          ))}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                  {!toolkitItems.length && <div className="empty-queue">{tr("emptyToolkit")}</div>}
+                </section>
+              </>
             )}
           </main>
         </div>
