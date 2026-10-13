@@ -52,6 +52,8 @@ Changelog = "https://github.com/lpliu-art/sortie-deck-todos/blob/dev/CHANGELOG.m
 postgres = ["langgraph-checkpoint-postgres>=2.0.0", "psycopg[binary]>=3.2.0"]
 s3 = ["boto3>=1.35.0"]
 dev = ["pytest>=8.3.0", "pytest-asyncio>=0.24.0", "ruff>=0.7.0"]
+# Agent harness providers (cloud runtime = the env this app runs in)
+harness-claude = ["claude-agent-sdk>=0.1.0"]
 docs = [
   "mkdocs-material>=9.5.0",
   "mkdocs-static-i18n>=1.2.0",
