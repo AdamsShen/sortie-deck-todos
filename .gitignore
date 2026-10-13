@@ -25,3 +25,6 @@ tmp/
 
 # Playwright CLI local session artifacts
 .playwright-cli/
+
+# JetBrains IDE project files
+.idea/
