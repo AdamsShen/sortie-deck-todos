@@ -13,7 +13,6 @@ import { SubRoomPanel } from "./components/SubRoomPanel";
 import { DecisionCenter } from "./components/DecisionCenter";
 import { unlockSfx, playSfx, loadSfxMuted, setSfxMuted, loadBgmMuted, setBgmMuted, startBgm } from "./sfx";
 import { categoryLabel, statusLabel, t, type I18nKey } from "./i18n";
-import { RippleField } from "./RippleField";
 import { lsGet, lsRemove, lsSet } from "./storage";
 import {
   BG_STORAGE_KEY,
@@ -196,8 +195,6 @@ export default function App() {
   const [bgUrl, setBgUrl] = useState(() => loadBackground());
   const [bgDraft, setBgDraft] = useState(() => loadBackground());
   const [themeOpen, setThemeOpen] = useState(false);
-  const [rippleOn, setRippleOn] = useState(() => lsGet("sortie_ripple", "rally_ripple") !== "0");
-  const [reduceMotion, setReduceMotion] = useState(false);
   const [toolkitTab, setToolkitTab] = useState<ToolkitKind>("tool");
   const [toolkitItems, setToolkitItems] = useState<ToolkitItem[]>([]);
   const [toolkitSelectedId, setToolkitSelectedId] = useState<string | null>(null);
@@ -248,18 +245,6 @@ export default function App() {
       window.removeEventListener("pointerdown", unlock, true);
       window.removeEventListener("keydown", unlock, true);
     };
-  }, []);
-
-  useEffect(() => {
-    lsSet("sortie_ripple", rippleOn ? "1" : "0", "rally_ripple");
-  }, [rippleOn]);
-
-  useEffect(() => {
-    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const sync = () => setReduceMotion(mq.matches);
-    sync();
-    mq.addEventListener("change", sync);
-    return () => mq.removeEventListener("change", sync);
   }, []);
 
   function applyBgUrl() {
@@ -340,7 +325,6 @@ export default function App() {
       ) : (
         <div className="art-scrim" />
       )}
-      <RippleField enabled={rippleOn && !reduceMotion} />
     </div>
   );
 
@@ -430,10 +414,6 @@ export default function App() {
             hidden
             onChange={(e) => onBgFile(e.target.files?.[0])}
           />
-          <label className="theme-toggle">
-            <input type="checkbox" checked={rippleOn} onChange={(e) => setRippleOn(e.target.checked)} />
-            {tr("themeFx")}
-          </label>
           <label className="theme-toggle">
             <input
               type="checkbox"
