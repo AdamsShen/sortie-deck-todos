@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<title>Sortie Deck · v2 Linear 式克制</title>
+<style>
+  /* v2 · 逻辑二（现实参照）Linear 迁移
+     DNA：中性近黑底（非蓝调）、13px 紧凑 UI、1px 边框、无发光无渐变、
+     状态即颜色语义、mono 用于 id、accent 只给"完成/进行"语义 */
+  :root{
+    --bg:#101319; --surface:#161A22; --hover:#1B2029; --border:#232936; --border-strong:#2E3542;
+    --text:#DFE3EC; --muted:#7E8698; --faint:#59616F;
+    --green:#3FD68F; --green-dim:#2A5C45; --blue:#6B8AF5; --red:#E57760;
+    --sans:-apple-system,"PingFang SC","Helvetica Neue",sans-serif; --mono:"SF Mono",Menlo,monospace;
+  }
+  [data-theme="light"]{
+    --bg:#F7F8FA; --surface:#FFFFFF; --hover:#F1F3F6; --border:#E3E6EC; --border-strong:#D0D5DE;
+    --text:#1C2230; --muted:#6B7385; --faint:#9AA1AF;
+    --green:#149E63; --green-dim:#DCF2E7; --blue:#4A6BDF; --red:#C94F3D;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13px;line-height:1.55}
+  .page{max-width:1320px;margin:0 auto;padding:0 32px}
+
+  /* ── 顶栏：极简一行 ─────────────────────── */
+  .bar{display:flex;align-items:center;gap:20px;height:48px;border-bottom:1px solid var(--border)}
+  .brand{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13.5px}
+  .mark{width:20px;height:20px;border-radius:6px;background:var(--green);display:grid;place-items:center;color:#fff;font:700 9px var(--sans)}
+  nav{display:flex;gap:2px;font-size:13px;color:var(--muted)}
+  nav span{padding:4px 10px;border-radius:6px;cursor:default}
+  nav span.on{color:var(--text);background:var(--hover)}
+  .bar .right{margin-left:auto;display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12px}
+  .theme-btn{border:1px solid var(--border);background:var(--surface);color:var(--muted);border-radius:6px;padding:3px 10px;font-size:11.5px;cursor:pointer}
+  .me{width:22px;height:22px;border-radius:50%;background:var(--hover);border:1px solid var(--border);display:grid;place-items:center;font-size:10px;color:var(--text)}
+
+  /* ── 标题行 ─────────────────────── */
+  .head{display:flex;align-items:center;gap:12px;padding:18px 0 4px}
+  .head h1{font-size:16px;font-weight:600;letter-spacing:-.01em}
+  .chip{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:2px 8px;background:var(--surface)}
+  .chip .d{width:6px;height:6px;border-radius:50%}
+  .crumb{font-size:12px;color:var(--faint);padding-bottom:14px;border-bottom:1px solid var(--border)}
+  .crumb b{color:var(--muted);font-weight:500}
+
+  /* HITL：一条安静的提醒条 */
+  .hitl{margin:14px 0;display:flex;align-items:center;gap:10px;background:var(--surface);
+        border:1px solid var(--border);border-left:2px solid var(--red);border-radius:8px;padding:9px 14px;font-size:12.5px}
+  .hitl b{font-weight:600} .hitl code{font-family:var(--mono);font-size:11px;color:var(--red);background:var(--hover);padding:1px 5px;border-radius:4px}
+  .hitl .act{margin-left:auto;color:var(--text);font-size:12px;cursor:pointer}
+
+  /* ── 流水线 rail ─────────────────────── */
+  .rail{display:flex;align-items:center;gap:0;padding:22px 2px;overflow-x:auto}
+  .node{display:flex;align-items:center;gap:8px}
+  .av{width:26px;height:26px;border-radius:7px;border:1px solid var(--border-strong);background:var(--surface);
+      display:grid;place-items:center;font-size:10.5px;font-weight:600;color:var(--muted)}
+  .done .av{border-color:var(--green-dim);background:var(--green-dim);color:var(--green)}
+  .run  .av{border-color:var(--blue);color:var(--blue);box-shadow:0 0 0 3px color-mix(in srgb,var(--blue) 14%,transparent)}
+  .node .t{font-size:12.5px;white-space:nowrap}
+  .done .t{color:var(--text)} .run .t{color:var(--text)} .todo .t{color:var(--muted)}
+  .gate{font-size:10px;color:var(--red);border:1px solid color-mix(in srgb,var(--red) 45%,transparent);border-radius:4px;padding:0 4px;line-height:15px}
+  .ln{width:26px;height:1px;background:var(--border-strong);flex:none}
+  .par{border:1px solid var(--border);border-radius:9px;padding:7px 9px;background:var(--surface);display:flex;gap:10px}
+  .par .node .t{font-size:11.5px}
+
+  /* ── 阶段表 ─────────────────────── */
+  .sec{display:flex;align-items:baseline;justify-content:space-between;margin:10px 0 8px}
+  .sec h2{font-size:13px;font-weight:600} .sec span{font-size:11.5px;color:var(--faint);font-family:var(--mono)}
+  table{width:100%;border-collapse:collapse;border:1px solid var(--border);border-radius:9px;overflow:hidden;background:var(--surface)}
+  tr{border-bottom:1px solid var(--border)} tr:last-child{border-bottom:none}
+  tr:hover td{background:var(--hover)}
+  td{padding:8px 14px;font-size:12.5px;vertical-align:middle}
+  .id{font-family:var(--mono);font-size:11px;color:var(--faint);width:150px}
+  .nm{font-weight:550;width:180px}
+  .dep{font-family:var(--mono);font-size:10.5px;color:var(--faint)}
+  .role{font-size:11px;color:var(--muted);border:1px solid var(--border);border-radius:5px;padding:1px 7px}
+  .g{color:var(--red);font-size:11px}
+  .st{font-size:11.5px;text-align:right;white-space:nowrap}
+  .st i{font-style:normal;display:inline-flex;align-items:center;gap:5px}
+  .st .d{width:6px;height:6px;border-radius:50%}
+  .ok{color:var(--green)} .run-c{color:var(--blue)} .q{color:var(--faint)}
+
+  .foot{display:flex;justify-content:space-between;color:var(--faint);font-size:11px;padding:16px 2px 30px}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="bar">
+    <div class="brand"><span class="mark">SD</span>Sortie Deck</div>
+    <nav><span>工作台</span><span class="on">任务</span><span>知识库</span><span>记忆</span><span>角色工场</span><span>工具箱</span><span>小队</span><span>决策中心</span><span>管理</span></nav>
+    <div class="right"><button class="theme-btn" onclick="toggleTheme()">明 / 暗</button><span class="me">A</span></div>
+  </div>
+
+  <div class="head">
+    <h1>门户预发健康检查</h1>
+    <span class="chip"><i class="d" style="background:var(--blue)"></i>运行中</span>
+    <span class="chip">standard 航线</span>
+    <span class="chip">8 角色</span>
+    <span class="chip">claude_code</span>
+  </div>
+  <div class="crumb">任务 / <b>ini_9f2k31</b> · 已运行 12 分钟 · 最近更新 30 秒前</div>
+
+  <div class="hitl"><i class="d" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--red)"></i><span><b>技术方案评审</b>等待人工确认 — 门禁点</span><code>/approve</code><code>/reject</code><span class="act">去处理 →</span></div>
+
+  <div class="rail">
+    <div class="node done"><span class="av">集</span><span class="t">集结</span></div><div class="ln"></div>
+    <div class="node done"><span class="av">文</span><span class="t">PRD</span><span class="gate">门禁</span></div><div class="ln"></div>
+    <div class="node run"><span class="av">案</span><span class="t">技术方案</span></div><div class="ln"></div>
+    <div class="node todo"><span class="av">设</span><span class="t">设计</span></div><div class="ln"></div>
+    <div class="par">
+      <div class="node todo"><span class="av">后</span><span class="t">后端</span></div>
+      <div class="node todo"><span class="av">iOS</span><span class="t">iOS</span></div>
+      <div class="node todo"><span class="av">安</span><span class="t">Android</span></div>
+      <div class="node todo"><span class="av">W</span><span class="t">Web</span></div>
+    </div>
+    <div class="ln"></div>
+    <div class="node todo"><span class="av">测</span><span class="t">联调测试</span><span class="gate">门禁</span></div><div class="ln"></div>
+    <div class="node todo"><span class="av">上</span><span class="t">上线</span><span class="gate">门禁</span></div>
+  </div>
+
+  <div class="sec"><h2>阶段清单</h2><span>10 stages · 2 done · 1 running</span></div>
+  <table>
+    <tr><td class="id">intake</td><td class="nm">集结</td><td class="dep">—</td><td><span class="role">product</span></td><td></td><td class="st"><i class="ok"><i class="d" style="background:var(--green)"></i>已完成</i></td></tr>
+    <tr><td class="id">product_prd</td><td class="nm">PRD</td><td class="dep">+intake</td><td><span class="role">product</span></td><td class="g">门禁</td><td class="st"><i class="ok"><i class="d" style="background:var(--green)"></i>已完成</i></td></tr>
+    <tr><td class="id">eng_tech_design</td><td class="nm">技术方案</td><td class="dep">+product_prd</td><td><span class="role">eng</span></td><td class="g">门禁</td><td class="st"><i class="run-c"><i class="d" style="background:var(--blue)"></i>进行中</i></td></tr>
+    <tr><td class="id">design_ui</td><td class="nm">设计</td><td class="dep">+product_prd</td><td><span class="role">design</span></td><td></td><td class="st"><i class="q"><i class="d" style="background:var(--faint)"></i>排队中</i></td></tr>
+    <tr><td class="id">eng_backend</td><td class="nm">后端开发</td><td class="dep">+eng_tech_design</td><td><span class="role">eng_backend</span></td><td></td><td class="st"><i class="q"><i class="d" style="background:var(--faint)"></i>排队中</i></td></tr>
+    <tr><td class="id">eng_ios</td><td class="nm">iOS 开发</td><td class="dep">+eng_tech_design</td><td><span class="role">eng_ios</span></td><td></td><td class="st"><i class="q"><i class="d" style="background:var(--faint)"></i>排队中</i></td></tr>
+    <tr><td class="id">eng_android</td><td class="nm">Android 开发</td><td class="dep">+eng_tech_design</td><td><span class="role">eng_android</span></td><td></td><td class="st"><i class="q"><i class="d" style="background:var(--faint)"></i>排队中</i></td></tr>
+    <tr><td class="id">eng_web</td><td class="nm">Web 开发</td><td class="dep">+eng_tech_design</td><td><span class="role">eng_web</span></td><td></td><td class="st"><i class="q"><i class="d" style="background:var(--faint)"></i>排队中</i></td></tr>
+    <tr><td class="id">qa_verify</td><td class="nm">联调测试</td><td class="dep">+eng_*</td><td><span class="role">qa</span></td><td class="g">门禁</td><td class="st"><i class="q"><i class="d" style="background:var(--faint)"></i>排队中</i></td></tr>
+    <tr><td class="id">deploy</td><td class="nm">上线</td><td class="dep">+qa_verify</td><td><span class="role">deploy</span></td><td class="g">门禁</td><td class="st"><i class="q"><i class="d" style="background:var(--faint)"></i>排队中</i></td></tr>
+  </table>
+
+  <div class="foot"><span>Sortie Deck · Mission</span><span> Humans hold the gates</span></div>
+</div>
+<script>
+  const p=new URLSearchParams(location.search).get("theme");
+  if(p) document.documentElement.dataset.theme=p;
+  function toggleTheme(){
+    const h=document.documentElement;
+    h.dataset.theme=h.dataset.theme==="dark"?"light":"dark";
+  }
+</script>
+</body>
+</html>

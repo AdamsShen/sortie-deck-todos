@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<title>Sortie Deck · v1 杂志编辑风</title>
+<style>
+  /* v1 · 逻辑一（秒数轮盘 3 号）杂志编辑风 Editorial
+     DNA：衬线 display、纸感底、hairline 分隔、目录式阶段表、门禁做成"戳记"
+     accent 来自 logo 握手绿（浅底降饱和） */
+  :root{
+    --paper:#F6F9FC; --card:#FFFFFF; --ink:#1A1F36; --muted:#697386; --line:#E3E8EE; --line-strong:#D0D5DE;
+    --accent:#0E9F6E; --accent-soft:#E6F6EF; --gate:#C9503A; --gate-soft:#FBEDEA;
+    --running:#3B5BDB; --running-soft:#EAEEFB; --serif:"Songti SC","Noto Serif SC","Source Han Serif SC",Georgia,serif;
+    --sans:-apple-system,"PingFang SC","Helvetica Neue",sans-serif;
+  }
+  [data-theme="dark"]{
+    --paper:#1B1E25; --card:#20242D; --ink:#ECE9E1; --muted:#8B8A80; --line:#32363F; --line-strong:#454A55;
+    --accent:#3FD68F; --accent-soft:#21372C; --gate:#E57760; --gate-soft:#3A2A27;
+    --running:#7B96F0; --running-soft:#252C40;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.6}
+  .page{max-width:1320px;margin:0 auto;padding:0 48px}
+
+  /* ── 顶栏：报头式 ─────────────────────────── */
+  header{border-bottom:2px solid var(--ink)}
+  .bar{display:flex;align-items:center;gap:28px;height:60px}
+  .brand{display:flex;align-items:center;gap:10px;font-family:var(--serif);font-weight:700;font-size:17px;letter-spacing:.02em}
+  .mark{width:26px;height:26px;border-radius:7px;background:var(--accent);color:#fff;display:grid;place-items:center;font:700 11px var(--sans);letter-spacing:0}
+  nav{display:flex;gap:22px;font-size:13px;color:var(--muted)}
+  nav b{color:var(--ink);font-weight:600;box-shadow:inset 0 -2px 0 var(--accent);padding-bottom:2px}
+  .bar .right{margin-left:auto;display:flex;align-items:center;gap:14px;font-size:12px;color:var(--muted)}
+  .avatar{width:26px;height:26px;border-radius:50%;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;font-size:11px;font-weight:600}
+  .theme-btn{border:1px solid var(--line-strong);background:none;color:var(--ink);border-radius:4px;padding:3px 10px;font-size:12px;cursor:pointer;font-family:var(--sans)}
+
+  /* ── 刊头 ─────────────────────────── */
+  .kicker{margin-top:34px;font-size:11px;letter-spacing:.28em;color:var(--muted)}
+  h1{font-family:var(--serif);font-size:40px;font-weight:700;letter-spacing:.01em;margin:6px 0 10px}
+  .meta{display:flex;gap:18px;align-items:center;font-size:12.5px;color:var(--muted);padding-bottom:18px;border-bottom:1px solid var(--line)}
+  .meta em{font-style:normal;color:var(--ink)}
+  .pill-run{color:var(--running);background:var(--running-soft);padding:1px 10px;border-radius:99px;font-weight:600}
+
+  /* 门禁横幅 = 盖戳的便笺 */
+  .hitl{margin:20px 0 26px;border:1.5px solid var(--gate);border-radius:3px;background:var(--gate-soft);
+        padding:12px 18px;display:flex;align-items:center;gap:14px}
+  .stamp{font-family:var(--serif);font-weight:700;color:var(--gate);border:1.5px solid var(--gate);
+         padding:1px 8px;font-size:13px;transform:rotate(-2deg);border-radius:2px}
+  .hitl p{font-size:13.5px} .hitl code{font-family:"SF Mono",Menlo,monospace;font-size:12px;color:var(--gate)}
+  .hitl .act{margin-left:auto;font-size:12.5px;color:var(--gate);font-weight:600}
+
+  /* ── 流水线：细线 + 衬线数字节点 ─────────────────── */
+  .rail{display:flex;align-items:flex-start;gap:0;padding:26px 6px 30px;border-bottom:1px solid var(--line)}
+  .node{display:flex;flex-direction:column;align-items:center;gap:7px;min-width:74px}
+  .dot{width:34px;height:34px;border-radius:50%;border:1.5px solid var(--line-strong);display:grid;place-items:center;
+       font-family:var(--serif);font-size:13px;color:var(--muted);background:var(--paper)}
+  .done .dot{background:var(--accent);border-color:var(--accent);color:#fff}
+  .run  .dot{border-color:var(--running);color:var(--running);box-shadow:inset 0 0 0 3px var(--paper),inset 0 0 0 12px var(--running-soft)}
+  .node .lb{font-size:12px;color:var(--ink)} .node .sub{font-size:10.5px;color:var(--muted)}
+  .gatestamp{font-size:10px;color:var(--gate);border:1px solid var(--gate);padding:0 4px;border-radius:2px;transform:rotate(-2deg)}
+  .tie{flex:1;height:1px;background:var(--line-strong);margin-top:17px;min-width:18px}
+  .par{display:flex;gap:0;border:1px solid var(--line);border-radius:3px;padding:8px 10px 6px;margin-top:0}
+  .par .node{min-width:58px} .par .dot{width:26px;height:26px;font-size:11px}
+  .par-cap{font-size:10px;color:var(--muted);letter-spacing:.15em;text-align:center;margin-top:2px}
+
+  /* ── 阶段清单：杂志目录 ─────────────────── */
+  .toc-head{display:flex;align-items:baseline;gap:14px;margin:30px 0 6px}
+  .toc-head h2{font-family:var(--serif);font-size:22px}
+  .toc-head span{font-size:12px;color:var(--muted);letter-spacing:.2em}
+  table{width:100%;border-collapse:collapse;background:var(--card,#fff);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  thead th{font-size:10.5px;letter-spacing:.18em;color:var(--muted);font-weight:600;text-align:left;
+           padding:9px 8px;border-bottom:1px solid var(--line-strong);background:#fff}
+  thead th.r{text-align:right}
+  thead th.h-no{width:44px} thead th.h-st{width:210px} thead th.h-role{width:130px}
+  [data-theme="dark"] thead th{background:transparent}
+  td{padding:11px 8px;border-bottom:1px solid var(--line);vertical-align:baseline;font-size:13.5px}
+  .no{font-family:var(--serif);color:var(--muted);width:44px;font-size:14px}
+  .st{font-weight:600} .st small{display:block;font-weight:400;font-family:"SF Mono",Menlo,monospace;font-size:10.5px;color:var(--muted)}
+  .lead{flex:1} /* dotted leader 用背景实现 */
+  .dep{color:var(--muted);font-size:12px;font-family:"SF Mono",Menlo,monospace}
+  .role{font-size:12px;color:var(--ink);background:var(--accent-soft);color:var(--accent);padding:1px 9px;border-radius:99px}
+  .gate{font-size:11px;color:var(--gate);border:1px solid var(--gate);padding:0 6px;border-radius:2px;font-family:var(--serif)}
+  .stat-done{color:var(--accent);font-weight:600} .stat-run{color:var(--running);font-weight:600} .stat-q{color:var(--muted)}
+  tr.run-row td{background:linear-gradient(90deg,var(--running-soft),transparent 70%)}
+
+  footer{margin:26px 0 40px;display:flex;justify-content:space-between;font-size:11px;color:var(--muted);letter-spacing:.15em}
+</style>
+</head>
+<body>
+<header><div class="page bar">
+  <div class="brand"><span class="mark">SD</span>Sortie Deck</div>
+  <nav><b>任务</b><span>工作台</span><span>知识库</span><span>记忆</span><span>角色工场</span><span>工具箱</span><span>小队</span><span>决策中心</span><span>管理</span></nav>
+  <div class="right"><button class="theme-btn" onclick="toggleTheme()">明 / 暗</button><span>Admin</span><span class="avatar">A</span></div>
+</div></header>
+
+<main class="page">
+  <p class="kicker">SORTIE DECK · MISSION</p>
+  <h1>门户预发健康检查</h1>
+  <div class="meta">
+    <span class="pill-run">运行中</span><span>standard 航线</span><span>编制 <em>8</em> 角色</span><span>已运行 <em>12</em> 分钟</span><span>执行器 <em>claude_code</em></span>
+  </div>
+
+  <div class="hitl">
+    <span class="stamp">门禁</span>
+    <p><em>技术方案评审</em>等待人工确认 — 回复 <code>/approve</code> 放行，或 <code>/reject</code> 驳回</p>
+    <span class="act">去处理 →</span>
+  </div>
+
+  <!-- 流水线 -->
+  <div class="rail">
+    <div class="node done"><span class="dot">01</span><span class="lb">集结</span><span class="sub">product</span></div>
+    <div class="tie"></div>
+    <div class="node done"><span class="dot">02</span><span class="lb">PRD</span><span class="gatestamp">门禁</span></div>
+    <div class="tie"></div>
+    <div class="node run"><span class="dot">03</span><span class="lb">技术方案</span><span class="sub">eng</span></div>
+    <div class="tie"></div>
+    <div class="node"><span class="dot">04</span><span class="lb">设计</span><span class="sub">design</span></div>
+    <div class="tie"></div>
+    <div>
+      <div class="par">
+        <div class="node"><span class="dot">05</span><span class="lb">后端</span></div>
+        <div class="node"><span class="dot">06</span><span class="lb">iOS</span></div>
+        <div class="node"><span class="dot">07</span><span class="lb">安卓</span></div>
+        <div class="node"><span class="dot">08</span><span class="lb">Web</span></div>
+      </div>
+      <p class="par-cap">开发并行 × 4</p>
+    </div>
+    <div class="tie"></div>
+    <div class="node"><span class="dot">09</span><span class="lb">联调测试</span><span class="gatestamp">门禁</span></div>
+    <div class="tie"></div>
+    <div class="node"><span class="dot">10</span><span class="lb">上线</span><span class="gatestamp">门禁</span></div>
+  </div>
+
+  <!-- 阶段清单 -->
+  <div class="toc-head"><h2>阶段清单</h2><span>STAGE MANIFEST · 10</span></div>
+  <table>
+    <thead>
+      <tr>
+        <th class="h-no">NO.</th>
+        <th class="h-st">阶段 STAGE</th>
+        <th class="h-dep">依赖 DEPENDS</th>
+        <th class="h-role">角色 ROLE</th>
+        <th class="h-gate">门禁 GATE</th>
+        <th class="h-stat r">状态 STATUS</th>
+      </tr>
+    </thead>
+    <tr class="done-row"><td class="no">01</td><td class="st">集结<small>intake</small></td><td class="dep">—</td><td><span class="role">product</span></td><td></td><td class="stat-done">已完成</td></tr>
+    <tr class="done-row"><td class="no">02</td><td class="st">PRD<small>product_prd</small></td><td class="dep">+intake</td><td><span class="role">product</span></td><td><span class="gate">门禁</span></td><td class="stat-done">已完成</td></tr>
+    <tr class="run-row"><td class="no">03</td><td class="st">技术方案<small>eng_tech_design</small></td><td class="dep">+product_prd</td><td><span class="role">eng</span></td><td><span class="gate">门禁</span></td><td class="stat-run">进行中</td></tr>
+    <tr><td class="no">04</td><td class="st">设计<small>design_ui</small></td><td class="dep">+product_prd</td><td><span class="role">design</span></td><td></td><td class="stat-q">排队中</td></tr>
+    <tr><td class="no">05</td><td class="st">后端开发<small>eng_backend</small></td><td class="dep">+eng_tech_design</td><td><span class="role">eng_backend</span></td><td></td><td class="stat-q">排队中</td></tr>
+    <tr><td class="no">06</td><td class="st">iOS 开发<small>eng_ios</small></td><td class="dep">+eng_tech_design</td><td><span class="role">eng_ios</span></td><td></td><td class="stat-q">排队中</td></tr>
+    <tr><td class="no">07</td><td class="st">Android 开发<small>eng_android</small></td><td class="dep">+eng_tech_design</td><td><span class="role">eng_android</span></td><td></td><td class="stat-q">排队中</td></tr>
+    <tr><td class="no">08</td><td class="st">Web 开发<small>eng_web</small></td><td class="dep">+eng_tech_design</td><td><span class="role">eng_web</span></td><td></td><td class="stat-q">排队中</td></tr>
+    <tr><td class="no">09</td><td class="st">联调测试<small>qa_verify</small></td><td class="dep">+eng_*</td><td><span class="role">qa</span></td><td><span class="gate">门禁</span></td><td class="stat-q">排队中</td></tr>
+    <tr><td class="no">10</td><td class="st">上线<small>deploy</small></td><td class="dep">+qa_verify</td><td><span class="role">deploy</span></td><td><span class="gate">门禁</span></td><td class="stat-q">排队中</td></tr>
+  </table>
+
+  <footer><span>SORTIE DECK · MISSION VIEW</span><span>门禁即信任边界 · 人始终在环</span></footer>
+</main>
+<script>
+  const p=new URLSearchParams(location.search).get("theme");
+  if(p) document.documentElement.dataset.theme=p;
+  function toggleTheme(){
+    const h=document.documentElement;
+    h.dataset.theme=h.dataset.theme==="dark"?"light":"dark";
+  }
+</script>
+</body>
+</html>

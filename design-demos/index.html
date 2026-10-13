@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>Sortie Deck · 三个设计方向对比</title>
+<style>
+  :root{--bg:#F2F4F7;--ink:#1A1F36;--muted:#697386;--card:#fff;--border:#E3E8EE}
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);color:var(--ink);font-family:-apple-system,"PingFang SC",sans-serif;padding:48px 5vw}
+  h1{font-size:26px;letter-spacing:-.02em}
+  .sub{color:var(--muted);margin:8px 0 40px;font-size:14px}
+  .ver{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:28px;margin-bottom:36px}
+  .head{display:flex;align-items:baseline;gap:14px;margin-bottom:6px}
+  .head .tag{font-size:11px;letter-spacing:.12em;color:var(--muted);border:1px solid var(--border);border-radius:99px;padding:2px 10px}
+  .head h2{font-size:19px}
+  .desc{color:var(--muted);font-size:13.5px;margin-bottom:18px;max-width:760px}
+  .shots{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .shots figure{border:1px solid var(--border);border-radius:10px;overflow:hidden}
+  .shots figcaption{font-size:11.5px;color:var(--muted);padding:7px 12px;border-top:1px solid var(--border)}
+  .shots img{width:100%;display:block}
+  .open{display:inline-block;margin-top:16px;font-size:13px;color:#0E9F6E;font-weight:600;text-decoration:none}
+  a{color:inherit}
+</style>
+</head>
+<body>
+<h1>Sortie Deck · 任务视图 三个设计方向</h1>
+<p class="sub">同一份真实内容（门户预发健康检查 · 10 阶段 · 2 门禁），三套设计逻辑。每个版本都内置明/暗切换（页面右上角「明 / 暗」按钮）。选一版深化，或混搭（如"v2 的配色 + v3 的右栏布局"）。</p>
+
+<div class="ver">
+  <div class="head"><h2>v1 · 杂志编辑风</h2><span class="tag">秒数轮盘 3 号</span></div>
+  <p class="desc">衬线大标题 + 纸感底色，阶段清单做成杂志目录，"门禁"是一枚旋转的戳记。辨识度最高、最有"作品感"，适合对外演示场景；但衬线在工作型界面的长期阅读里偏"读物"而非"工具"。</p>
+  <div class="shots">
+    <figure><img src="v1-editorial-light.png"><figcaption>浅色（默认）</figcaption></figure>
+    <figure><img src="v1-editorial-dark.png"><figcaption>暗色</figcaption></figure>
+  </div>
+  <a class="open" href="v1-editorial.html" target="_blank">打开交互版 →</a>
+</div>
+
+<div class="ver">
+  <div class="head"><h2>v2 · Linear 式克制深色</h2><span class="tag">现实参照 · Awwwards 级开发者工具</span></div>
+  <p class="desc">迁移 Linear 的设计语言：中性近黑、13px 紧凑 UI、1px 边框、零发光零渐变，状态即颜色语义。开发者零学习成本，长时盯流水线最舒服；个性表达最克制。</p>
+  <div class="shots">
+    <figure><img src="v2-linear-light.png"><figcaption>浅色</figcaption></figure>
+    <figure><img src="v2-linear-dark.png"><figcaption>暗色（默认）</figcaption></figure>
+  </div>
+  <a class="open" href="v2-linear.html" target="_blank">打开交互版 →</a>
+</div>
+
+<div class="ver">
+  <div class="head"><h2>v3 · Stripe 式专业浅色</h2><span class="tag">最佳设计师 · Stripe 设计团队思维</span></div>
+  <p class="desc">Stripe 团队会怎么做"控制平面"：卡片化分区、极细进度条、右栏任务摘要 + 门禁行动卡（CTA 最明确）、表头小写间距标签。信息架构最清晰、门禁最不可错过，兼顾对外展示的可信感。</p>
+  <div class="shots">
+    <figure><img src="v3-stripe-light.png"><figcaption>浅色（默认）</figcaption></figure>
+    <figure><img src="v3-stripe-dark.png"><figcaption>暗色</figcaption></figure>
+  </div>
+  <a class="open" href="v3-stripe.html" target="_blank">打开交互版 →</a>
+</div>
+</body>
+</html>
