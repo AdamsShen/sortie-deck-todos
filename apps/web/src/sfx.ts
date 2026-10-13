@@ -10,34 +10,20 @@ let bgmStarted = false;
 
 const MUTE_KEY = "sortie_sfx_mute";
 const BGM_MUTE_KEY = "sortie_bgm_mute";
-const LEGACY_MUTE_KEY = "rally_sfx_mute";
-const LEGACY_BGM_MUTE_KEY = "rally_bgm_mute";
 export const BGM_SRC = "/audio/bgm-ops.mp3";
 
-function migrateFlag(key: string, legacy: string): string | null {
-  const v = localStorage.getItem(key);
-  if (v != null) return v;
-  const old = localStorage.getItem(legacy);
-  if (old != null) {
-    localStorage.setItem(key, old);
-    localStorage.removeItem(legacy);
-  }
-  return old;
-}
-
 export function loadSfxMuted(): boolean {
-  return migrateFlag(MUTE_KEY, LEGACY_MUTE_KEY) === "1";
+  return localStorage.getItem(MUTE_KEY) === "1";
 }
 
 export function setSfxMuted(v: boolean) {
   muted = v;
   localStorage.setItem(MUTE_KEY, v ? "1" : "0");
-  localStorage.removeItem(LEGACY_MUTE_KEY);
 }
 
 /** Default BGM off until user enables (autoplay policy + preference). */
 export function loadBgmMuted(): boolean {
-  const raw = migrateFlag(BGM_MUTE_KEY, LEGACY_BGM_MUTE_KEY);
+  const raw = localStorage.getItem(BGM_MUTE_KEY);
   if (raw === null) return true;
   return raw === "1";
 }
@@ -45,7 +31,6 @@ export function loadBgmMuted(): boolean {
 export function setBgmMuted(v: boolean) {
   bgmMuted = v;
   localStorage.setItem(BGM_MUTE_KEY, v ? "1" : "0");
-  localStorage.removeItem(LEGACY_BGM_MUTE_KEY);
   syncBgmPlayback();
 }
 

@@ -25,27 +25,14 @@ export const BACKGROUND_PRESETS: BackgroundPreset[] = [];
 
 export const THEME_STORAGE_KEY = "sortie_theme";
 export const BG_STORAGE_KEY = "sortie_bg";
-const LEGACY_THEME_KEY = "rally_theme";
-const LEGACY_BG_KEY = "rally_bg";
-
-function migrateGet(key: string, legacy: string): string | null {
-  const v = localStorage.getItem(key);
-  if (v != null) return v;
-  const old = localStorage.getItem(legacy);
-  if (old != null) {
-    localStorage.setItem(key, old);
-    localStorage.removeItem(legacy);
-  }
-  return old;
-}
 
 export function loadTheme(): ThemeId {
-  const raw = migrateGet(THEME_STORAGE_KEY, LEGACY_THEME_KEY);
+  const raw = localStorage.getItem(THEME_STORAGE_KEY);
   if (THEMES.some((t) => t.id === raw)) return raw as ThemeId;
   return "paper";
 }
 
 export function loadBackground(): string {
-  const stored = migrateGet(BG_STORAGE_KEY, LEGACY_BG_KEY);
+  const stored = localStorage.getItem(BG_STORAGE_KEY);
   return stored || "";
 }
