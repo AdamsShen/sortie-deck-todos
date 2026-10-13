@@ -27,6 +27,8 @@ def _legacy_executor_name(ctx: StageContext) -> str:
         return "mock_intake"
     if stage == "product_prd":
         return "mock_product"
+    if stage == "eng_tech_design":
+        return "mock_tech_design"
     if stage == "design_ui":
         return "mock_design"
     if stage in ENG_BUILD_STAGES:
@@ -209,10 +211,16 @@ class HarnessStageExecutor:
             from sortie_deck.settings import settings
 
             gateway = gateway_from_settings(settings)
-            hits = gateway.retrieve(f"{ctx.brief} {ctx.stage}", limit=4)
+            # Mission namespace first (this requirement's knowledge), then global.
+            hits = gateway.retrieve(
+                f"{ctx.brief} {ctx.stage}", limit=6, initiative_id=ctx.initiative_id
+            )
             if not hits:
                 return ""
-            lines = [f"- [{h.source}] {h.title}: {h.content[:300]}" for h in hits]
+            lines = []
+            for h in hits:
+                marker = "mission" if (h.meta or {}).get("mission") else h.source
+                lines.append(f"- [{marker}] {h.title}: {h.content[:300]}")
             return "Knowledge brief:\n" + "\n".join(lines)
         except Exception:  # noqa: BLE001 — RAG is an enhancement
             return ""

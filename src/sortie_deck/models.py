@@ -132,6 +132,7 @@ class UnknownHarnessError(RuntimeError):
 
 class ArtifactKind(str, Enum):
     PRD = "prd.md"
+    TECH_DESIGN = "tech_design.md"
     ACCEPTANCE = "acceptance.json"
     TASKS = "tasks.json"
     IMPLEMENTATION = "implementation.md"

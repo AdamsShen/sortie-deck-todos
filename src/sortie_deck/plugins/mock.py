@@ -311,6 +311,42 @@ class MockIntakeExecutor:
         )
 
 
+class MockTechDesignExecutor:
+    """Deterministic tech-design document for the ``eng_tech_design`` stage.
+
+    Reads the upstream PRD and produces a reviewable technical approach
+    (architecture, module breakdown, risks) *before* any build stage runs.
+    """
+
+    name = "mock_tech_design"
+
+    async def run(self, ctx: StageContext) -> StageResult:
+        prd = ctx.upstream_artifacts.get("prd.md", ctx.brief or "(no prd)")
+        design_md = (
+            f"# Technical Design — {ctx.brief}\n\n"
+            f"## Context\n\n{prd[:2000]}\n\n"
+            "## Approach\n\n"
+            "- Reuse the existing delivery pipeline; keep the blast radius small.\n"
+            "- Implement behind the primary module touched by the PRD; no schema change "
+            "unless acceptance requires one.\n"
+            "- Cover acceptance.json criteria with the QA cases produced downstream.\n\n"
+            "## Module breakdown\n\n"
+            "| Module | Change | Risk |\n|---|---|---|\n"
+            "| core | adapt to PRD flow | low |\n"
+            "| api | expose/adjust endpoints if needed | medium |\n"
+            "| tests | cover acceptance criteria | low |\n\n"
+            "## Rollout & rollback\n\n"
+            "- Ship behind the stage gate (HITL review of this document).\n"
+            "- Rollback = revert the build-stage diff; no data migration assumed.\n"
+        )
+        return StageResult(
+            status="ok",
+            message="Tech design drafted (mock)",
+            artifacts={"tech_design.md": design_md},
+            proposed_next=None,
+        )
+
+
 class MockCollaborativeExecutor:
     """Demo session-capable executor.
 

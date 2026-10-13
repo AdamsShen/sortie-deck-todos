@@ -212,6 +212,7 @@ def stage_catalog() -> list[dict[str, Any]]:
     order = [
         "intake",
         "product_prd",
+        "eng_tech_design",
         "design_ui",
         "qa_cases",
         "eng_implement",

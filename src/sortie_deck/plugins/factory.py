@@ -18,6 +18,7 @@ from sortie_deck.plugins.mock import (
     MockQaCasesExecutor,
     MockQaExecutor,
     MockSelfTestExecutor,
+    MockTechDesignExecutor,
 )
 from sortie_deck.registry import ExecutorRegistry
 
@@ -32,6 +33,7 @@ def build_default_registry(
     for executor in (
         MockIntakeExecutor(),
         MockProductExecutor(),
+        MockTechDesignExecutor(),
         MockDesignExecutor(),
         MockEngExecutor(),
         MockQaExecutor(),
