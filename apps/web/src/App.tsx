@@ -390,8 +390,6 @@ export default function App() {
                   playSfx("whoosh");
                   setBgUrl(bg.src);
                   setBgDraft(bg.src);
-                  // Anime art reads better with ice accents than acid green
-                  if (theme === "signal") setTheme("ice");
                 }}
                 title={lang === "zh" ? bg.labelZh : bg.labelEn}
               >

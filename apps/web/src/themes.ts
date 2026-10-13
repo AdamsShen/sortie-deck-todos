@@ -1,4 +1,4 @@
-export type ThemeId = "signal" | "copper" | "ice" | "ember" | "slate";
+export type ThemeId = "paper" | "ink";
 
 export interface ThemeOption {
   id: ThemeId;
@@ -6,12 +6,10 @@ export interface ThemeOption {
   labelEn: string;
 }
 
+/** Editorial themes: 纸（浅·默认）与 墨（暗） */
 export const THEMES: ThemeOption[] = [
-  { id: "signal", labelZh: "信号绿", labelEn: "Signal" },
-  { id: "copper", labelZh: "铜门禁", labelEn: "Copper" },
-  { id: "ice", labelZh: "冰蓝", labelEn: "Ice" },
-  { id: "ember", labelZh: "余烬", labelEn: "Ember" },
-  { id: "slate", labelZh: "岩灰", labelEn: "Slate" },
+  { id: "paper", labelZh: "纸 · 浅色", labelEn: "Paper (Light)" },
+  { id: "ink", labelZh: "墨 · 暗色", labelEn: "Ink (Dark)" },
 ];
 
 export interface BackgroundPreset {
@@ -21,21 +19,9 @@ export interface BackgroundPreset {
   labelEn: string;
 }
 
-/** Built-in anime wallpapers (webp) under public/backgrounds */
-export const BACKGROUND_PRESETS: BackgroundPreset[] = [
-  {
-    id: "anime-heroine",
-    src: "/backgrounds/bg-anime-heroine.webp",
-    labelZh: "动图·她",
-    labelEn: "Anim · Her",
-  },
-  {
-    id: "anime-hero",
-    src: "/backgrounds/bg-anime-hero.webp",
-    labelZh: "动图·他",
-    labelEn: "Anim · Him",
-  },
-];
+/** Editorial style ships no decorative wallpapers; users may still set a
+ *  custom background URL in the theme panel. */
+export const BACKGROUND_PRESETS: BackgroundPreset[] = [];
 
 export const THEME_STORAGE_KEY = "sortie_theme";
 export const BG_STORAGE_KEY = "sortie_bg";
@@ -56,11 +42,10 @@ function migrateGet(key: string, legacy: string): string | null {
 export function loadTheme(): ThemeId {
   const raw = migrateGet(THEME_STORAGE_KEY, LEGACY_THEME_KEY);
   if (THEMES.some((t) => t.id === raw)) return raw as ThemeId;
-  return "signal";
+  return "paper";
 }
 
 export function loadBackground(): string {
   const stored = migrateGet(BG_STORAGE_KEY, LEGACY_BG_KEY);
-  if (stored) return stored;
-  return BACKGROUND_PRESETS[0]?.src || "";
+  return stored || "";
 }
