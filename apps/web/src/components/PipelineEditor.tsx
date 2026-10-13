@@ -52,6 +52,16 @@ export function PipelineEditor({
         )}
       </p>
       <div className="pipeline-stage-list">
+        <div className="pipeline-stage-head" aria-hidden="true">
+          <span className="pipeline-stage-id" title="阶段唯一标识（stage id），取自阶段目录">
+            阶段 ID
+          </span>
+          <strong title="阶段显示名称，按语言切换中/英文">名称</strong>
+          <span className="muted" title="负责该阶段的角色 Agent">角色</span>
+          <span className="muted" title="该阶段结束后是否需要人工审批（HITL 门禁）">
+            门禁
+          </span>
+        </div>
         {displayStages.map((s, idx, arr) => (
           <div key={`${s.id}-${idx}`} className="pipeline-stage-row">
             <span className="pipeline-stage-id">{s.id}</span>
@@ -60,7 +70,12 @@ export function PipelineEditor({
             {s.parallel_group ? <span className="st gate">∥ {s.parallel_group}</span> : null}
             {s.branch ? <span className="st gate">⤴ {s.branch}</span> : null}
             {s.depends_on?.length ? (
-              <span className="muted" title={s.depends_on.join(", ")}>
+              <span
+                className="muted"
+                title={`依赖前置阶段（需全部完成后才开始）：${s.depends_on
+                  .map((id) => (displayStages.find((x) => x.id === id)?.label || id))
+                  .join("、")}`}
+              >
                 ←{s.depends_on.join(",")}
               </span>
             ) : null}

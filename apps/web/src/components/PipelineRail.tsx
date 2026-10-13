@@ -114,24 +114,20 @@ function columnIndexForStage(stage: string, cols: RailColumn[]): number {
   return idx >= 0 ? idx : 0;
 }
 
-function maxParallelLanes(cols: RailColumn[]): number {
-  return Math.max(1, ...cols.map((c) => c.stages.length));
-}
-
 function layoutNodes(cols: RailColumn[]): { nodes: NodePos[]; height: number } {
   const denom = Math.max(cols.length - 1, 1);
-  const maxLanes = maxParallelLanes(cols);
-  const height =
-    maxLanes <= 1
-      ? 148
-      : Math.max(220, 40 + (maxLanes - 1) * LANE_GAP + NODE_BLOCK + 56);
   const nodes: NodePos[] = [];
 
-  // Stable lane index per branch across a parallel region
+  // lane 按并行区独立编号：连续同 group 的列算一个区，新区从 lane 0 重新开始。
+  // 若全局累计，第二个并行区会被排到很高的 lane，超出画布高度盖住下方内容。
   const laneOf = new Map<string, number>();
   let nextLane = 0;
-  for (const c of cols) {
-    if (!c.parallel) continue;
+  let maxLanes = 1;
+  cols.forEach((c, idx) => {
+    if (!c.parallel) return;
+    const prev = idx > 0 ? cols[idx - 1] : undefined;
+    const contiguous = Boolean(prev && prev.parallel && prev.group === c.group);
+    if (!contiguous) nextLane = 0;
     for (const s of c.stages) {
       const bid = branchKey(s);
       if (!laneOf.has(bid)) {
@@ -139,8 +135,14 @@ function layoutNodes(cols: RailColumn[]): { nodes: NodePos[]; height: number } {
         nextLane += 1;
       }
     }
-  }
-  const laneCount = Math.max(1, nextLane, maxLanes);
+    maxLanes = Math.max(maxLanes, nextLane);
+  });
+
+  const laneCount = maxLanes;
+  const height =
+    laneCount <= 1
+      ? 148
+      : Math.max(220, 40 + (laneCount - 1) * LANE_GAP + NODE_BLOCK + 56);
   const stackH = Math.max(0, laneCount - 1) * LANE_GAP;
   const startY = Math.max(16, (height - stackH - NODE_BLOCK) / 2);
 
@@ -439,13 +441,14 @@ export function PipelineRail({
             x2="36"
             y2="0"
           >
-            <stop offset="0%" stopColor="#ff4d9a" />
-            <stop offset="18%" stopColor="#c084fc" />
-            <stop offset="36%" stopColor="#38bdf8" />
-            <stop offset="54%" stopColor="#2dd4bf" />
-            <stop offset="72%" stopColor="#a3e635" />
-            <stop offset="88%" stopColor="#fbbf24" />
-            <stop offset="100%" stopColor="#ff4d9a" />
+            {/* 渐变色取 500/600 系深色调：浅色主题下细线也够对比 */}
+            <stop offset="0%" stopColor="#f0367e" />
+            <stop offset="18%" stopColor="#9333ea" />
+            <stop offset="36%" stopColor="#0284c7" />
+            <stop offset="54%" stopColor="#0d9488" />
+            <stop offset="72%" stopColor="#65a30d" />
+            <stop offset="88%" stopColor="#d97706" />
+            <stop offset="100%" stopColor="#f0367e" />
             <animateTransform
               attributeName="gradientTransform"
               type="translate"
@@ -463,11 +466,11 @@ export function PipelineRail({
             x2="28"
             y2="0"
           >
-            <stop offset="0%" stopColor="#ff7ab8" />
-            <stop offset="25%" stopColor="#e879f9" />
-            <stop offset="50%" stopColor="#67e8f9" />
-            <stop offset="75%" stopColor="#86efac" />
-            <stop offset="100%" stopColor="#ff7ab8" />
+            <stop offset="0%" stopColor="#ec4899" />
+            <stop offset="25%" stopColor="#c026d3" />
+            <stop offset="50%" stopColor="#06b6d4" />
+            <stop offset="75%" stopColor="#4ade80" />
+            <stop offset="100%" stopColor="#ec4899" />
             <animateTransform
               attributeName="gradientTransform"
               type="translate"
