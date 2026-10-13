@@ -175,6 +175,42 @@ _EXTRA_STAGES: list[dict[str, Any]] = [
         "label_en": "Agent Build",
         "output_contract": ["implementation.md", "tasks.json", "diff.patch"],
     },
+    # Per-role tech design — each dev role drafts its OWN design, no single overall eng design.
+    {
+        "name": "eng_backend_tech_design",
+        "role": "eng_backend",
+        "label": "后端技术方案",
+        "label_en": "Backend Tech Design",
+        "output_contract": ["tech_design.md"],
+    },
+    {
+        "name": "eng_web_tech_design",
+        "role": "eng_web",
+        "label": "Web 技术方案",
+        "label_en": "Web Tech Design",
+        "output_contract": ["tech_design.md"],
+    },
+    {
+        "name": "eng_ios_tech_design",
+        "role": "eng_ios",
+        "label": "iOS 技术方案",
+        "label_en": "iOS Tech Design",
+        "output_contract": ["tech_design.md"],
+    },
+    {
+        "name": "eng_android_tech_design",
+        "role": "eng_android",
+        "label": "Android 技术方案",
+        "label_en": "Android Tech Design",
+        "output_contract": ["tech_design.md"],
+    },
+    {
+        "name": "eng_agent_tech_design",
+        "role": "eng_agent",
+        "label": "Agent 技术方案",
+        "label_en": "Agent Tech Design",
+        "output_contract": ["tech_design.md"],
+    },
     *_SELFTEST_EXTRA,
 ]
 
@@ -212,7 +248,6 @@ def stage_catalog() -> list[dict[str, Any]]:
     order = [
         "intake",
         "product_prd",
-        "eng_tech_design",
         "design_ui",
         "qa_cases",
         "eng_implement",
@@ -423,8 +458,9 @@ def plan_pipeline(
             drop("eng_integrate")
             notes.append("偏前端样式 → 去掉联调")
 
-    # Specialize eng_implement → iOS / Android / Web / Backend / Agent when signals match.
-    # Multi-platform → independent branch chains: build → selftest per lane, then 联调.
+    # Specialize eng_implement → per-role build + per-role tech design.
+    # Each dev role drafts its OWN tech design (no single overall eng design).
+    # Backend is ordered first so its design seeds the other lanes.
     platforms = [
         sid
         for sid, pats in _PLATFORM_SIGNALS
@@ -435,19 +471,32 @@ def plan_pipeline(
         after_id = ids[eng_idx - 1] if eng_idx > 0 else None
         drop("eng_implement")
         insert_after = after_id
+        ordered = sorted(platforms, key=lambda p: 0 if p == "eng_backend" else 1)
+        platform_set = set(platforms)
         if len(platforms) >= 2:
             if "eng_selftest" in ids:
                 drop("eng_selftest")
-            for sid in platforms:
+            # Pass 1 — per-role tech design wave (each owned by its role)
+            for sid in ordered:
+                ensure(f"{sid}_tech_design", after=insert_after)
+                insert_after = f"{sid}_tech_design"
+            # Pass 2 — per-role build + selftest wave
+            for sid in ordered:
                 ensure(sid, after=insert_after)
                 insert_after = sid
                 st_id = selftest_id_for(sid)
                 ensure(st_id, after=insert_after)
                 insert_after = st_id
+            planning_group = "eng_planning"
             delivery_group = "eng_delivery"
-            platform_set = set(platforms)
             for s in stages:
                 sid = s["id"]
+                if sid.endswith("_tech_design"):
+                    base = sid[: -len("_tech_design")]
+                    if base in platform_set:
+                        s["parallel_group"] = planning_group
+                        s["branch"] = _PLATFORM_BRANCH.get(base, base.replace("eng_", "", 1))
+                    continue
                 build = sid if sid in platform_set else None
                 if build is None and sid.endswith("_selftest"):
                     cand = sid[: -len("_selftest")]
@@ -461,13 +510,14 @@ def plan_pipeline(
             if "eng_integrate" not in ids:
                 ensure("eng_integrate", after=insert_after)
             notes.append(
-                "多端图编排 → "
-                + " ∥ ".join(f"{p}→{selftest_id_for(p)}" for p in platforms)
-                + " → 联调"
+                "多端研发 → 各端技术方案(∥) → 各端开发+自测(∥) → 联调："
+                + ", ".join(ordered)
             )
         else:
+            ensure(f"{platforms[0]}_tech_design", after=insert_after)
+            insert_after = f"{platforms[0]}_tech_design"
             ensure(platforms[0], after=insert_after)
-            notes.append(f"多端研发细化 → {platforms[0]}")
+            notes.append(f"单端研发细化 → {platforms[0]}_tech_design → {platforms[0]}")
 
     # Derive explicit depends_on edges (graph truth for UI / inspect)
     stages = attach_depends_on(stages)

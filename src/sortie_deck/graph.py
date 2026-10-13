@@ -134,7 +134,7 @@ def _executor_name(stage: str, role: str, state: PipelineState, stage_cfg: dict[
         return "mock_intake"
     if stage == "product_prd":
         return "mock_product"
-    if stage == "eng_tech_design":
+    if stage.endswith("_tech_design"):
         return "mock_tech_design"
     if stage == "design_ui":
         return "mock_design"

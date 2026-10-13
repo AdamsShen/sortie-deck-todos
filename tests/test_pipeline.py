@@ -58,8 +58,8 @@ async def test_pipeline_hitl_and_qa_loop(tmp_path):
             if ini.status.value == "waiting_hitl":
                 break
         assert ini.pending_hitl is not None
-        # PRD gate is followed by the new eng_tech_design review gate
-        assert ini.pending_hitl.stage == "eng_tech_design"
+        # Overall eng tech design removed; PRD gate is followed by the design gate
+        assert ini.pending_hitl.stage == "design_ui"
 
         ini = await orch.submit_hitl(ini.id, HitlDecision(action=HitlAction.APPROVE))
         for _ in range(40):

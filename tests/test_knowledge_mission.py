@@ -48,25 +48,31 @@ def _gateway(tmp_path) -> KnowledgeGateway:
 
 def test_tech_design_in_catalog_and_templates():
     ids = [s["id"] for s in stage_catalog()]
-    assert "eng_tech_design" in ids
-    assert ids.index("product_prd") < ids.index("eng_tech_design") < ids.index("design_ui")
-    # express (hotfix) does NOT carry the review stage
+    # overall eng tech design is gone
+    assert "eng_tech_design" not in ids
+    # per-role tech design stages exist, each owned by its dev role
+    catalog = catalog_by_id()
+    for role in ("eng_backend", "eng_web", "eng_ios", "eng_android", "eng_agent"):
+        td = f"{role}_tech_design"
+        assert td in ids
+        assert catalog[td]["role"] == role
+    # track templates no longer carry the overall stage
     from sortie_deck.templates import load_pipeline_template
 
-    express_ids = [s["name"] for s in load_pipeline_template("express")["stages"]]
-    assert "eng_tech_design" not in express_ids
-    assert "eng_tech_design" in [s["name"] for s in load_pipeline_template("default")["stages"]]
-    assert "eng_tech_design" in [s["name"] for s in load_pipeline_template("standard")["stages"]]
+    for track in ("default", "standard"):
+        names = [s["name"] for s in load_pipeline_template(track)["stages"]]
+        assert "eng_tech_design" not in names
 
 
 def test_tech_design_contract_requires_tech_design_md():
-    assert REQUIRED.get("eng_tech_design") == ["tech_design.md"]
+    for role in ("eng_backend", "eng_web", "eng_ios", "eng_android", "eng_agent"):
+        assert REQUIRED.get(f"{role}_tech_design") == ["tech_design.md"]
 
 
 def test_mock_tech_design_executor_produces_contract_artifact():
     from sortie_deck.plugins.mock import MockTechDesignExecutor
 
-    ctx = _ctx(stage="eng_tech_design")
+    ctx = _ctx(stage="eng_backend_tech_design")
     ctx.upstream_artifacts["prd.md"] = "# PRD\nBuild a notification center."
     result = asyncio.run(MockTechDesignExecutor().run(ctx))
     assert result.status == "ok"
@@ -76,7 +82,7 @@ def test_mock_tech_design_executor_produces_contract_artifact():
 
 def test_harness_executor_tech_design_contract(iso_settings):
     result = asyncio.run(
-        HarnessStageExecutor().run(_ctx(stage="eng_tech_design", initiative_id="ini_kb2"))
+        HarnessStageExecutor().run(_ctx(stage="eng_backend_tech_design", initiative_id="ini_kb2"))
     )
     assert result.status == "ok"
     assert "tech_design.md" in result.artifacts
@@ -147,7 +153,7 @@ def test_index_mission_artifact_idempotent_and_disabled(tmp_path, iso_settings, 
     gw = _gateway(tmp_path)
     first = gw.index_mission_artifact(
         initiative_id="ini_idem",
-        stage="eng_tech_design",
+        stage="eng_backend_tech_design",
         kind="tech_design.md",
         title="Ini Idem · eng_tech_design · tech_design.md",
         content="# Tech design\nApproach A.",
@@ -156,7 +162,7 @@ def test_index_mission_artifact_idempotent_and_disabled(tmp_path, iso_settings, 
     assert "ini:ini_idem" in first.tags
     again = gw.index_mission_artifact(
         initiative_id="ini_idem",
-        stage="eng_tech_design",
+        stage="eng_backend_tech_design",
         kind="tech_design.md",
         title="Ini Idem · eng_tech_design · tech_design.md",
         content="# Tech design\nApproach A.",

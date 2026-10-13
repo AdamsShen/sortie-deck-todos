@@ -312,7 +312,7 @@ class MockIntakeExecutor:
 
 
 class MockTechDesignExecutor:
-    """Deterministic tech-design document for the ``eng_tech_design`` stage.
+    """Deterministic tech-design document for the per-role ``*_tech_design`` stages.
 
     Reads the upstream PRD and produces a reviewable technical approach
     (architecture, module breakdown, risks) *before* any build stage runs.

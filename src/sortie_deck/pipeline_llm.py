@@ -22,11 +22,10 @@ Propose a software delivery pipeline as JSON with keys:
   stages: array of {id, label?, role?, hitl_after?, parallel_group?, branch?, depends_on?}
 Only use stage ids from the provided catalog. Always include intake first and done last.
 When multiple eng_* specialists (eng_web, eng_backend, eng_ios, …) should run together,
-emit independent branch chains — not a shared selftest:
-  eng_web → eng_web_selftest (branch=web, parallel_group=eng_delivery)
-  eng_backend → eng_backend_selftest (branch=backend, parallel_group=eng_delivery)
-then eng_integrate. Set depends_on for each stage (fan-out from previous trunk, fan-in into integrate).
-Do NOT use a single shared eng_selftest when multiple platforms are present.
+give EACH its own tech design stage (`<role>_tech_design`, owned by that role) in an
+`eng_planning` parallel wave, then independent build→selftest branch chains in an
+`eng_delivery` parallel wave, then eng_integrate.
+Do NOT emit a single shared `eng_tech_design`; do NOT use a shared `eng_selftest`.
 Human confirmation is mandatory after your proposal — never assume start.
 Return ONLY JSON.
 """
@@ -36,8 +35,11 @@ Given a mission brief, a role catalog, and proposed pipeline stages, return JSON
   needed_slots: array of role ids chosen from the provided role catalog
   rationale: short explanation in the same language as the brief
 Only include slots that the stages / brief actually need. Always include product, qa, deploy
-when those stages exist. Prefer specialized eng_* over generic eng when platforms are clear.
-Never invent a role id that is not in the catalog.
+when those stages exist.
+Use specific eng_* roles (eng_backend, eng_web, eng_ios, eng_android, eng_agent) whenever the
+requirement needs more than one engineering discipline — never collapse them into the generic eng.
+Reserve the generic eng role for cases where exactly ONE engineering role can deliver the whole
+build. Never invent a role id that is not in the catalog.
 Return ONLY JSON.
 """
 
@@ -48,6 +50,10 @@ Return JSON:
   roles: array of role ids from the provided role catalog
   rationale: short explanation in the same language as the brief
 When multi_agent is false, roles must be empty or contain exactly one role.
+When the request needs more than one engineering discipline, list each specific eng_* role
+(eng_backend, eng_web, eng_ios, eng_android, eng_agent) separately — do not use the generic
+eng role to cover multiple disciplines. Only fall back to generic eng when exactly one
+engineering role can handle the entire request.
 Never invent a role id that is not in the catalog.
 Return ONLY JSON.
 """

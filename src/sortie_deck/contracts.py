@@ -14,7 +14,11 @@ _ENG_BUILD_ARTIFACTS = ["implementation.md", "tasks.json", "diff.patch"]
 
 REQUIRED: dict[str, list[str]] = {
     "product_prd": ["prd.md", "acceptance.json"],
-    "eng_tech_design": ["tech_design.md"],
+    "eng_backend_tech_design": ["tech_design.md"],
+    "eng_web_tech_design": ["tech_design.md"],
+    "eng_ios_tech_design": ["tech_design.md"],
+    "eng_android_tech_design": ["tech_design.md"],
+    "eng_agent_tech_design": ["tech_design.md"],
     "design_ui": ["design.md", "screens.json"],
     "qa_cases": ["test_plan.md", "test_cases.md"],
     "eng_implement": list(_ENG_BUILD_ARTIFACTS),

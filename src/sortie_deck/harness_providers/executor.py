@@ -27,7 +27,7 @@ def _legacy_executor_name(ctx: StageContext) -> str:
         return "mock_intake"
     if stage == "product_prd":
         return "mock_product"
-    if stage == "eng_tech_design":
+    if stage.endswith("_tech_design"):
         return "mock_tech_design"
     if stage == "design_ui":
         return "mock_design"
