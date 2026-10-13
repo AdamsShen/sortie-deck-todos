@@ -60,6 +60,27 @@ TDT_WEKNORA_KB_ID=<knowledge_base_id>
 
 `cursor_cli` 出击前自动 preload。
 
+## 6.1 任务命名空间（每需求隔离）
+
+每个需求拥有独立的 RAG 命名空间：本任务的知识优先命中，且不污染全局库。
+
+- **回写**：阶段完成后，orchestrator 将关键产物（`prd.md` / `tech_design.md` /
+  `design.md` / `handoff.md` / `integrate.md`）经
+  `KnowledgeGateway.index_mission_artifact(...)` 写入任务命名空间 ——
+  best-effort、按 `(stage, kind)` 幂等，进度记录在 `Initiative.meta["kb_indexed"]`。
+- **local**：catalog 条目打 `ini:<initiative_id>` 标签。
+- **WeKnora**：手动文档移入 `<prefix>/<initiative_id>` 目录
+  （`TDT_KB_MISSION_FOLDER_PREFIX`，默认 `missions`）；目录移动失败仅影响展示、
+  不阻塞。
+- **检索**：`retrieve(query, initiative_id=...)` 先查任务命名空间（加权置顶），
+  不足时从全局池补充（WeKnora hybrid-search 或本地关键词排序）。harness 提示
+  （`_rag_brief`）始终携带任务 id。
+- **开关**：`TDT_KB_MISSION_INDEX=true`（默认开启）控制回写；
+  `TDT_KB_MISSION_INDEX_MAX_CHARS` 限制单产物正文长度。
+
+Skill / MCP / 工具**不做**任务隔离 —— 来自全局工具库、按阶段 JIT 加载（见
+`toolkit.md`）。
+
 ## 7. 开发计划
 
 ### P0

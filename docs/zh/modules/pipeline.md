@@ -29,10 +29,19 @@
 | 航线 | 适用 | 典型节点 |
 |------|------|----------|
 | express | 热修 / 一行 | intake → eng → qa → deploy → done（提到设计/多端时自适应加节点） |
-| standard | 正常需求 | PRD → **设计** → 用例 → 开发 → 自测 → 联调 → 提测 → qa → deploy → done |
-| default | 办公迭代 | PRD → **设计** → 开发 → qa → deploy → done |
+| standard | 正常需求 | PRD → **技术方案** → **设计** → 用例 → 开发 → 自测 → 联调 → 提测 → qa → deploy → done |
+| default | 办公迭代 | PRD → **技术方案** → **设计** → 开发 → qa → deploy → done |
 
-## 3.1 角色编制位
+### 3.1 技术方案阶段（`eng_tech_design`）
+
+在 `product_prd` 之后、任何 build 阶段之前运行（仅 standard/default —— express
+热修线不加）。eng 角色读取 PRD 与验收标准，产出可评审的 `tech_design.md`
+（技术路线、模块拆分、风险、上线/回滚方案），由阶段契约校验并在其
+`hitl_after` 门禁评审；后续 build 阶段按已批准的技术方案实现。任务锁定
+harness 时该阶段与其他阶段一样走 `harness_stage` 执行器；mock 回退为
+`mock_tech_design`。
+
+## 3.2 角色编制位
 
 | 编制位 | 说明 |
 |--------|------|

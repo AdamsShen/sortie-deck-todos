@@ -29,8 +29,19 @@ Internal agent **pipeline_planner** proposes a stage list from the mission brief
 | Track | Use | Typical nodes |
 |-------|-----|---------------|
 | express | hotfix / one-liner | intake → eng → qa → deploy → done (adds design / platform stages when brief asks) |
-| standard | normal feature | PRD → **design** → cases → build → selftest → integrate → handoff → qa → deploy → done |
-| default | office iteration | PRD → **design** → build → qa → deploy → done |
+| standard | normal feature | PRD → **tech design** → **design** → cases → build → selftest → integrate → handoff → qa → deploy → done |
+| default | office iteration | PRD → **tech design** → **design** → build → qa → deploy → done |
+
+### 3.1 Tech design stage (`eng_tech_design`)
+
+Runs after `product_prd` and before any build stage (standard/default only —
+the hotfix express track skips it). The eng agent reads the PRD/acceptance
+criteria and produces a reviewable `tech_design.md` (approach, module
+breakdown, risks, rollout/rollback) that is validated by the stage contract and
+reviewed at its `hitl_after` gate. Build stages then implement against the
+approved design. Under a mission harness this stage runs through the same
+`harness_stage` executor as every other stage; mock fallback is
+`mock_tech_design`.
 
 ## 3.1 Role slots
 
