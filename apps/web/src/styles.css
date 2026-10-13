@@ -21,7 +21,7 @@
   --serif: "Songti SC", "Noto Serif SC", "Source Han Serif SC", Georgia, serif;
   --font: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, monospace;
-  --radius: 8px;
+  --radius: 10px;
 }
 
 [data-theme="ink"] {
@@ -46,7 +46,7 @@
   --serif: "Songti SC", "Noto Serif SC", "Source Han Serif SC", Georgia, serif;
   --font: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, monospace;
-  --radius: 8px;
+  --radius: 10px;
 }
 
 * {
@@ -214,11 +214,6 @@ html.has-art-bg pre.preview {
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
 }
-html.has-art-bg .bubble {
-  background: color-mix(in srgb, var(--panel) 42%, transparent);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-}
 @media (max-width: 900px) {
   html.has-art-bg .main.page-pad {
     max-width: 100%;
@@ -326,8 +321,7 @@ html.has-art-bg .bubble {
   gap: 1rem;
   padding: 1rem 1.5rem;
   border-bottom: 1px solid var(--line);
-  background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 92%, transparent), color-mix(in srgb, var(--deep) 70%, transparent));
-  backdrop-filter: blur(10px);
+  background: var(--panel);
 }
 
 .brand-block {
@@ -345,7 +339,6 @@ html.has-art-bg .bubble {
   flex-shrink: 0;
   border-radius: 0;
   background: transparent;
-  filter: drop-shadow(0 0 8px color-mix(in srgb, var(--ice) 35%, transparent));
 }
 
 .brand-title {
@@ -433,8 +426,7 @@ html.has-art-bg .bubble {
   width: 0.4rem;
   height: 0.4rem;
   background: var(--signal);
-  border: 1.5px solid var(--deep, #0a121c);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--signal) 70%, transparent);
+  border: 1.5px solid var(--panel);
   border-radius: 1px;
   z-index: 1;
 }
@@ -1158,55 +1150,55 @@ textarea {
   overflow: visible;
 }
 
-/* Idle: quiet hairline */
+/* Idle: quiet hairline — 但必须保证在浅色背景上可辨认（未来阶段也需看出拓扑） */
 .rail-edge {
-  stroke: color-mix(in srgb, var(--line-hot) 35%, transparent);
-  stroke-width: 1.6;
+  stroke: color-mix(in srgb, var(--muted) 45%, var(--line-hot));
+  stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
-  opacity: 0.5;
+  opacity: 0.75;
   transition: opacity 0.35s ease;
 }
 
 /* Done path: flowing chroma ribbon */
 .rail-edge.active {
-  stroke-width: 2.4;
-  opacity: 0.95;
+  stroke-width: 3;
+  opacity: 1;
 }
 
 /* Live frontier: faster / hotter chroma */
 .rail-edge.live {
-  stroke-width: 2.85;
+  stroke-width: 3.4;
   opacity: 1;
 }
 
 .rail-edge-branch,
 .rail-edge-merge {
-  stroke-width: 1.5;
+  stroke-width: 1.8;
 }
 
 .rail-edge.active.rail-edge-branch,
 .rail-edge.active.rail-edge-merge {
-  stroke-width: 2.2;
+  stroke-width: 2.6;
 }
 
 .rail-edge.live.rail-edge-branch,
 .rail-edge.live.rail-edge-merge {
-  stroke-width: 2.6;
+  stroke-width: 3;
 }
 
-/* Soft bloom under the ribbon */
+/* Soft bloom under the ribbon — 浅色主题下加不透明度保证可见 */
 .rail-edge-halo {
-  stroke-width: 7;
+  stroke-width: 8;
   stroke-linecap: round;
   stroke-linejoin: round;
-  opacity: 0.22;
+  opacity: 0.35;
   filter: blur(1.5px);
 }
 
 .rail-edge-halo.live {
-  stroke-width: 10;
-  opacity: 0.34;
+  stroke-width: 11;
+  opacity: 0.45;
   animation: rail-halo-breathe 2.2s ease-in-out infinite;
 }
 
@@ -1246,10 +1238,10 @@ textarea {
 @keyframes rail-halo-breathe {
   0%,
   100% {
-    opacity: 0.22;
+    opacity: 0.35;
   }
   50% {
-    opacity: 0.4;
+    opacity: 0.55;
   }
 }
 
@@ -1265,8 +1257,7 @@ textarea {
 
 .rail-progress {
   right: auto;
-  background: linear-gradient(90deg, var(--ice), var(--signal));
-  box-shadow: 0 0 0 3px rgba(14, 159, 110, 0.12);
+  background: var(--signal);
   transition: width 0.55s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -1303,12 +1294,11 @@ textarea {
 }
 
 .rail-dot {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   border: 2px solid var(--line-hot);
-  background: var(--deep);
-  border-radius: 1px;
-  transform: rotate(45deg);
+  background: var(--panel);
+  border-radius: 50%;
   transition: all 0.3s ease;
 }
 
@@ -1331,14 +1321,12 @@ textarea {
   background: var(--signal);
   border-color: var(--signal);
   animation: pulse 1.2s ease-in-out infinite;
-  box-shadow: 0 0 0 3px rgba(14, 159, 110, 0.15);
 }
 
 .rail-node.gate .rail-dot {
   background: var(--copper);
   border-color: var(--copper);
   animation: pulse 0.9s ease-in-out infinite;
-  box-shadow: 0 0 0 3px rgba(59, 91, 219, 0.15);
 }
 
 .rail-node.live .rail-label,
@@ -1399,7 +1387,7 @@ textarea {
 }
 
 .panel {
-  background: linear-gradient(165deg, color-mix(in srgb, var(--panel) 92%, transparent), color-mix(in srgb, var(--deep) 88%, transparent));
+  background: var(--panel);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 1rem;
@@ -1470,7 +1458,7 @@ textarea {
   align-items: center;
   border: 1px solid var(--line);
   padding: 0.65rem;
-  background: rgba(5, 8, 13, 0.45);
+  background: var(--panel);
 }
 .role.picking {
   border-color: color-mix(in srgb, var(--signal) 50%, var(--line));
@@ -1546,12 +1534,12 @@ textarea {
 .rail-node .rail-avatar {
   margin-bottom: 0.15rem;
   pointer-events: none;
-  filter: drop-shadow(0 4px 14px rgba(0, 0, 0, 0.45));
+  filter: drop-shadow(0 1px 2px rgba(16, 24, 40, 0.12));
 }
 
 .rail-node.live .rail-avatar,
 .rail-node.gate .rail-avatar {
-  filter: drop-shadow(0 0 6px rgba(14, 159, 110, 0.3));
+  filter: none;
 }
 .rail-node.speaking .rail-bubble,
 .rail-bubble {
@@ -1580,11 +1568,6 @@ textarea {
   }
 }
 
-.bubble.type-consult,
-.bubble.type-consult_reply {
-  border-color: color-mix(in srgb, var(--copper) 45%, var(--line));
-  background: linear-gradient(165deg, rgba(40, 28, 16, 0.55), rgba(10, 14, 20, 0.7));
-}
 .consult-thread .kind-consult.ask {
   border-left: 2px solid var(--copper);
   padding-left: 0.55rem;
@@ -1958,17 +1941,65 @@ textarea {
 }
 
 .chat-panel {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-height: 520px;
   max-height: calc(100vh - 220px);
 }
 
+.chat-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.chat-head .panel-label {
+  margin: 0.55rem 0 0;
+}
+.chat-head-tools {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.chat-head .room-dock {
+  margin: 0.55rem 0 0;
+}
+
+.chat-panel.fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  height: 100vh;
+  min-height: 0;
+  max-height: none;
+  border-radius: 0;
+  background: var(--panel);
+}
+.chat-panel.fullscreen .chat-head,
+.chat-panel.fullscreen .participants {
+  display: none;
+}
+.chat-fs-exit {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.9rem;
+  z-index: 5;
+}
+
 .participants {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow-x: auto;
   gap: 0.4rem;
   margin: 0.55rem 0 0.75rem;
+  scrollbar-width: thin;
+  flex: none;
+}
+.participants .part {
+  flex: none;
+  white-space: nowrap;
 }
 
 .part {
@@ -2015,74 +2046,91 @@ textarea {
 .chat-log {
   flex: 1;
   overflow: auto;
+  display: block;
+  padding: 4px 22px 12px;
+}
+
+/* 方案 A · 通讯社线稿流：去气泡，编辑部排版 */
+.wire {
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  gap: 20px;
+  padding: 16px 0 18px;
+  border-bottom: 1px solid var(--line);
+}
+.wire.sys {
   display: flex;
-  flex-direction: column;
-  gap: 0.65rem;
-  padding-right: 0.25rem;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 0;
+  border-bottom: none;
 }
-
-.bubble {
-  border: 1px solid var(--line);
-  background: rgba(5, 8, 13, 0.55);
-  padding: 0.65rem 0.75rem;
-  border-radius: var(--radius);
+.wire.sys::before,
+.wire.sys::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--line);
 }
-
-.bubble.human {
-  border-color: rgba(110, 139, 232, 0.35);
-}
-
-.bubble.agent {
-  border-color: rgba(14, 159, 110, 0.3);
-}
-
-.bubble.system,
-.bubble.type-system,
-.bubble.type-hitl {
-  border-color: rgba(59, 91, 219, 0.35);
-  background: rgba(59, 91, 219, 0.06);
-}
-
-.bubble-meta {
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
+.sysline {
   font-family: var(--mono);
-  font-size: 0.62rem;
-  color: var(--muted);
-  margin-bottom: 0.35rem;
-}
-
-.bubble-meta strong {
-  color: var(--text);
-  font-size: 0.72rem;
+  font-size: 0.66rem;
   letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.sys-time {
+  opacity: 0.6;
 }
 
-.bubble pre {
+.byline {
+  text-align: right;
+  padding-top: 2px;
+}
+.byline .who {
+  font-family: "Songti SC", "Noto Serif SC", Georgia, serif;
+  font-size: 0.92rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.byline .what,
+.byline .when {
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-top: 3px;
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+.dot.agent { background: var(--signal); }
+.dot.human { background: var(--ice); }
+.dot.system { background: var(--copper); }
+
+.wire.human .who { color: var(--ice); }
+.wire.agent .who { color: var(--text); }
+
+.copy {
+  max-width: 64ch;
+  font-size: 0.86rem;
+  line-height: 1.75;
+}
+.copy pre {
   margin: 0;
   white-space: pre-wrap;
   font-family: var(--font);
-  font-size: 0.88rem;
-  line-height: 1.45;
+  font-size: 0.86rem;
+  line-height: 1.6;
 }
 
-.md-preview {
-  font-family: var(--font);
-  font-size: 0.88rem;
-  line-height: 1.5;
-  color: var(--text);
-}
-
-.md-preview > *:first-child {
-  margin-top: 0;
-}
-
-.md-preview > *:last-child {
-  margin-bottom: 0;
-}
-
-.md-preview h1,
 .md-preview h2,
 .md-preview h3,
 .md-preview h4 {
@@ -2650,6 +2698,23 @@ textarea {
   flex-direction: column;
   gap: 0.35rem;
   margin-top: 0.55rem;
+}
+
+.pipeline-stage-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.75rem;
+  padding: 0.1rem 0.45rem 0.35rem;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.pipeline-stage-head strong {
+  font-weight: 600;
 }
 
 .pipeline-stage-row {
@@ -3371,32 +3436,39 @@ textarea {
 }
 
 /* ============================================================
-   Editorial override layer · v1 杂志编辑风（v3 白浅色）
-   骨架沿用上方组件样式，此处只做气质校正：
-   衬线大标题 / 隐藏赛博装饰 / 面板柔和阴影 / 状态色语义
+   v3 · Stripe 式专业 · 气质校正层
+   骨架沿用上方组件样式，此处收敛为 Stripe DNA：
+   无衬线标题 / 关闭赛博装饰 / 白卡极轻投影 / 柔和色底状态 pill
    ============================================================ */
 
-/* 大标题用衬线（编辑部 DNA），小字号 UI 仍是系统无衬线 */
+/* 标题统一系统无衬线，收紧字距（Stripe 的精确感） */
 h1,
 h2,
+h3,
 .mission-title {
-  font-family: var(--serif);
-  letter-spacing: 0.01em;
+  font-family: var(--font);
+  letter-spacing: -0.01em;
   font-weight: 700;
 }
+h1 {
+  letter-spacing: -0.02em;
+}
 
-/* 赛博装饰退场 */
-.scanline {
+/* 赛博装饰全部退场，背景回归干净的冷灰白 */
+.scanline,
+.grid-floor,
+.orb {
   display: none;
 }
 
-/* 面板：白卡 + 极轻投影，替代发光边 */
+/* 卡片：白底 + 极轻投影，替代发光边 */
 .panel,
-.card {
+.card,
+.mission {
   box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
 }
 
-/* 主按钮：实心绿、无渐变无光晕 */
+/* 主按钮：实心品牌绿、无渐变无光晕 */
 .btn.primary {
   background: var(--signal);
   color: #fff;
@@ -3406,16 +3478,26 @@ h2,
   filter: brightness(1.05);
 }
 
-/* 状态徽章统一语义色（完成=绿 运行=蓝 阻塞/门禁=红 等待=灰） */
+/* 状态徽章：柔和色底 pill（完成=绿 运行/门禁=蓝 失败/阻塞=红） */
+.st {
+  background: color-mix(in srgb, var(--muted) 10%, transparent);
+  border-color: transparent;
+  border-radius: 99px;
+  color: var(--muted);
+}
 .st.done,
 .st.completed {
+  background: var(--signal-dim);
   color: var(--signal);
 }
-.st.running {
+.st.running,
+.st.waiting_hitl {
+  background: color-mix(in srgb, var(--copper) 14%, transparent);
   color: var(--copper);
 }
 .st.failed,
-.st.waiting_hitl {
+.st.stopped {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
   color: var(--danger);
 }
 

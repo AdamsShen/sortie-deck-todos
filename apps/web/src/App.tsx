@@ -103,8 +103,8 @@ function displayTime(iso: string): string {
 }
 
 export default function App() {
-  const [lang, setLang] = useState<Lang>(() => (lsGet("sortie_lang", "rally_lang") as Lang) || "zh");
-  const [token, setToken] = useState(() => lsGet("sortie_token", "rally_token") || "");
+  const [lang, setLang] = useState<Lang>(() => (lsGet("sortie_lang") as Lang) || "zh");
+  const [token, setToken] = useState(() => lsGet("sortie_token") || "");
   const [user, setUser] = useState<PublicUser | null>(null);
   const [view, setView] = useState<View>("home");
   const [items, setItems] = useState<Initiative[]>([]);
@@ -113,7 +113,6 @@ export default function App() {
   const [detail, setDetail] = useState<Initiative | null>(null);
   const [harnesses, setHarnesses] = useState<HarnessInfo[]>([]);
   const [harnessPick, setHarnessPick] = useState("");
-  const [harnessSwitchPick, setHarnessSwitchPick] = useState("");
   const [messages, setMessages] = useState<RoomMessage[]>([]);
   const [filter, setFilter] = useState<"all" | InitiativeStatus>("all");
   const [stageCatalog, setStageCatalog] = useState<PipelineStageInfo[]>([]);
@@ -130,6 +129,7 @@ export default function App() {
   const [crewOpen, setCrewOpen] = useState(false);
   const [lootOpen, setLootOpen] = useState(false);
   const [briefOpen, setBriefOpen] = useState(false);
+  const [chatFullscreen, setChatFullscreen] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [booted, setBooted] = useState(false);
@@ -242,12 +242,23 @@ export default function App() {
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
     localStorage.setItem(THEME_STORAGE_KEY, theme);
-    localStorage.removeItem("rally_theme");
   }, [theme]);
 
   useEffect(() => {
+    if (!chatFullscreen) return;
+    const onKey = (e: Event) => {
+      if ((e as globalThis.KeyboardEvent).key === "Escape") setChatFullscreen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = "";
+    };
+  }, [chatFullscreen]);
+
+  useEffect(() => {
     localStorage.setItem(BG_STORAGE_KEY, bgUrl);
-    localStorage.removeItem("rally_bg");
     document.documentElement.classList.toggle("has-art-bg", Boolean(bgUrl));
     return () => document.documentElement.classList.remove("has-art-bg");
   }, [bgUrl]);
@@ -555,7 +566,7 @@ export default function App() {
   }, [items, filter]);
 
   useEffect(() => {
-    lsSet("sortie_lang", lang, "rally_lang");
+    lsSet("sortie_lang", lang);
   }, [lang]);
 
   useEffect(() => {
@@ -571,7 +582,7 @@ export default function App() {
       .then(setUser)
       .catch(() => {
         setToken("");
-        lsRemove("sortie_token", "rally_token");
+        lsRemove("sortie_token");
       });
   }, [token]);
 
@@ -633,7 +644,6 @@ export default function App() {
 
   useEffect(() => {
     setHarnessPick(String(selected?.harness || ""));
-    setHarnessSwitchPick("");
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sync on mission change
   }, [selected?.id, selected?.harness]);
 
@@ -718,7 +728,7 @@ export default function App() {
         method: "POST",
         body: JSON.stringify(loginForm),
       });
-      lsSet("sortie_token", data.token, "rally_token");
+      lsSet("sortie_token", data.token);
       setToken(data.token);
       setUser(data.user);
       setView("home");
@@ -735,7 +745,7 @@ export default function App() {
     } catch {
       /* ignore */
     }
-    lsRemove("sortie_token", "rally_token");
+    lsRemove("sortie_token");
     setToken("");
     setUser(null);
     setView("home");
@@ -1999,10 +2009,22 @@ export default function App() {
             (inspectStage.id !== selected.current_stage || selected.status === "done")
           ) && (
           <div className={`room-layout ${crewOpen || lootOpen || briefOpen ? "with-side" : "solo"}`}>
-            <section className="panel chat-panel">
-              <div className="panel-label">
-                {tr("squadChat")} · {tr("squadChatHint")}
-              </div>
+            <section className={`panel chat-panel${chatFullscreen ? " fullscreen" : ""}`}>
+              {chatFullscreen && (
+                <button
+                  type="button"
+                  className="btn ghost tiny chat-fs-exit"
+                  onClick={() => setChatFullscreen(false)}
+                  title={lang === "zh" ? "退出全屏 (Esc)" : "Exit fullscreen (Esc)"}
+                >
+                  ⤡ {lang === "zh" ? "退出全屏" : "Exit"}
+                </button>
+              )}
+              <div className="chat-head">
+                <div className="panel-label">
+                  {tr("squadChat")} · {tr("squadChatHint")}
+                </div>
+                <div className="chat-head-tools">
               <div className="room-dock">
                 <button
                   type="button"
@@ -2037,6 +2059,19 @@ export default function App() {
                   BRIEF
                 </button>
               </div>
+                  <button
+                    type="button"
+                    className="btn ghost tiny chat-fs-btn"
+                    onClick={() => {
+                      playSfx("toggle");
+                      setChatFullscreen(true);
+                    }}
+                    title={lang === "zh" ? "全屏查看 (Esc 退出)" : "Fullscreen (Esc to exit)"}
+                  >
+                    ⛶
+                  </button>
+                </div>
+              </div>
               <div className="participants" title={tr("discussToggleHint")}>
                 {(selected.participants || []).map((p) => {
                   const on = p.discussing !== false;
@@ -2057,20 +2092,41 @@ export default function App() {
                 })}
               </div>
               <div className="chat-log">
-                {messages.map((m) => (
-                  <div key={m.id} className={`bubble ${m.actor_kind} type-${m.msg_type}`}>
-                    <div className="bubble-meta">
-                      <strong>{m.actor_name}</strong>
-                      {m.role ? <span>{m.role}</span> : null}
-                      <span>{displayTime(m.at)}</span>
+                {messages.map((m) => {
+                  const isSys =
+                    m.msg_type === "system" ||
+                    m.msg_type === "stage" ||
+                    m.actor_kind === "system";
+                  if (isSys) {
+                    return (
+                      <div key={m.id} className="wire sys">
+                        <span className="sysline">
+                          {m.text}
+                          <span className="sys-time"> · {displayTime(m.at)}</span>
+                        </span>
+                      </div>
+                    );
+                  }
+                  return (
+                    <div key={m.id} className={`wire ${m.actor_kind} type-${m.msg_type}`}>
+                      <div className="byline">
+                        <div className="who">
+                          <span className={`dot ${m.actor_kind}`} />
+                          {m.actor_name}
+                        </div>
+                        {m.role ? <div className="what">{m.role}</div> : null}
+                        <div className="when">{displayTime(m.at)}</div>
+                      </div>
+                      <div className="copy">
+                        {m.msg_type === "chat" || m.msg_type === "stage" || m.msg_type === "consult" || m.msg_type === "consult_reply" ? (
+                          <MarkdownPreview text={m.text} />
+                        ) : (
+                          <pre>{m.text}</pre>
+                        )}
+                      </div>
                     </div>
-                    {m.msg_type === "chat" || m.msg_type === "stage" || m.msg_type === "consult" || m.msg_type === "consult_reply" ? (
-                      <MarkdownPreview text={m.text} />
-                    ) : (
-                      <pre>{m.text}</pre>
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
                 <div ref={chatEndRef} />
               </div>
               {selected.status === "waiting_hitl" && selected.pending_hitl && (
@@ -2084,36 +2140,6 @@ export default function App() {
                   <button type="button" className="btn" disabled={busy} onClick={() => submitHitl("reject")}>
                     {tr("reject")}
                   </button>
-                  {(!selected.pending_hitl.allowed_actions ||
-                    selected.pending_hitl.allowed_actions.includes("switch_harness")) && (
-                    <>
-                      <select
-                        value={harnessSwitchPick}
-                        disabled={busy || harnesses.length === 0}
-                        onChange={(e) => setHarnessSwitchPick(e.target.value)}
-                      >
-                        <option value="">{tr("harnessSwitchTarget")}…</option>
-                        {harnesses
-                          .filter((h) => h.name !== selected.harness)
-                          .map((h) => (
-                            <option key={h.name} value={h.name}>
-                              {h.label} ({h.available ? tr("harnessAvailable") : tr("harnessUnavailable")})
-                            </option>
-                          ))}
-                      </select>
-                      <button
-                        type="button"
-                        className="btn"
-                        disabled={busy || !harnessSwitchPick}
-                        onClick={() => {
-                          void submitHitl("switch_harness", harnessSwitchPick);
-                          setHarnessSwitchPick("");
-                        }}
-                      >
-                        {tr("harnessSwitch")}
-                      </button>
-                    </>
-                  )}
                 </div>
               )}
               <ChatComposer
