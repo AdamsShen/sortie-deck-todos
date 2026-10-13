@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="ink">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>方案 B · 指挥舱角色声道 — Sortie Deck 聊天重设计</title>
+<style>
+  :root[data-theme="ink"] {
+    --void: #171a21; --deep: #1c2029; --panel: #20242d; --panel-2: #262b35;
+    --line: #32363f; --line-hot: #454a55;
+    --text: #ece9e1; --muted: #8b8a80;
+    --signal: #3fd68f; --copper: #7b96f0; --ice: #9fb4e8; --danger: #e57760;
+  }
+  :root[data-theme="paper"] {
+    --void: #f6f9fc; --deep: #edf1f7; --panel: #ffffff; --panel-2: #f8fafd;
+    --line: #e3e8ee; --line-hot: #cbd2dc;
+    --text: #1a1f36; --muted: #697386;
+    --signal: #0e9f6e; --copper: #3b5bdb; --ice: #6e8be8; --danger: #c9503a;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+    background: var(--void); color: var(--text);
+    padding: 32px 0 64px;
+  }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+
+  .demo-head {
+    max-width: 860px; margin: 0 auto 28px; padding: 0 24px;
+    display: flex; align-items: baseline; justify-content: space-between; gap: 16px;
+  }
+  .demo-head h1 { font-size: 15px; font-weight: 600; }
+  .demo-head h1 em { font-style: normal; color: var(--muted); font-weight: 400; }
+  .theme-toggle {
+    border: 1px solid var(--line); background: none; color: var(--muted);
+    font-family: ui-monospace, Menlo, monospace; font-size: 11px;
+    padding: 5px 12px; border-radius: 6px; cursor: pointer;
+  }
+  .theme-toggle:hover { color: var(--text); border-color: var(--line-hot); }
+
+  .stream { max-width: 860px; margin: 0 auto; padding: 4px 24px; display: flex; flex-direction: column; gap: 4px; }
+
+  /* ── 系统事件行：压缩成一行"事件流"，不占气泡 ── */
+  .ev {
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 12px 7px 64px; /* 左对齐到内容列 */
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 10.5px; color: var(--muted); letter-spacing: 0.04em;
+  }
+  .ev::before {
+    content: ""; width: 18px; height: 1px; background: var(--line-hot); flex: none;
+  }
+  .ev code {
+    font-family: inherit; background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px;
+  }
+  .ev .t { margin-left: auto; opacity: 0.6; }
+
+  /* ── 角色消息：左轨身份 + 内容面板 ── */
+  .msg {
+    display: grid; grid-template-columns: 52px 1fr; gap: 12px;
+    padding: 8px 0;
+    animation: rise .45s ease both;
+  }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+
+  .avatar {
+    width: 40px; height: 40px; border-radius: 10px;
+    display: grid; place-items: center;
+    font-family: "Songti SC", Georgia, serif;
+    font-size: 17px; font-weight: 700;
+    border: 1px solid; margin-top: 2px;
+  }
+  /* 每个角色一个确定性色相：低饱和、同一明度，不抢正文 */
+  .avatar.r1 { color: #4fd1a5; border-color: color-mix(in srgb, #4fd1a5 45%, transparent); background: color-mix(in srgb, #4fd1a5 12%, var(--panel)); }
+  .avatar.r2 { color: #7b96f0; border-color: color-mix(in srgb, #7b96f0 45%, transparent); background: color-mix(in srgb, #7b96f0 12%, var(--panel)); }
+  .avatar.r3 { color: #e0a458; border-color: color-mix(in srgb, #e0a458 45%, transparent); background: color-mix(in srgb, #e0a458 12%, var(--panel)); }
+  :root[data-theme="paper"] .avatar.r1 { background: color-mix(in srgb, #0e9f6e 10%, #fff); color: #0b7d55; }
+  :root[data-theme="paper"] .avatar.r2 { background: color-mix(in srgb, #3b5bdb 10%, #fff); color: #2f4ab8; }
+  :root[data-theme="paper"] .avatar.r3 { background: color-mix(in srgb, #b06f1e 10%, #fff); color: #96591a; }
+
+  .body { min-width: 0; }
+  .head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+  .name { font-size: 13px; font-weight: 650; letter-spacing: 0.02em; }
+  .role-tag {
+    font-family: ui-monospace, Menlo, monospace; font-size: 9.5px;
+    letter-spacing: 0.1em; padding: 1px 6px; border-radius: 4px;
+    border: 1px solid var(--line); color: var(--muted);
+  }
+  .node-tag {
+    font-family: ui-monospace, Menlo, monospace; font-size: 9.5px;
+    color: var(--signal); border: 1px solid color-mix(in srgb, var(--signal) 40%, transparent);
+    padding: 1px 6px; border-radius: 4px;
+  }
+  .when { font-family: ui-monospace, Menlo, monospace; font-size: 10px; color: var(--muted); margin-left: auto; }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 12px 14px;
+    font-size: 13px; line-height: 1.7; max-width: 66ch;
+  }
+  :root[data-theme="paper"] .card { background: #fff; }
+  .card p + p { margin-top: 8px; }
+  .card code, .card .chip {
+    font-family: ui-monospace, Menlo, monospace; font-size: 11.5px;
+    background: var(--panel-2); border: 1px solid var(--line);
+    padding: 1px 6px; border-radius: 4px; white-space: nowrap;
+  }
+  .card .lead { font-weight: 650; }
+  .card ol { margin: 8px 0 0 1.4em; display: grid; gap: 4px; }
+  .card li::marker { color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+
+  /* 人类消息：无卡片，直接排版，右对齐色标区分 */
+  .msg.human .card { background: none; border: none; padding: 2px 0 0; }
+  .msg.human .name { color: var(--ice); }
+
+  /* ── HITL 门禁：全宽高亮块，唯一"重"元素 ── */
+  .gate {
+    margin: 10px 0; padding: 16px 18px;
+    border: 1px solid color-mix(in srgb, var(--copper) 55%, transparent);
+    border-radius: 12px;
+    background: linear-gradient(160deg, color-mix(in srgb, var(--copper) 10%, var(--panel)), var(--panel));
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  }
+  .gate .g-label {
+    font-family: ui-monospace, Menlo, monospace; font-size: 10px;
+    letter-spacing: 0.16em; color: var(--copper);
+    border: 1px solid color-mix(in srgb, var(--copper) 50%, transparent);
+    padding: 3px 8px; border-radius: 5px;
+  }
+  .gate .g-text { font-size: 13px; font-weight: 600; }
+  .gate .g-text code {
+    font-family: ui-monospace, Menlo, monospace; font-size: 11.5px;
+    background: var(--panel-2); border: 1px solid var(--line);
+    padding: 1px 6px; border-radius: 4px;
+  }
+  .gate .g-actions { margin-left: auto; display: flex; gap: 8px; }
+  .g-btn {
+    font-size: 12.5px; padding: 7px 18px; border-radius: 7px; cursor: pointer;
+    border: 1px solid var(--line-hot); background: none; color: var(--text);
+  }
+  .g-btn.primary { background: var(--signal); border-color: var(--signal); color: #0b120e; font-weight: 650; }
+  .g-btn.primary:hover { filter: brightness(1.08); }
+
+  /* 连续同人消息合并：后续消息头像列留空 */
+  .msg.follow { grid-template-columns: 52px 1fr; }
+  .msg.follow .avatar { visibility: hidden; height: 0; margin: 0; }
+</style>
+</head>
+<body>
+  <header class="demo-head">
+    <h1>方案 B · 指挥舱角色声道 <em>— 角色色轨 + 事件流压缩，系统消息一行带过</em></h1>
+    <button class="theme-toggle" onclick="const r=document.documentElement;r.dataset.theme=r.dataset.theme==='ink'?'paper':'ink'">切换 浅色/暗色</button>
+  </header>
+
+  <main class="stream">
+
+    <div class="ev">节点 <code>qa_cases</code> 上游游确认结束 · 继续执行 <span class="t">17:30:32</span></div>
+
+    <!-- HITL -->
+    <div class="gate">
+      <span class="g-label">HITL GATE</span>
+      <span class="g-text">阶段 <code>qa_cases</code> 等待真人确认</span>
+      <span class="g-actions">
+        <button class="g-btn primary">放行</button>
+        <button class="g-btn">打回</button>
+      </span>
+    </div>
+
+    <!-- 人类 -->
+    <div class="msg human">
+      <div class="avatar r2">A</div>
+      <div class="body">
+        <div class="head">
+          <span class="name">Admin</span>
+          <span class="role-tag">COMMANDER</span>
+          <span class="when">17:30:37</span>
+        </div>
+        <div class="card mono" style="font-size:12.5px;">「/approve」</div>
+      </div>
+    </div>
+
+    <!-- Agent -->
+    <div class="msg">
+      <div class="avatar r1">B</div>
+      <div class="body">
+        <div class="head">
+          <span class="name">Backend Raider</span>
+          <span class="role-tag">ENG_BACKEND</span>
+          <span class="node-tag">eng_backend_tech_design</span>
+          <span class="when">17:27:28</span>
+        </div>
+        <div class="card">
+          <p>发起上下游确认：PRD 只给了产品目标与成功指标，未给出打招呼首条消息的文案来源；design 仅『Align with PRD flows』，未细化后端契约；consult_log 中 QA 已就「发送接口/错误码语义」向 eng 提问，说明契约未定。</p>
+          <p><span class="lead">两个关键前置</span>：① 打招呼文案是固定一条还是按角色配置模板——决定后端是否新增枚举级模板数据模型；② 成功指标「打招呼后续聊」的统计口径——是否需在消息上标记「经打招呼按钮发出」，决定消息模型是否加 <code>source/trigger</code> 字段及埋点方案。这两点未确认前无法产出确定的接口与数据设计，致需咨询 product。</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 同人连续消息：合并，头像列留空 -->
+    <div class="msg follow">
+      <div class="avatar r1"></div>
+      <div class="body">
+        <div class="head">
+          <span class="name" style="font-size:11.5px;color:var(--muted);">Backend Raider · 续</span>
+          <span class="when">17:27:30</span>
+        </div>
+        <div class="card" style="font-size:12.5px;color:var(--muted);">已同步等待 product 回复，本节点挂起。</div>
+      </div>
+    </div>
+
+    <div class="ev">Sortie 转交本阶段给 <code>product</code> <span class="t">17:29:02</span></div>
+
+    <!-- 另一 Agent，不同色 -->
+    <div class="msg">
+      <div class="avatar r3">P</div>
+      <div class="body">
+        <div class="head">
+          <span class="name">PRD Scout</span>
+          <span class="role-tag">PRODUCT</span>
+          <span class="node-tag">brief</span>
+          <span class="when">17:30:32</span>
+        </div>
+        <div class="card">
+          <p class="lead">产品决策：内联失败提示 + 手动重发，不做自动重试。</p>
+          <p>理由：打招呼消息极短、低风险，重试收益小且有重复发送风险；用户重发成本仅一次点击。防双击靠接口契约保障——点击后按钮即禁用到收到响应。</p>
+          <p><span class="lead">验收点（AC2 落地）：</span></p>
+          <ol>
+            <li>点击即乐观上屏，气泡标记"发送中"。</li>
+            <li>失败后：气泡内显失败原因 + 重发按钮；重复复用同一消息与等待 ID，服务端去重。</li>
+            <li>不做自动重试，不静默丢消息。</li>
+            <li>4xx（权限/会话失效）时不提供重发，改提示"请刷新页面"。</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</body>
+</html>

@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="ink">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>方案 A · 通讯社线稿流 — Sortie Deck 聊天重设计</title>
+<style>
+  :root[data-theme="ink"] {
+    --void: #171a21; --deep: #1c2029; --panel: #20242d; --panel-2: #262b35;
+    --line: #32363f; --line-hot: #454a55;
+    --text: #ece9e1; --muted: #8b8a80;
+    --signal: #3fd68f; --copper: #7b96f0; --ice: #9fb4e8; --danger: #e57760;
+  }
+  :root[data-theme="paper"] {
+    --void: #f6f9fc; --deep: #edf1f7; --panel: #ffffff; --panel-2: #f8fafd;
+    --line: #e3e8ee; --line-hot: #cbd2dc;
+    --text: #1a1f36; --muted: #697386;
+    --signal: #0e9f6e; --copper: #3b5bdb; --ice: #6e8be8; --danger: #c9503a;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+    background: var(--void); color: var(--text);
+    padding: 32px 0 64px;
+  }
+  .serif { font-family: "Songti SC", "Noto Serif SC", Georgia, serif; }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+
+  /* ── demo chrome ─────────────────────────────── */
+  .demo-head {
+    max-width: 880px; margin: 0 auto 28px; padding: 0 24px;
+    display: flex; align-items: baseline; justify-content: space-between; gap: 16px;
+  }
+  .demo-head h1 { font-size: 15px; font-weight: 600; letter-spacing: 0.02em; }
+  .demo-head h1 em { font-style: normal; color: var(--muted); font-weight: 400; }
+  .theme-toggle {
+    border: 1px solid var(--line); background: none; color: var(--muted);
+    font-family: ui-monospace, Menlo, monospace; font-size: 11px;
+    padding: 5px 12px; border-radius: 6px; cursor: pointer;
+  }
+  .theme-toggle:hover { color: var(--text); border-color: var(--line-hot); }
+
+  /* ── the feed ────────────────────────────────── */
+  .feed {
+    max-width: 880px; margin: 0 auto; padding: 8px 24px;
+  }
+
+  /* 通讯条目：无气泡盒子，纯排版块 + 细分隔线 */
+  .wire {
+    padding: 18px 0 20px;
+    border-bottom: 1px solid var(--line);
+    display: grid;
+    grid-template-columns: 148px 1fr;
+    gap: 20px;
+    animation: rise .5s ease both;
+  }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+
+  /* 报头列：作者署名 + 时间 */
+  .byline { text-align: right; padding-top: 2px; }
+  .byline .who {
+    font-family: "Songti SC", "Noto Serif SC", Georgia, serif;
+    font-size: 15px; font-weight: 700; letter-spacing: 0.04em;
+    display: flex; align-items: center; justify-content: flex-end; gap: 7px;
+  }
+  .who .dot {
+    width: 7px; height: 7px; border-radius: 50%; flex: none;
+  }
+  .byline .what {
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 10.5px; color: var(--muted); margin-top: 5px; letter-spacing: 0.06em;
+  }
+  .byline .when {
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 10.5px; color: var(--muted); margin-top: 3px; opacity: 0.7;
+  }
+
+  /* 正文：最大可读行宽 */
+  .copy { max-width: 62ch; font-size: 13.5px; line-height: 1.75; }
+  .copy p + p { margin-top: 8px; }
+  .copy strong { font-weight: 650; }
+  .copy .lead { font-weight: 600; }
+  .copy code, .copy .chip {
+    font-family: ui-monospace, Menlo, monospace; font-size: 11.5px;
+    background: var(--panel-2); border: 1px solid var(--line);
+    padding: 1px 6px; border-radius: 4px; white-space: nowrap;
+  }
+  .copy ol { margin: 8px 0 0 1.4em; display: grid; gap: 4px; }
+  .copy li::marker { color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+
+  /* 语义点色 */
+  .dot.agent { background: var(--signal); }
+  .dot.human { background: var(--ice); }
+  .dot.sys   { background: var(--copper); }
+
+  /* 系统消息 → 中缝「分栏线」条目，几乎零存在感 */
+  .wire.sys {
+    display: flex; align-items: center; gap: 14px;
+    padding: 10px 0; border-bottom: none;
+  }
+  .wire.sys::before, .wire.sys::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+  .wire.sys .sysline {
+    font-family: ui-monospace, Menlo, monospace; font-size: 10.5px;
+    color: var(--muted); letter-spacing: 0.05em; white-space: nowrap;
+  }
+  .wire.sys .sysline code {
+    font-family: inherit; background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px;
+  }
+
+  /* HITL 门禁 → 报眼加框特写，唯一允许的"重"元素 */
+  .wire.gate { border-bottom: none; }
+  .gate-card {
+    border: 1px solid var(--copper);
+    background: color-mix(in srgb, var(--copper) 7%, var(--panel));
+    border-radius: 8px; padding: 14px 16px;
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  }
+  .gate-card .g-tag {
+    font-family: ui-monospace, Menlo, monospace; font-size: 11px;
+    color: var(--copper); letter-spacing: 0.1em;
+  }
+  .gate-card .g-stage { font-size: 13px; font-weight: 600; }
+  .gate-card .g-actions { margin-left: auto; display: flex; gap: 8px; }
+  .g-btn {
+    font-size: 12px; padding: 6px 16px; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--line-hot); background: none; color: var(--text);
+  }
+  .g-btn.primary { background: var(--signal); border-color: var(--signal); color: #0b120e; font-weight: 600; }
+
+  /* 打回理由条目 */
+  .wire.human .who { color: var(--ice); }
+  .wire.agent .who { color: var(--text); }
+</style>
+</head>
+<body>
+  <header class="demo-head">
+    <h1 class="mono">方案 A · 通讯社线稿流 <em>— 去气泡，编辑部排版，系统消息退成分栏线</em></h1>
+    <button class="theme-toggle" onclick="const r=document.documentElement;r.dataset.theme=r.dataset.theme==='ink'?'paper':'ink'">切换 浅色/暗色</button>
+  </header>
+
+  <main class="feed">
+
+    <!-- 系统事件：分栏线 -->
+    <div class="wire sys">
+      <span class="sysline">节点 <code>qa_cases</code> 上游游确认结束 · thread <code>csl_8d059cb5db9l</code> · 继续执行</span>
+    </div>
+
+    <!-- HITL 门禁 -->
+    <div class="wire gate">
+      <div class="byline">
+        <div class="who"><span class="dot sys"></span>指挥官门禁</div>
+        <div class="what">HITL · STAGE</div>
+        <div class="when">17:30:32</div>
+      </div>
+      <div class="gate-card">
+        <span class="g-tag">GATE</span>
+        <span class="g-stage">【门禁】阶段 <code>qa_cases</code> 等待真人确认</span>
+        <span class="g-actions">
+          <button class="g-btn primary">放行</button>
+          <button class="g-btn">打回</button>
+        </span>
+      </div>
+    </div>
+
+    <!-- 人类决策 -->
+    <div class="wire human">
+      <div class="byline">
+        <div class="who"><span class="dot human"></span>Admin</div>
+        <div class="what">COMMANDER</div>
+        <div class="when">17:30:37</div>
+      </div>
+      <div class="copy serif" style="font-size:14.5px;">「/approve」</div>
+    </div>
+
+    <!-- Agent 汇报 -->
+    <div class="wire agent">
+      <div class="byline">
+        <div class="who"><span class="dot agent"></span>Backend Raider</div>
+        <div class="what">ENG_BACKEND</div>
+        <div class="when">17:27:28</div>
+      </div>
+      <div class="copy">
+        <p><span class="chip">eng_backend_tech_design</span> 在节点 <span class="chip">eng_backend_tech_design</span> 发起上下游确认：PRD 只给了产品目标与成功指标，未给出打招呼首条消息的文案来源；design 仅『Align with PRD flows』，未细化后端契约；consult_log 中 QA 已就「发送接口/错误码语义」向 eng 提问，说明契约未定。</p>
+        <p><span class="lead">两个关键前置</span>：① 打招呼文案是固定一条还是按角色配置模板——决定后端是否新增枚举级模板数据模型；② 成功指标「打招呼后续聊」的统计口径——是否需在消息上标记「经打招呼按钮发出」，决定消息模型是否加 <code>source/trigger</code> 字段及埋点方案。这两点未确认前无法产出确定的接口与数据设计，致需咨询 product。</p>
+      </div>
+    </div>
+
+    <!-- 系统事件 -->
+    <div class="wire sys">
+      <span class="sysline">Sortie 转交本阶段给 <code>product</code></span>
+    </div>
+
+    <!-- Agent 决策 -->
+    <div class="wire agent">
+      <div class="byline">
+        <div class="who"><span class="dot agent"></span>PRD Scout</div>
+        <div class="what">PRODUCT</div>
+        <div class="when">17:30:32</div>
+      </div>
+      <div class="copy">
+        <p class="lead">产品决策：内联失败提示 + 手动重发，不做自动重试。</p>
+        <p>理由：打招呼消息极短、低风险，重试收益小且有重复发送风险；用户重发成本仅一次点击。防双击靠接口契约保障——点击后按钮即禁用到收到响应。</p>
+        <p><strong>验收点（AC2 落地）：</strong></p>
+        <ol>
+          <li>点击即乐观上屏，气泡标记"发送中"。</li>
+          <li>失败后：气泡内显失败原因 + 重发按钮；重复复用同一消息与等待 ID，服务端去重。</li>
+          <li>不做自动重试，不静默丢消息。</li>
+          <li>4xx（权限/会话失效）时不提供重发，改提示"请刷新页面"。</li>
+        </ol>
+        <p style="margin-top:8px;">依赖项：eng 需先确认发送接口契约（幂等键、错误码语义），QA 据此设计用例；建议同步将失败埋点（错误码分布）纳入 AC2，以便后续调优。门禁通过后可 <code>/start</code> 继续下游。</p>
+      </div>
+    </div>
+
+    <div class="wire sys" style="border-bottom:none;">
+      <span class="sysline">— 线稿止 —</span>
+    </div>
+  </main>
+</body>
+</html>
