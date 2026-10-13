@@ -1,13 +1,12 @@
 import { useEffect, useRef } from "react";
 
-type Ripple = { id: number; x: number; y: number; kind: "hover" | "scroll" };
+type Ripple = { id: number; x: number; y: number; kind: "scroll" };
 
 const MAX_RIPPLES = 14;
 
 export function RippleField({ enabled }: { enabled: boolean }) {
   const layerRef = useRef<HTMLDivElement | null>(null);
   const idRef = useRef(0);
-  const lastHover = useRef(0);
   const lastScroll = useRef(0);
 
   useEffect(() => {
@@ -26,16 +25,10 @@ export function RippleField({ enabled }: { enabled: boolean }) {
       while (layer.childElementCount > MAX_RIPPLES) {
         layer.firstElementChild?.remove();
       }
-      window.setTimeout(() => el.remove(), kind === "scroll" ? 1100 : 900);
+      window.setTimeout(() => el.remove(), 1100);
     };
 
-    const onMove = (ev: PointerEvent) => {
-      const now = performance.now();
-      if (now - lastHover.current < 90) return;
-      lastHover.current = now;
-      spawn(ev.clientX, ev.clientY, "hover");
-    };
-
+    // 仅保留滚动涟漪；鼠标移动的光晕效果已按需求移除
     const onWheel = (ev: WheelEvent) => {
       const now = performance.now();
       if (now - lastScroll.current < 120) return;
@@ -46,10 +39,8 @@ export function RippleField({ enabled }: { enabled: boolean }) {
       spawn(x + (Math.random() * 80 - 40), y + (Math.random() * 60 - 30), "scroll");
     };
 
-    window.addEventListener("pointermove", onMove, { passive: true });
     window.addEventListener("wheel", onWheel, { passive: true });
     return () => {
-      window.removeEventListener("pointermove", onMove);
       window.removeEventListener("wheel", onWheel);
       layer.replaceChildren();
     };
