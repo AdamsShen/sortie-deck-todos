@@ -58,7 +58,8 @@ async def test_pipeline_hitl_and_qa_loop(tmp_path):
             if ini.status.value == "waiting_hitl":
                 break
         assert ini.pending_hitl is not None
-        assert ini.pending_hitl.stage == "design_ui"
+        # PRD gate is followed by the new eng_tech_design review gate
+        assert ini.pending_hitl.stage == "eng_tech_design"
 
         ini = await orch.submit_hitl(ini.id, HitlDecision(action=HitlAction.APPROVE))
         for _ in range(40):
@@ -68,7 +69,7 @@ async def test_pipeline_hitl_and_qa_loop(tmp_path):
             if ini.status.value == "waiting_hitl":
                 break
         assert ini.pending_hitl is not None
-        assert ini.pending_hitl.stage in {"qa_verify", "deploy_preview"}
+        assert ini.pending_hitl.stage in {"design_ui", "qa_verify", "deploy_preview"}
 
         for _ in range(10):
             ini = orch.get(ini.id)

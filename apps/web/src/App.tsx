@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { api } from "./api";
+import { api, listHarnesses, updateInitiativeHarness } from "./api";
 import { OperatorChip } from "./components/OperatorChip";
 import { PipelineEditor } from "./components/PipelineEditor";
 import { ChatComposer, type MentionOption } from "./components/ChatComposer";
@@ -8,9 +8,11 @@ import { MissionBriefingChat } from "./components/MissionBriefingChat";
 import { RoleAvatar, AVATAR_PRESET_OPTIONS } from "./components/RoleAvatar";
 import { StageInspect } from "./components/StageInspect";
 import { PipelineRail, railFromInitiative } from "./components/PipelineRail";
+import { ForgeReview } from "./components/ForgeReview";
+import { SubRoomPanel } from "./components/SubRoomPanel";
+import { DecisionCenter } from "./components/DecisionCenter";
 import { unlockSfx, playSfx, loadSfxMuted, setSfxMuted, loadBgmMuted, setBgmMuted, startBgm } from "./sfx";
 import { categoryLabel, statusLabel, t, type I18nKey } from "./i18n";
-import { RippleField } from "./RippleField";
 import { lsGet, lsRemove, lsSet } from "./storage";
 import {
   BG_STORAGE_KEY,
@@ -24,6 +26,7 @@ import {
 import type {
   AgentSlot,
   Dashboard,
+  HarnessInfo,
   Initiative,
   InitiativeStatus,
   KnowledgeCategory,
@@ -108,6 +111,9 @@ export default function App() {
   const [dash, setDash] = useState<Dashboard | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<Initiative | null>(null);
+  const [harnesses, setHarnesses] = useState<HarnessInfo[]>([]);
+  const [harnessPick, setHarnessPick] = useState("");
+  const [harnessSwitchPick, setHarnessSwitchPick] = useState("");
   const [messages, setMessages] = useState<RoomMessage[]>([]);
   const [filter, setFilter] = useState<"all" | InitiativeStatus>("all");
   const [stageCatalog, setStageCatalog] = useState<PipelineStageInfo[]>([]);
@@ -200,8 +206,6 @@ export default function App() {
   const [bgUrl, setBgUrl] = useState(() => loadBackground());
   const [bgDraft, setBgDraft] = useState(() => loadBackground());
   const [themeOpen, setThemeOpen] = useState(false);
-  const [rippleOn, setRippleOn] = useState(() => lsGet("sortie_ripple", "rally_ripple") !== "0");
-  const [reduceMotion, setReduceMotion] = useState(false);
   const [toolkitTab, setToolkitTab] = useState<ToolkitKind>("tool");
   const [toolkitCategory, setToolkitCategory] = useState<string>("");
   const [toolkitQuery, setToolkitQuery] = useState("");
@@ -256,18 +260,6 @@ export default function App() {
       window.removeEventListener("pointerdown", unlock, true);
       window.removeEventListener("keydown", unlock, true);
     };
-  }, []);
-
-  useEffect(() => {
-    lsSet("sortie_ripple", rippleOn ? "1" : "0", "rally_ripple");
-  }, [rippleOn]);
-
-  useEffect(() => {
-    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const sync = () => setReduceMotion(mq.matches);
-    sync();
-    mq.addEventListener("change", sync);
-    return () => mq.removeEventListener("change", sync);
   }, []);
 
   function applyBgUrl() {
@@ -348,7 +340,6 @@ export default function App() {
       ) : (
         <div className="art-scrim" />
       )}
-      <RippleField enabled={rippleOn && !reduceMotion} />
     </div>
   );
 
@@ -398,8 +389,6 @@ export default function App() {
                   playSfx("whoosh");
                   setBgUrl(bg.src);
                   setBgDraft(bg.src);
-                  // Anime art reads better with ice accents than acid green
-                  if (theme === "signal") setTheme("ice");
                 }}
                 title={lang === "zh" ? bg.labelZh : bg.labelEn}
               >
@@ -440,10 +429,6 @@ export default function App() {
             hidden
             onChange={(e) => onBgFile(e.target.files?.[0])}
           />
-          <label className="theme-toggle">
-            <input type="checkbox" checked={rippleOn} onChange={(e) => setRippleOn(e.target.checked)} />
-            {tr("themeFx")}
-          </label>
           <label className="theme-toggle">
             <input
               type="checkbox"
@@ -631,6 +616,43 @@ export default function App() {
     }
     prevArtCountRef.current = artCount;
   }, [selectedId, artCount]);
+
+  // Agent harness providers + the mission's current pick (draft selector state)
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    listHarnesses(token)
+      .then((res) => {
+        if (!cancelled) setHarnesses(res.harnesses || []);
+      })
+      .catch(() => setHarnesses([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  useEffect(() => {
+    setHarnessPick(String(selected?.harness || ""));
+    setHarnessSwitchPick("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sync on mission change
+  }, [selected?.id, selected?.harness]);
+
+  const harnessLocked = Boolean(selected?.harness_locked) && selected?.status !== "draft";
+
+  async function saveHarness(harness: string) {
+    if (!selectedId || !harness) return;
+    setBusy(true);
+    try {
+      const data = await updateInitiativeHarness(token, selectedId, harness);
+      setDetail(data);
+      await refreshList();
+    } catch (err) {
+      setError(errMsg(err));
+      playSfx("warn");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (!token || !selectedId || (!lootOpen && view !== "squad")) return;
@@ -861,14 +883,14 @@ export default function App() {
     }
   }, [selected?.id, selected?.meta?.pipeline_specs, selected?.meta?.pipeline_confirmed, pipelineEditing]);
 
-  async function submitHitl(action: string) {
+  async function submitHitl(action: string, harness?: string) {
     setBusy(true);
     playSfx(action === "approve" ? "gate" : "warn");
     try {
       const data = await api<Initiative>(`/api/initiatives/${selectedId}/hitl`, {
         token,
         method: "POST",
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ action, harness: harness || null }),
       });
       setDetail(data);
       await refreshList();
@@ -1629,6 +1651,39 @@ export default function App() {
           >
             {tr("toolkit")}
           </button>
+          <button
+            type="button"
+            className={view === "forge" ? "on" : ""}
+            onClick={() => {
+              unlockSfx();
+              playSfx("whoosh");
+              setView("forge");
+            }}
+          >
+            {tr("forge")}
+          </button>
+          <button
+            type="button"
+            className={view === "subrooms" ? "on" : ""}
+            onClick={() => {
+              unlockSfx();
+              playSfx("whoosh");
+              setView("subrooms");
+            }}
+          >
+            {tr("subrooms")}
+          </button>
+          <button
+            type="button"
+            className={view === "decisions" ? "on" : ""}
+            onClick={() => {
+              unlockSfx();
+              playSfx("whoosh");
+              setView("decisions");
+            }}
+          >
+            {tr("decisions")}
+          </button>
           {user.role === "admin" && (
             <button
               type="button"
@@ -1816,6 +1871,36 @@ export default function App() {
                 {selected.meta?.pipeline_track ? ` · ${String(selected.meta.pipeline_track)}` : ""}
               </p>
               <h2 className="mission-title">{selected.title}</h2>
+              <div className="harness-row" title={tr("harnessDraftHint")}>
+                <span className="panel-label">{tr("harness")}</span>
+                {selected.status === "draft" || selected.status === "stopped" ? (
+                  <>
+                    <select
+                      value={harnessPick}
+                      disabled={busy || harnesses.length === 0}
+                      onChange={(e) => {
+                        setHarnessPick(e.target.value);
+                        void saveHarness(e.target.value);
+                      }}
+                    >
+                      {(harnesses.length
+                        ? harnesses
+                        : [{ name: String(selected.harness || "claude_code"), label: String(selected.harness || "claude_code"), available: true, probe: { status: "ok", detail: "" } }]
+                      ).map((h) => (
+                        <option key={h.name} value={h.name}>
+                          {h.label} ({h.available ? tr("harnessAvailable") : tr("harnessUnavailable")})
+                        </option>
+                      ))}
+                    </select>
+                    {harnessLocked && <span className="st">🔒 {tr("harnessLocked")}</span>}
+                  </>
+                ) : (
+                  <span className="st">
+                    {String(selected.harness || "claude_code")}
+                    {harnessLocked ? ` · 🔒 ${tr("harnessLocked")}` : ""}
+                  </span>
+                )}
+              </div>
             </div>
             <div className="topbar-actions">
               <span className={`st large ${selected.status}`}>{statusLabel(lang, selected.status)}</span>
@@ -1999,6 +2084,36 @@ export default function App() {
                   <button type="button" className="btn" disabled={busy} onClick={() => submitHitl("reject")}>
                     {tr("reject")}
                   </button>
+                  {(!selected.pending_hitl.allowed_actions ||
+                    selected.pending_hitl.allowed_actions.includes("switch_harness")) && (
+                    <>
+                      <select
+                        value={harnessSwitchPick}
+                        disabled={busy || harnesses.length === 0}
+                        onChange={(e) => setHarnessSwitchPick(e.target.value)}
+                      >
+                        <option value="">{tr("harnessSwitchTarget")}…</option>
+                        {harnesses
+                          .filter((h) => h.name !== selected.harness)
+                          .map((h) => (
+                            <option key={h.name} value={h.name}>
+                              {h.label} ({h.available ? tr("harnessAvailable") : tr("harnessUnavailable")})
+                            </option>
+                          ))}
+                      </select>
+                      <button
+                        type="button"
+                        className="btn"
+                        disabled={busy || !harnessSwitchPick}
+                        onClick={() => {
+                          void submitHitl("switch_harness", harnessSwitchPick);
+                          setHarnessSwitchPick("");
+                        }}
+                      >
+                        {tr("harnessSwitch")}
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
               <ChatComposer
@@ -3107,6 +3222,24 @@ export default function App() {
             )}
           </main>
         </div>
+      )}
+
+      {view === "forge" && (
+        <main className="main page-pad">
+          <ForgeReview token={token} lang={lang} />
+        </main>
+      )}
+
+      {view === "subrooms" && (
+        <main className="main page-pad">
+          <SubRoomPanel token={token} lang={lang} initiativeId={selectedId} />
+        </main>
+      )}
+
+      {view === "decisions" && (
+        <main className="main page-pad">
+          <DecisionCenter token={token} lang={lang} />
+        </main>
       )}
 
       {view === "admin" && user.role === "admin" && (

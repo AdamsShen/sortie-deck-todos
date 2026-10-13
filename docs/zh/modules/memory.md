@@ -22,6 +22,15 @@
 类型：`fact` / `preference` / `episode` / `lesson`。  
 `context_block` 在 `create_initiative` 时拼接。
 
+### 2.1 共享后端
+
+`TDT_MEMORY_BACKEND` 选择共享记忆层：`local`（默认）或 `mem0`。选 `mem0`
+时本地存储被包装为 `CompositeMemory`：mission 范围写入镜像到 mem0
+（`TDT_MEM0_BASE_URL` / `TDT_MEM0_API_KEY` / `TDT_MEM0_USER_PREFIX`），检索命中
+并入上下文块，按 `user_id = "<prefix>:<initiative_id>"` 任务级隔离。远端失败
+静默降级本地。任务绑定文件（滚动总结 / 会话转录 / 上下文文件）见
+`mission_memory.py` 与 `harness.md`。
+
 ## 3. 技术方案（目标）
 
 - 近因 × 重要性排序

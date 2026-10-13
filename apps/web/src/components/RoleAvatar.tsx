@@ -48,18 +48,15 @@ export function resolveAvatarRole(avatar?: string | null, role?: string | null):
   return (role || "ops").toLowerCase();
 }
 
-export function resolveAvatarSrc(avatar?: string | null, role?: string | null): string | null {
-  if (!avatar) {
-    const r = (role || "").toLowerCase();
-    return PRESET_SRC[r] || null;
-  }
-  if (avatar.startsWith("preset:")) {
-    return PRESET_SRC[avatar.slice(7)] || PRESET_SRC[(role || "").toLowerCase()] || null;
-  }
+export function resolveAvatarSrc(avatar?: string | null, _role?: string | null): string | null {
+  // Editorial: preset portraits retired — glyph circle is the default.
+  // Only a user-set custom avatar (upload / URL) renders an img.
+  if (!avatar) return null;
+  if (avatar.startsWith("preset:")) return null;
   if (avatar.startsWith("http") || avatar.startsWith("data:") || avatar.startsWith("/")) {
     return avatar;
   }
-  return PRESET_SRC[(role || "").toLowerCase()] || null;
+  return null;
 }
 
 export function RoleAvatar({

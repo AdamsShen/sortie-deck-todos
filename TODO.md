@@ -5,6 +5,29 @@
 
 ---
 
+## 0. 多 Agent 协作（已落地）
+
+本轮已把协作模型从「固定流水线 + 人工预绑工具」升级为「智能组队 + agent 自主协作 + Manager 定向管控 + 人在环兜底」。**Agent 切换本质是图的节点跳转，是唯一路由机制，不保留旧逻辑**（节点间无静态边，条件边消费节点宣布的下一跳，冻结的 plan 只是默认分支）；其余能力默认开启（`subroom_*` / `loadout_auto` / `mcp_call_enabled` / `skill_run_enabled` / `im_escalation`），依赖缺失时各自安全降级，置 `false` 即可关闭。
+
+| 能力 | 落地形态 | 关键位置 |
+|------|----------|----------|
+| 角色契约 | persona front-matter + `AgentContract` + handoff 白名单 | `agent_contract.py`、`templates.py` |
+| 角色开放化 | `RoleId._missing_` 接受任意角色键；`RoleRegistry` 管理内置/persona/自定义 | `roles.py`、`models.py` |
+| 智能组队 | 协作判定 + 缺失角色 forge + 语义去重 + 人工审核发布 | `pipeline_llm.assess_collaboration`、`agent_forge.py` |
+| 自主 handoff | 条件边路由 + 契约校验 + 预算封顶；HITL 不可绕过 | `graph.py` |
+| 汇合决策 | Manager 仅在汇合/冲突/升级时介入 | `manager.py` |
+| plan 冻结 | `plan_digest` 写入与 resume 校验 | `orchestrator.py` |
+| 临时小群 | agent 维度自主发起、独立 manager、深度 1、结论定向入记忆 | `subroom.py` |
+| 按需加载 | 召回 → 选择 → 探测 → 降级；Skill 可执行、MCP 可调用 | `loadout.py`、`skill_runtime.py`、`mcp_runtime.py` |
+| 真人兜底 | 钉钉/飞书出站、决策中心、超时降级、幂等与鉴权 | `notify.py`、`decisions.py` |
+| 全局护栏 | 预算（token/时长/小群/handoff）、死锁检测、因果链 | `guardrails.py` |
+
+设计与实现细节：[`docs/zh/design/multi-agent-collaboration.md`](docs/zh/design/multi-agent-collaboration.md)、[`docs/zh/modules/collaboration.md`](docs/zh/modules/collaboration.md)。
+
+仍待补齐（与本轮无关的既有 backlog）：下面 §1 的「真人 ↔ 角色绑定」仍只有 IM 升级通道，没有角色排他绑定模型；§2 知识目录；§5 自迭代；§6 Jev。
+
+---
+
 ## 1. 真人频道与角色绑定
 
 ### 背景

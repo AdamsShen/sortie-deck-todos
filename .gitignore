@@ -19,3 +19,9 @@ apps/web/.vite/
 htmlcov/
 site/
 tmp/
+
+# CodeBuddy local project data
+.codebuddy/
+
+# Playwright CLI local session artifacts
+.playwright-cli/

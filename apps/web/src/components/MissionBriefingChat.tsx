@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { api } from "../api";
 import { playSfx } from "../sfx";
+import type { RepoConfig } from "../types";
 import { ChatComposer, type ComposerAttachment, type ComposerPayload } from "./ChatComposer";
+
+type RepoRow = { url: string; branch: string };
+type ReposBySlot = Record<string, RepoRow[]>;
 
 export type BriefingAttachment = {
   name: string;
@@ -81,6 +85,7 @@ export function MissionBriefingChat({
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [bootError, setBootError] = useState("");
+  const [repos, setRepos] = useState<ReposBySlot>({});
   const bottomRef = useRef<HTMLDivElement>(null);
   const locked = busy || sending;
 
@@ -126,6 +131,7 @@ export function MissionBriefingChat({
       });
       setSession(s);
       setInput("");
+      setRepos({});
       setBootError("");
       playSfx("whoosh");
     } catch (err) {
@@ -134,6 +140,65 @@ export function MissionBriefingChat({
     } finally {
       setBusy(false);
     }
+  }
+
+  function repoSlots(): string[] {
+    const draft = session?.draft || {};
+    const roleAgents = (draft.role_agents as Record<string, string>) || {};
+    const slots = Object.keys(roleAgents);
+    if (!slots.length && draft.role_repos) {
+      return Object.keys(draft.role_repos as Record<string, unknown>);
+    }
+    return slots;
+  }
+
+  function setSlotRepos(slot: string, rows: RepoRow[]) {
+    setRepos((prev) => ({ ...prev, [slot]: rows }));
+  }
+
+  function addRepoRow(slot: string) {
+    setSlotRepos(slot, [...(repos[slot] || []), { url: "", branch: "" }]);
+  }
+
+  function updateRepoRow(slot: string, i: number, patch: Partial<RepoRow>) {
+    setSlotRepos(
+      slot,
+      (repos[slot] || []).map((r, j) => (j === i ? { ...r, ...patch } : r)),
+    );
+  }
+
+  function removeRepoRow(slot: string, i: number) {
+    setSlotRepos(slot, (repos[slot] || []).filter((_, j) => j !== i));
+  }
+
+  function repoPayload(): Record<string, RepoConfig[]> {
+    const out: Record<string, RepoConfig[]> = {};
+    for (const [slot, rows] of Object.entries(repos)) {
+      const clean = rows
+        .map((r) => ({ url: r.url.trim(), branch: r.branch.trim() }))
+        .filter((r) => r.url);
+      if (clean.length) out[slot] = clean;
+    }
+    return out;
+  }
+
+  async function confirmPlan() {
+    const payload = repoPayload();
+    if (session && Object.keys(payload).length) {
+      try {
+        const s = await api<BriefingSession>(`/api/briefing/sessions/${session.id}/repos`, {
+          token,
+          method: "PATCH",
+          body: JSON.stringify({ role_repos: payload }),
+        });
+        setSession(s);
+      } catch (err) {
+        onError(err instanceof Error ? err.message : String(err));
+        playSfx("warn");
+        return;
+      }
+    }
+    await send("确认");
   }
 
   async function send(text: string, attachments: ComposerAttachment[] = []) {
@@ -288,14 +353,58 @@ export function MissionBriefingChat({
       </div>
 
       {awaiting && !sending && (
-        <div className="briefing-actions">
-          <button type="button" className="btn primary" disabled={locked} onClick={() => void send("确认")}>
-            {labels.confirm}
-          </button>
-          <button type="button" className="btn" disabled={locked} onClick={() => void send("驳回")}>
-            {labels.reject}
-          </button>
-        </div>
+        <>
+          {repoSlots().length > 0 && (
+            <div className="briefing-repos">
+              <div className="panel-label">
+                {lang === "zh" ? "开发仓库（可选，多个用「+」添加）" : "Dev repos (optional, add multiple)"}
+              </div>
+              <p className="muted briefing-repos-hint">
+                {lang === "zh"
+                  ? "为对应开发 Agent 绑定 git 仓库与分支；确认后其工作区会先 clone 这些仓库，读代码再迭代。"
+                  : "Bind git repos & branches per dev agent; on confirm the agent clones and reads them before iterating."}
+              </p>
+              {repoSlots().map((slot) => (
+                <div key={slot} className="briefing-repo-slot">
+                  <span className="loadout-label">{slot}</span>
+                  {(repos[slot] || []).map((row, i) => (
+                    <div key={i} className="briefing-repo-row">
+                      <input
+                        value={row.url}
+                        placeholder="https://github.com/org/repo.git"
+                        onChange={(e) => updateRepoRow(slot, i, { url: e.target.value })}
+                      />
+                      <input
+                        className="briefing-repo-branch"
+                        value={row.branch}
+                        placeholder={lang === "zh" ? "分支（可选）" : "branch (optional)"}
+                        onChange={(e) => updateRepoRow(slot, i, { branch: e.target.value })}
+                      />
+                      <button
+                        type="button"
+                        className="btn linkish"
+                        onClick={() => removeRepoRow(slot, i)}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                  <button type="button" className="toolkit-chip" onClick={() => addRepoRow(slot)}>
+                    + {lang === "zh" ? "仓库" : "repo"}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="briefing-actions">
+            <button type="button" className="btn primary" disabled={locked} onClick={() => void confirmPlan()}>
+              {labels.confirm}
+            </button>
+            <button type="button" className="btn" disabled={locked} onClick={() => void send("驳回")}>
+              {labels.reject}
+            </button>
+          </div>
+        </>
       )}
 
       <ChatComposer

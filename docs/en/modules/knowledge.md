@@ -59,3 +59,26 @@ Body may be empty (content lives in WeKnora).
 - `.sortie-deck/knowledge-pack.md`
 
 `cursor_cli` preloads before coding.
+
+## 7. Mission namespace (per-requirement isolation)
+
+Each requirement owns a RAG namespace so its knowledge stays isolated from (and
+ranked ahead of) the global library:
+
+- **Writeback**: after a stage finishes, the orchestrator indexes key artifacts
+  (`prd.md` / `tech_design.md` / `design.md` / `handoff.md` / `integrate.md`)
+  via `KnowledgeGateway.index_mission_artifact(...)` — best-effort, idempotent
+  per `(stage, kind)`, tracked in `Initiative.meta["kb_indexed"]`.
+- **Local**: catalog entries tagged `ini:<initiative_id>`.
+- **WeKnora**: manual doc moved to folder `<prefix>/<initiative_id>`
+  (`TDT_KB_MISSION_FOLDER_PREFIX`, default `missions`); folder-move failures are
+  cosmetic and ignored.
+- **Retrieval**: `retrieve(query, initiative_id=...)` searches the mission
+  namespace first (boosted), then fills from the global pool (WeKnora hybrid
+  search or local keyword ranking). Harness prompts (`_rag_brief`) always pass
+  the mission id.
+- **Switch**: `TDT_KB_MISSION_INDEX=true` (default) enables writeback;
+  `TDT_KB_MISSION_INDEX_MAX_CHARS` caps per-artifact body size.
+
+Skills / MCP / tools are NOT mission-scoped — they come from the global toolkit
+library and are loaded just-in-time per stage (see `toolkit.md`).

@@ -264,23 +264,39 @@ class KnowledgeGateway:
             return {"folders": paths}
         return self.client().list_folders(self.weknora_kb_id or "")
 
-    def retrieve(self, query: str, *, limit: int = 6) -> list[RetrieveHit]:
-        """Mission retrieval — WeKnora hybrid search, or local keyword fallback."""
+    def retrieve(self, query: str, *, limit: int = 6, initiative_id: str | None = None) -> list[RetrieveHit]:
+        """Mission retrieval — WeKnora hybrid search, or local keyword fallback.
+
+        When ``initiative_id`` is given, the mission namespace (docs tagged
+        ``ini:<id>``) is searched first and ranked ahead of the global pool —
+        each requirement's knowledge stays isolated yet still benefits from
+        the shared library.
+        """
         q = (query or "").strip()
         if not q:
             return []
+        mission_hits: list[RetrieveHit] = []
+        if initiative_id:
+            mission_hits = self._retrieve_mission(q, initiative_id, limit=limit)
+            if len(mission_hits) >= limit:
+                return mission_hits[:limit]
+        remaining = max(1, limit - len(mission_hits))
+        seen_ids = {h.remote_id for h in mission_hits}
         if self.uses_weknora:
             hits = self.client().hybrid_search(
                 self.weknora_kb_id or "",
                 q,
-                match_count=max(1, limit),
+                match_count=max(1, remaining + len(seen_ids)),
             )
-            return [self._hit_from_weknora(h) for h in hits[:limit]]
+            global_hits = [
+                self._hit_from_weknora(h) for h in hits if h.knowledge_id not in seen_ids
+            ][:remaining]
+            return mission_hits + global_hits
         # local fallback (dev only)
         from sortie_deck.knowledge_pack import search_for_mission
 
-        ranked = search_for_mission(self.store, q, limit=limit)
-        return [
+        ranked = search_for_mission(self.store, q, limit=remaining + len(seen_ids))
+        global_hits = [
             RetrieveHit(
                 title=doc.title,
                 content=doc.body or doc.summary,
@@ -291,7 +307,121 @@ class KnowledgeGateway:
                 meta={"category": doc.category, "tags": doc.tags},
             )
             for doc, score in ranked
+            if doc.id not in seen_ids
+        ][:remaining]
+        return mission_hits + global_hits
+
+    # --- mission namespace ---------------------------------------------------
+
+    @staticmethod
+    def mission_tag(initiative_id: str) -> str:
+        return f"ini:{initiative_id}"
+
+    def mission_folder(self, initiative_id: str) -> str:
+        from sortie_deck.settings import settings
+
+        prefix = (settings.kb_mission_folder_prefix or "missions").strip("/")
+        return f"{prefix}/{initiative_id}"
+
+    def _retrieve_mission(self, query: str, initiative_id: str, *, limit: int) -> list[RetrieveHit]:
+        """Keyword search restricted to this mission's namespace (local catalog)."""
+        from sortie_deck.knowledge_pack import score_doc
+
+        tag = self.mission_tag(initiative_id)
+        ranked: list[tuple[KnowledgeDoc, float]] = []
+        for doc in self.store.list():
+            if tag not in doc.tags:
+                continue
+            score = score_doc(doc, query)
+            if score > 0:
+                ranked.append((doc, score))
+        ranked.sort(key=lambda x: x[1], reverse=True)
+        return [
+            RetrieveHit(
+                title=doc.title,
+                content=doc.body or doc.summary,
+                score=score + 10.0,  # namespace boost: this mission's knowledge first
+                remote_id=doc.id,
+                source="local",
+                folder_path=doc.folder_path,
+                meta={"category": doc.category, "tags": doc.tags, "mission": initiative_id},
+            )
+            for doc, score in ranked[: max(1, limit)]
         ]
+
+    def index_mission_artifact(
+        self,
+        *,
+        initiative_id: str,
+        stage: str,
+        kind: str,
+        title: str,
+        content: str,
+        author_name: str = "Sortie",
+    ) -> KnowledgeDoc | None:
+        """Best-effort writeback of a stage artifact into the mission namespace.
+
+        Local: catalog entry tagged ``ini:<id>``. WeKnora: manual doc moved to
+        folder ``<prefix>/<initiative_id>``. Failures degrade silently (never
+        break a stage); idempotent per (initiative, stage, kind) title.
+        """
+        from sortie_deck.settings import settings
+
+        if not settings.kb_mission_index:
+            return None
+        body = (content or "").strip()
+        if not body:
+            return None
+        body = body[: settings.kb_mission_index_max_chars]
+        doc_title = f"{title}".strip() or f"{initiative_id} · {stage} · {kind}"
+        try:
+            existing = next(
+                (
+                    d
+                    for d in self.store.list()
+                    if d.title == doc_title and self.mission_tag(initiative_id) in d.tags
+                ),
+                None,
+            )
+            if existing is not None:
+                return existing  # idempotent across stage retries / resumes
+            folder = self.mission_folder(initiative_id)
+            if self.uses_weknora:
+                try:
+                    remote = self.client().create_manual(
+                        self.weknora_kb_id or "",
+                        title=doc_title,
+                        content=body,
+                    )
+                    with contextlib.suppress(WeKnoraError):
+                        self.client().move_to_folder(
+                            knowledge_ids=[remote.id],
+                            folder_path=folder,
+                            knowledge_base_id=self.weknora_kb_id or "",
+                        )  # folder move is cosmetic; keep the doc either way
+                    return self._upsert_catalog_from_remote(
+                        remote,
+                        tags=[self.mission_tag(initiative_id), "mission", stage],
+                        category="reference",
+                        author_id="system",
+                        author_name=author_name,
+                        title_override=doc_title,
+                    )
+                except WeKnoraError:
+                    pass  # remote write failed → fall through to local catalog
+            return self.store.create(
+                CreateKnowledgeRequest(
+                    title=doc_title,
+                    summary=body[:300],
+                    body=body,
+                    tags=[self.mission_tag(initiative_id), "mission", stage],
+                    category="reference",
+                ),
+                author_id="system",
+                author_name=author_name,
+            )
+        except Exception:  # noqa: BLE001 — knowledge writeback must never break a stage
+            return None
 
     def _upsert_catalog_from_remote(
         self,

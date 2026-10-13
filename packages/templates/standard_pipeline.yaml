@@ -58,6 +58,14 @@ stages:
     output_contract:
       - prd.md
       - acceptance.json
+  - name: eng_tech_design
+    role: eng
+    label: 技术方案
+    label_en: Tech Design
+    hitl_after: true
+    on_reject: eng_tech_design
+    output_contract:
+      - tech_design.md
   - name: design_ui
     role: design
     label: 设计

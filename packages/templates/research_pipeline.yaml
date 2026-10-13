@@ -1,0 +1,44 @@
+name: research
+description: 研究轨 — 采集 → 结论 → 建议（非工程类需求：育儿、股票、行业调研等）
+version: 1
+track: research
+complexity: normal
+# Sample track: it proves non-engineering requests fit the same plan/graph/HITL
+# machinery instead of being forced through PRD → build → QA.
+# The executors are mocks — swap them for an LLM executor in production.
+roles:
+  - id: product
+    title: Research Lead
+    persona: product
+    executor: mock_product
+  - id: design
+    title: Analyst
+    persona: design
+    executor: mock_design
+stages:
+  - name: intake
+    role: product
+    label: 集结
+    label_en: Intake
+  - name: research_scan
+    role: design
+    label: 采集
+    label_en: Scan
+    hitl: false
+  - name: research_synthesize
+    role: product
+    label: 结论
+    label_en: Synthesize
+    hitl_after: true
+    on_reject: research_synthesize
+  - name: research_recommend
+    role: product
+    label: 建议
+    label_en: Recommend
+    hitl_after: true
+    on_reject: research_recommend
+  - name: done
+    role: product
+    label: 完成
+    label_en: Done
+    hitl: false

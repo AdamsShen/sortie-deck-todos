@@ -1,110 +1,52 @@
 :root,
-[data-theme="signal"] {
-  --void: #05080d;
-  --deep: #0a121c;
-  --panel: #0f1a27;
-  --panel-2: #132233;
-  --line: #243648;
-  --line-hot: #3a5570;
-  --text: #e6f0fa;
-  --muted: #7f97b0;
-  --signal: #3dffa8;
-  --signal-dim: #1a6b4e;
-  --copper: #e8a04a;
-  --ice: #7eb6ff;
-  --danger: #ff6b6b;
-  --orb-a: rgba(62, 255, 168, 0.35);
-  --orb-b: rgba(232, 160, 74, 0.22);
-  --grid-a: rgba(62, 255, 168, 0.04);
-  --grid-b: rgba(126, 182, 255, 0.035);
-  --ripple: rgba(61, 255, 168, 0.45);
-  --font: "Chakra Petch", system-ui, sans-serif;
-  --mono: "IBM Plex Mono", ui-monospace, monospace;
-  --radius: 4px;
+[data-theme="paper"] {
+  /* v1 编辑部风 · 浅色（v3 白）— 专业工具气质，状态即颜色语义 */
+  --void: #f6f9fc;
+  --deep: #edf1f7;
+  --panel: #ffffff;
+  --panel-2: #f8fafd;
+  --line: #e3e8ee;
+  --line-hot: #cbd2dc;
+  --text: #1a1f36;
+  --muted: #697386;
+  --signal: #0e9f6e;
+  --signal-dim: #dff2e9;
+  --copper: #3b5bdb;
+  --ice: #6e8be8;
+  --danger: #c9503a;
+  --orb-a: rgba(14, 159, 110, 0.05);
+  --orb-b: rgba(59, 91, 219, 0.04);
+  --grid-a: rgba(26, 31, 54, 0.025);
+  --grid-b: rgba(26, 31, 54, 0.02);
+  --serif: "Songti SC", "Noto Serif SC", "Source Han Serif SC", Georgia, serif;
+  --font: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --radius: 8px;
 }
 
-[data-theme="copper"] {
-  --void: #0c0907;
-  --deep: #16110c;
-  --panel: #1c1610;
-  --panel-2: #241c14;
-  --line: #3d3226;
-  --line-hot: #5c4a36;
-  --text: #f3ebe0;
-  --muted: #a89278;
-  --signal: #e8a04a;
-  --signal-dim: #7a4f1c;
-  --copper: #ffc978;
-  --ice: #d4b896;
-  --danger: #ff7a5c;
-  --orb-a: rgba(232, 160, 74, 0.32);
-  --orb-b: rgba(255, 122, 92, 0.18);
-  --grid-a: rgba(232, 160, 74, 0.05);
-  --grid-b: rgba(212, 184, 150, 0.03);
-  --ripple: rgba(232, 160, 74, 0.5);
-}
-
-[data-theme="ice"] {
-  --void: #060a12;
-  --deep: #0a1220;
-  --panel: #0e1828;
-  --panel-2: #132236;
-  --line: #243a55;
-  --line-hot: #3a5a80;
-  --text: #e8f2ff;
-  --muted: #7e97b8;
-  --signal: #6ec8ff;
-  --signal-dim: #1f4f78;
-  --copper: #9ad0ff;
-  --ice: #b8dcff;
-  --danger: #ff7b9c;
-  --orb-a: rgba(110, 200, 255, 0.32);
-  --orb-b: rgba(126, 182, 255, 0.18);
-  --grid-a: rgba(110, 200, 255, 0.05);
-  --grid-b: rgba(184, 220, 255, 0.03);
-  --ripple: rgba(110, 200, 255, 0.5);
-}
-
-[data-theme="ember"] {
-  --void: #0a0606;
-  --deep: #140a0a;
-  --panel: #1a0f10;
-  --panel-2: #241416;
-  --line: #3d2428;
-  --line-hot: #5c343a;
-  --text: #f7e8e8;
-  --muted: #b0878c;
-  --signal: #ff5c6c;
-  --signal-dim: #7a2430;
-  --copper: #ff9a6b;
-  --ice: #ffb3a8;
-  --danger: #ff4d4d;
-  --orb-a: rgba(255, 92, 108, 0.28);
-  --orb-b: rgba(255, 154, 107, 0.16);
-  --grid-a: rgba(255, 92, 108, 0.05);
-  --grid-b: rgba(255, 154, 107, 0.03);
-  --ripple: rgba(255, 92, 108, 0.48);
-}
-
-[data-theme="slate"] {
-  --void: #12151a;
-  --deep: #1a1e26;
-  --panel: #222833;
-  --panel-2: #2a3140;
-  --line: #3a4354;
-  --line-hot: #556178;
-  --text: #eef1f6;
-  --muted: #8b95a8;
-  --signal: #9aa8c7;
-  --signal-dim: #4a556c;
-  --copper: #c4a574;
-  --ice: #a8b8d8;
-  --danger: #e07070;
-  --orb-a: rgba(154, 168, 199, 0.22);
-  --orb-b: rgba(196, 165, 116, 0.14);
-  --grid-a: rgba(154, 168, 199, 0.05);
-  --grid-b: rgba(196, 165, 116, 0.03);
-  --ripple: rgba(154, 168, 199, 0.45);
+[data-theme="ink"] {
+  /* v1 编辑部风 · 暗色 — 中性近黑、零霓虹、绿仅作语义 */
+  --void: #171a21;
+  --deep: #1c2029;
+  --panel: #20242d;
+  --panel-2: #262b35;
+  --line: #32363f;
+  --line-hot: #454a55;
+  --text: #ece9e1;
+  --muted: #8b8a80;
+  --signal: #3fd68f;
+  --signal-dim: #24422f;
+  --copper: #7b96f0;
+  --ice: #9fb4e8;
+  --danger: #e57760;
+  --orb-a: rgba(63, 214, 143, 0.05);
+  --orb-b: rgba(123, 150, 240, 0.04);
+  --grid-a: rgba(236, 233, 225, 0.028);
+  --grid-b: rgba(236, 233, 225, 0.02);
+  --serif: "Songti SC", "Noto Serif SC", "Source Han Serif SC", Georgia, serif;
+  --font: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --radius: 8px;
 }
 
 * {
@@ -342,41 +284,6 @@ html.has-art-bg .bubble {
   animation: float-b 16s ease-in-out infinite;
 }
 
-.ripple-field {
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  overflow: hidden;
-}
-
-.ripple {
-  position: absolute;
-  width: 12px;
-  height: 12px;
-  margin: -6px 0 0 -6px;
-  border-radius: 50%;
-  border: 1.5px solid var(--ripple);
-  background: radial-gradient(circle, color-mix(in srgb, var(--ripple) 35%, transparent), transparent 70%);
-  pointer-events: none;
-  animation: ripple-expand 0.85s ease-out forwards;
-}
-
-.ripple-scroll {
-  border-width: 2px;
-  animation-duration: 1.05s;
-}
-
-@keyframes ripple-expand {
-  from {
-    transform: scale(0.4);
-    opacity: 0.85;
-  }
-  to {
-    transform: scale(14);
-    opacity: 0;
-  }
-}
-
 @keyframes grid-drift {
   from {
     background-position: 0 0, 0 0;
@@ -419,7 +326,7 @@ html.has-art-bg .bubble {
   gap: 1rem;
   padding: 1rem 1.5rem;
   border-bottom: 1px solid var(--line);
-  background: linear-gradient(180deg, rgba(15, 26, 39, 0.92), rgba(10, 18, 28, 0.7));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 92%, transparent), color-mix(in srgb, var(--deep) 70%, transparent));
   backdrop-filter: blur(10px);
 }
 
@@ -630,7 +537,7 @@ html.has-art-bg .bubble {
   color: var(--signal);
   border: 1px solid var(--signal-dim);
   padding: 0.35rem 0.65rem;
-  background: rgba(61, 255, 168, 0.06);
+  background: rgba(14, 159, 110, 0.06);
 }
 
 .live-pill .pulse {
@@ -669,7 +576,7 @@ html.has-art-bg .bubble {
 
 .sidebar {
   border-right: 1px solid var(--line);
-  background: rgba(10, 18, 28, 0.82);
+  background: color-mix(in srgb, var(--deep) 82%, transparent);
   padding: 1.1rem 1rem 1.5rem;
   overflow: auto;
   display: flex;
@@ -723,7 +630,7 @@ input:focus,
 textarea:focus,
 select:focus {
   border-color: var(--ice);
-  box-shadow: 0 0 0 1px rgba(126, 182, 255, 0.25);
+  box-shadow: 0 0 0 1px rgba(110, 139, 232, 0.25);
 }
 
 textarea {
@@ -807,7 +714,7 @@ textarea {
 
 .mission.active {
   border-color: var(--signal);
-  background: linear-gradient(160deg, rgba(61, 255, 168, 0.08), var(--panel));
+  background: linear-gradient(160deg, rgba(14, 159, 110, 0.08), var(--panel));
 }
 
 .mission-top {
@@ -855,7 +762,7 @@ textarea {
 .st.running,
 .st.waiting_hitl {
   color: var(--copper);
-  border-color: rgba(232, 160, 74, 0.5);
+  border-color: rgba(59, 91, 219, 0.5);
 }
 
 .st.done {
@@ -1038,7 +945,7 @@ textarea {
 
 .rail-node.unlocking .rail-avatar,
 .rail-node.unlocking .rail-dot {
-  filter: drop-shadow(0 0 12px rgba(61, 255, 168, 0.85));
+  filter: drop-shadow(0 0 6px rgba(14, 159, 110, 0.3));
 }
 
 @keyframes stage-unlock-node {
@@ -1359,7 +1266,7 @@ textarea {
 .rail-progress {
   right: auto;
   background: linear-gradient(90deg, var(--ice), var(--signal));
-  box-shadow: 0 0 12px rgba(61, 255, 168, 0.35);
+  box-shadow: 0 0 0 3px rgba(14, 159, 110, 0.12);
   transition: width 0.55s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -1424,14 +1331,14 @@ textarea {
   background: var(--signal);
   border-color: var(--signal);
   animation: pulse 1.2s ease-in-out infinite;
-  box-shadow: 0 0 14px rgba(61, 255, 168, 0.55);
+  box-shadow: 0 0 0 3px rgba(14, 159, 110, 0.15);
 }
 
 .rail-node.gate .rail-dot {
   background: var(--copper);
   border-color: var(--copper);
   animation: pulse 0.9s ease-in-out infinite;
-  box-shadow: 0 0 14px rgba(232, 160, 74, 0.5);
+  box-shadow: 0 0 0 3px rgba(59, 91, 219, 0.15);
 }
 
 .rail-node.live .rail-label,
@@ -1492,14 +1399,14 @@ textarea {
 }
 
 .panel {
-  background: linear-gradient(165deg, rgba(19, 34, 51, 0.92), rgba(10, 18, 28, 0.88));
+  background: linear-gradient(165deg, color-mix(in srgb, var(--panel) 92%, transparent), color-mix(in srgb, var(--deep) 88%, transparent));
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 1rem;
   min-height: 120px;
 }
 
-/* Role portraits (crew + rail) */
+/* Role portraits (crew + rail) — editorial: calm circles, no hexagon/glow */
 .role-avatar {
   --ra-h: 160;
   position: relative;
@@ -1508,16 +1415,13 @@ textarea {
   flex-shrink: 0;
   border: 0;
   padding: 0;
-  border-radius: 14px;
-  clip-path: polygon(50% 0%, 100% 22%, 100% 78%, 50% 100%, 0% 78%, 0% 22%);
-  background:
-    radial-gradient(circle at 35% 28%, hsl(var(--ra-h) 85% 72%) 0%, transparent 42%),
-    linear-gradient(160deg, hsl(var(--ra-h) 70% 48%), hsl(calc(var(--ra-h) + 28) 55% 22%));
-  color: #0a1018;
-  font-weight: 800;
+  border-radius: 50%;
+  background: linear-gradient(160deg, hsl(var(--ra-h) 42% 58%), hsl(calc(var(--ra-h) + 24) 34% 42%));
+  color: #fff;
+  font-weight: 650;
   letter-spacing: 0.02em;
   cursor: pointer;
-  box-shadow: 0 0 0 1px color-mix(in srgb, hsl(var(--ra-h) 70% 55%) 55%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, hsl(var(--ra-h) 35% 40%) 55%, transparent);
   overflow: hidden;
 }
 .role-avatar img {
@@ -1530,8 +1434,8 @@ textarea {
 }
 .role-avatar.live {
   box-shadow:
-    0 0 0 1px hsl(var(--ra-h) 80% 60%),
-    0 0 18px color-mix(in srgb, hsl(var(--ra-h) 80% 55%) 45%, transparent);
+    inset 0 0 0 1px hsl(var(--ra-h) 55% 45%),
+    0 0 0 3px color-mix(in srgb, hsl(var(--ra-h) 45% 55%) 22%, transparent);
 }
 .role-avatar.speaking {
   animation: avatar-speak 1.1s ease-in-out infinite;
@@ -1607,7 +1511,7 @@ textarea {
   border-top: 0;
 }
 .role-avatar.has-img {
-  background: #0a1018;
+  background: var(--panel-2);
 }
 .role-avatar.has-img img {
   width: 100%;
@@ -1647,7 +1551,7 @@ textarea {
 
 .rail-node.live .rail-avatar,
 .rail-node.gate .rail-avatar {
-  filter: drop-shadow(0 0 16px rgba(61, 255, 168, 0.45));
+  filter: drop-shadow(0 0 6px rgba(14, 159, 110, 0.3));
 }
 .rail-node.speaking .rail-bubble,
 .rail-bubble {
@@ -1694,18 +1598,18 @@ textarea {
   width: 28px;
   height: 28px;
   border: 2px solid var(--ice);
-  clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
-  background: rgba(126, 182, 255, 0.15);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--ice) 12%, transparent);
 }
 
 .role-ring[data-role="product"] {
   border-color: var(--copper);
-  background: rgba(232, 160, 74, 0.15);
+  background: rgba(59, 91, 219, 0.15);
 }
 
 .role-ring[data-role="eng"] {
   border-color: var(--signal);
-  background: rgba(61, 255, 168, 0.12);
+  background: rgba(14, 159, 110, 0.12);
 }
 
 .role-ring[data-role="qa"] {
@@ -1768,10 +1672,10 @@ textarea {
 }
 
 .hitl {
-  border-color: rgba(232, 160, 74, 0.45);
+  border-color: rgba(59, 91, 219, 0.45);
   background:
-    linear-gradient(135deg, rgba(232, 160, 74, 0.1), transparent 40%),
-    linear-gradient(165deg, rgba(19, 34, 51, 0.95), rgba(10, 18, 28, 0.9));
+    linear-gradient(135deg, rgba(59, 91, 219, 0.1), transparent 40%),
+    linear-gradient(165deg, color-mix(in srgb, var(--panel) 95%, transparent), color-mix(in srgb, var(--deep) 90%, transparent));
   animation: gate-in 0.4s ease both;
 }
 
@@ -1959,7 +1863,7 @@ textarea {
 
 .mission-wrap.active .mission {
   border-color: var(--signal);
-  background: linear-gradient(160deg, rgba(61, 255, 168, 0.08), var(--panel));
+  background: linear-gradient(160deg, rgba(14, 159, 110, 0.08), var(--panel));
 }
 
 .mission-del {
@@ -2093,7 +1997,7 @@ textarea {
 
 .part.human {
   color: var(--ice);
-  border-color: rgba(126, 182, 255, 0.4);
+  border-color: rgba(110, 139, 232, 0.4);
 }
 
 .part.discussing {
@@ -2125,18 +2029,18 @@ textarea {
 }
 
 .bubble.human {
-  border-color: rgba(126, 182, 255, 0.35);
+  border-color: rgba(110, 139, 232, 0.35);
 }
 
 .bubble.agent {
-  border-color: rgba(61, 255, 168, 0.3);
+  border-color: rgba(14, 159, 110, 0.3);
 }
 
 .bubble.system,
 .bubble.type-system,
 .bubble.type-hitl {
-  border-color: rgba(232, 160, 74, 0.35);
-  background: rgba(232, 160, 74, 0.06);
+  border-color: rgba(59, 91, 219, 0.35);
+  background: rgba(59, 91, 219, 0.06);
 }
 
 .bubble-meta {
@@ -2479,6 +2383,22 @@ textarea {
   background: color-mix(in srgb, var(--accent, #6ec8ff) 18%, transparent);
 }
 
+.harness-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.25rem;
+}
+
+.harness-row select {
+  max-width: 16rem;
+}
+
+.harness-row .panel-label {
+  margin: 0;
+}
+
 .hitl-inline {
   display: flex;
   flex-wrap: wrap;
@@ -2486,8 +2406,8 @@ textarea {
   align-items: center;
   margin-top: 0.65rem;
   padding: 0.55rem 0.65rem;
-  border: 1px solid rgba(232, 160, 74, 0.45);
-  background: rgba(232, 160, 74, 0.08);
+  border: 1px solid rgba(59, 91, 219, 0.45);
+  background: rgba(59, 91, 219, 0.08);
   font-family: var(--mono);
   font-size: 0.7rem;
   color: var(--copper);
@@ -2509,7 +2429,7 @@ textarea {
   flex-direction: column;
   gap: 0.75rem;
   padding: 1.5rem;
-  background: linear-gradient(165deg, rgba(19, 34, 51, 0.95), rgba(10, 18, 28, 0.92));
+  background: linear-gradient(165deg, color-mix(in srgb, var(--panel) 95%, transparent), color-mix(in srgb, var(--deep) 92%, transparent));
   border: 1px solid var(--line);
 }
 
@@ -2552,7 +2472,7 @@ textarea {
 .main-nav button.on {
   color: var(--signal);
   border-color: var(--signal-dim);
-  background: rgba(61, 255, 168, 0.06);
+  background: rgba(14, 159, 110, 0.06);
 }
 
 .page-pad {
@@ -2632,7 +2552,7 @@ textarea {
   margin-bottom: 1.1rem;
   padding: 1rem 1.1rem;
   border: 1px solid var(--line);
-  background: linear-gradient(120deg, rgba(61, 255, 168, 0.08), rgba(126, 182, 255, 0.05));
+  background: linear-gradient(120deg, rgba(14, 159, 110, 0.08), rgba(110, 139, 232, 0.05));
 }
 
 .thesis-banner strong {
@@ -2700,7 +2620,7 @@ textarea {
 
 .mission.active {
   border-color: var(--signal-dim);
-  background: rgba(61, 255, 168, 0.06);
+  background: rgba(14, 159, 110, 0.06);
 }
 
 .loadout-block {
@@ -2785,7 +2705,7 @@ textarea {
 
 .toolkit-chip.on {
   border-color: var(--accent, #3dffa8);
-  background: rgba(61, 255, 168, 0.1);
+  background: rgba(14, 159, 110, 0.1);
   color: var(--accent, #3dffa8);
 }
 
@@ -3113,14 +3033,9 @@ textarea {
   .live-pill .pulse,
   .rail-dot,
   .hitl,
-  .hitl-flash,
-  .ripple {
+  .hitl-flash {
     animation: none !important;
     transition: none !important;
-  }
-
-  .ripple-field {
-    display: none;
   }
 }
 
@@ -3263,7 +3178,7 @@ textarea {
   gap: 0.35rem;
   padding: 0.65rem 0.55rem;
   border: 1px solid var(--line);
-  background: linear-gradient(180deg, rgba(61, 255, 168, 0.04), transparent 70%);
+  background: linear-gradient(180deg, rgba(14, 159, 110, 0.04), transparent 70%);
   max-height: 180px;
   overflow: auto;
 }
@@ -3412,8 +3327,99 @@ textarea {
   gap: 0.5rem;
 }
 
+.briefing-repos {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.briefing-repos-hint {
+  font-size: 0.7rem;
+  margin: 0;
+}
+
+.briefing-repo-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.briefing-repo-row {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.briefing-repo-row input {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.75rem;
+  padding: 0.25rem 0.4rem;
+}
+
+.briefing-repo-row input.briefing-repo-branch {
+  flex: 0 0 9rem;
+}
+
 @media (max-width: 900px) {
   .briefing-layout {
     grid-template-columns: 1fr;
   }
+}
+
+/* ============================================================
+   Editorial override layer · v1 杂志编辑风（v3 白浅色）
+   骨架沿用上方组件样式，此处只做气质校正：
+   衬线大标题 / 隐藏赛博装饰 / 面板柔和阴影 / 状态色语义
+   ============================================================ */
+
+/* 大标题用衬线（编辑部 DNA），小字号 UI 仍是系统无衬线 */
+h1,
+h2,
+.mission-title {
+  font-family: var(--serif);
+  letter-spacing: 0.01em;
+  font-weight: 700;
+}
+
+/* 赛博装饰退场 */
+.scanline {
+  display: none;
+}
+
+/* 面板：白卡 + 极轻投影，替代发光边 */
+.panel,
+.card {
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+}
+
+/* 主按钮：实心绿、无渐变无光晕 */
+.btn.primary {
+  background: var(--signal);
+  color: #fff;
+  border-color: transparent;
+}
+.btn.primary:hover {
+  filter: brightness(1.05);
+}
+
+/* 状态徽章统一语义色（完成=绿 运行=蓝 阻塞/门禁=红 等待=灰） */
+.st.done,
+.st.completed {
+  color: var(--signal);
+}
+.st.running {
+  color: var(--copper);
+}
+.st.failed,
+.st.waiting_hitl {
+  color: var(--danger);
+}
+
+/* 表格行 hover 柔和 */
+tr:hover td {
+  background: color-mix(in srgb, var(--copper) 4%, transparent);
 }

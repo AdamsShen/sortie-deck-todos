@@ -30,6 +30,35 @@ class RoleId(str, Enum):
     QA = "qa"
     DEPLOY = "deploy"
 
+    @classmethod
+    def _missing_(cls, value: object) -> RoleId | None:
+        """Accept unknown role keys as first-class members (registry-backed roles).
+
+        Members above stay the built-in set; anything else (e.g. ``parenting``)
+        is materialised on first use so every existing call site that relies on
+        ``.value`` or ``== RoleId.X`` keeps working unchanged. Custom roles are
+        owned by ``sortie_deck.roles.RoleRegistry``; this only widens the type.
+        """
+        if not isinstance(value, str):
+            return None
+        key = value.strip()
+        if not key:
+            return None
+        cached = cls._value2member_map_.get(key)
+        if cached is not None:
+            return cached
+        pseudo = str.__new__(cls, key)
+        pseudo._name_ = key.upper().replace("-", "_")
+        pseudo._value_ = key
+        cls._value2member_map_[key] = pseudo
+        return pseudo
+
+
+def role_key(role: Any) -> str:
+    """Normalise a ``RoleId`` (or plain str) to its string key."""
+    value = getattr(role, "value", None)
+    return str(value) if value is not None else str(role)
+
 
 # Roles that run coding executors (Cursor / Claude Code / mock_eng)
 CODING_ROLE_VALUES = frozenset(
@@ -71,6 +100,8 @@ class HitlAction(str, Enum):
     EDIT_INSTRUCTION = "edit_instruction"
     STOP = "stop"
     REROUTE = "reroute"
+    # Human-authorised harness switch (mid-run unlock, see HarnessLockedError)
+    SWITCH_HARNESS = "switch_harness"
 
 
 class PipelineNotConfirmedError(RuntimeError):
@@ -81,8 +112,27 @@ class PipelineNotConfirmedError(RuntimeError):
         self.message = message
 
 
+class HarnessLockedError(RuntimeError):
+    """Raised when the mission harness is changed after the mission started."""
+
+    code = "harness_locked"
+
+    def __init__(self, message: str = "Harness is locked once the mission has started") -> None:
+        super().__init__(message)
+        self.message = message
+
+
+class UnknownHarnessError(RuntimeError):
+    code = "unknown_harness"
+
+    def __init__(self, message: str = "Unknown harness provider") -> None:
+        super().__init__(message)
+        self.message = message
+
+
 class ArtifactKind(str, Enum):
     PRD = "prd.md"
+    TECH_DESIGN = "tech_design.md"
     ACCEPTANCE = "acceptance.json"
     TASKS = "tasks.json"
     IMPLEMENTATION = "implementation.md"
@@ -95,6 +145,20 @@ class ArtifactKind(str, Enum):
     OTHER = "other"
 
 
+class RepoConfig(BaseModel):
+    """A git/github repository a dev agent must read before iterating.
+
+    ``name`` is the checkout dir name (defaults to the URL basename without
+    ``.git``); ``branch`` empty means the remote default branch; ``token`` is
+    injected into https clone URLs when present.
+    """
+
+    url: str
+    branch: str = ""
+    name: str = ""
+    token: str | None = None
+
+
 class RoleAgent(BaseModel):
     id: str
     role: RoleId
@@ -103,6 +167,8 @@ class RoleAgent(BaseModel):
     executor: str
     status: str = "idle"
     toolkit_ids: list[str] = Field(default_factory=list)
+    # Repositories this role must clone & read in its workspace before coding
+    repos: list[RepoConfig] = Field(default_factory=list)
     catalog_agent_id: str | None = None
     # preset:<role> | https://… | data:image/… — shown in crew + pipeline rail
     avatar: str | None = None
@@ -121,7 +187,9 @@ class TimelineEvent(BaseModel):
     at: datetime = Field(default_factory=utc_now)
     stage: str
     role: str | None = None
-    kind: Literal["info", "artifact", "hitl", "error", "transition", "consult"] = "info"
+    kind: Literal[
+        "info", "artifact", "hitl", "error", "transition", "consult", "handoff", "subroom"
+    ] = "info"
     message: str
     data: dict[str, Any] = Field(default_factory=dict)
 
@@ -136,6 +204,7 @@ class HitlRequest(BaseModel):
             HitlAction.EDIT_INSTRUCTION,
             HitlAction.STOP,
             HitlAction.REROUTE,
+            HitlAction.SWITCH_HARNESS,
         ]
     )
     artifacts: list[ArtifactRef] = Field(default_factory=list)
@@ -146,6 +215,8 @@ class HitlDecision(BaseModel):
     instruction: str | None = None
     next_stage: str | None = None
     note: str | None = None
+    # Target harness for `switch_harness` decisions
+    harness: str | None = None
 
 
 class ActorKind(str, Enum):
@@ -173,6 +244,11 @@ class Initiative(BaseModel):
     current_stage: str = "intake"
     thread_id: str = Field(default_factory=lambda: new_id("thr_"))
     room_id: str = Field(default_factory=lambda: new_id("squad_"))
+    # Agent harness this mission runs on (claude_code | opencode | codex | cursor | mock).
+    # Selected at creation; locked (harness_locked) once the pipeline starts —
+    # a mid-run change requires the HITL `switch_harness` action.
+    harness: str = "claude_code"
+    harness_locked: bool = False
     roles: list[RoleAgent] = Field(default_factory=list)
     participants: list[RoomParticipant] = Field(default_factory=list)
     artifacts: list[ArtifactRef] = Field(default_factory=list)
@@ -199,6 +275,17 @@ class StageContext(BaseModel):
     permissions: dict[str, Any] = Field(default_factory=dict)
     toolkit_ids: list[str] = Field(default_factory=list)
     toolkit_brief: str = ""
+    # Mission-scoped git repos for this role (cloned into the workspace by
+    # coding executors before the agent starts iterating)
+    repos: list[RepoConfig] = Field(default_factory=list)
+    # Layered memory brief injected into the agent prompt. Sub-room conclusions
+    # arrive here, scoped to the stage that requested them.
+    memory_brief: str = ""
+    # Initiative-level agent harness (claude_code | opencode | codex | cursor | mock)
+    harness: str = ""
+    harness_locked: bool = False
+    # Roles this agent's contract allows it to hand off to (read-only hint)
+    handoff_targets: list[str] = Field(default_factory=list)
 
 
 class StageResult(BaseModel):
@@ -215,10 +302,13 @@ class CreateInitiativeRequest(BaseModel):
     brief: str
     template: str = "default"
     # Pipeline track hint for planner agent; empty → agent infers
-    pipeline_track: Literal["express", "standard", "default"] | None = None
+    pipeline_track: Literal["express", "standard", "default", "research"] | None = None
     # auto | trivial | normal | complex — feeds planner when track unset
     complexity: Literal["auto", "trivial", "normal", "complex"] = "auto"
     coding_executor: Literal["mock", "claude_code", "cursor_cli", "auto"] = "auto"
+    # Agent harness for the whole mission; None → TDT_DEFAULT_HARNESS.
+    # Locked on start; mid-run change requires HITL switch_harness approval.
+    harness: str | None = None
     webhook_url: str | None = None
     auto_start: bool = False
     # When true with auto_start, skip human confirm (CLI/tests)
@@ -228,6 +318,10 @@ class CreateInitiativeRequest(BaseModel):
     role_agents: dict[str, str] = Field(default_factory=dict)
     # Toolkit ids for each role slot (applies to that role's stages)
     role_toolkits: dict[str, list[str]] = Field(default_factory=dict)
+    # Git/github repositories per role slot — the slot's dev agent clones &
+    # reads these before iterating (e.g. eng_backend → server repo, eng_web →
+    # web repo)
+    role_repos: dict[str, list[RepoConfig]] = Field(default_factory=dict)
     # Optional per-stage override (stage name -> toolkit ids)
     stage_toolkits: dict[str, list[str]] = Field(default_factory=dict)
 
@@ -264,6 +358,8 @@ class HitlSubmitRequest(BaseModel):
     next_stage: str | None = None
     note: str | None = None
     author_name: str | None = None
+    # Target harness for `switch_harness` decisions
+    harness: str | None = None
 
 
 class RoomMessage(BaseModel):
@@ -275,7 +371,19 @@ class RoomMessage(BaseModel):
     actor_name: str
     role: str | None = None
     text: str
-    msg_type: Literal["chat", "stage", "hitl", "decision", "system", "consult", "consult_reply"] = "chat"
+    msg_type: Literal[
+        "chat",
+        "stage",
+        "hitl",
+        "decision",
+        "system",
+        "consult",
+        "consult_reply",
+        "subroom",
+    ] = "chat"
+    # "main" = the big room. Sub-room traffic lives in its own room file and is
+    # never listed with the main timeline.
+    room_key: str = "main"
     meta: dict[str, Any] = Field(default_factory=dict)
 
 

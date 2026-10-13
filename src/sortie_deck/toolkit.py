@@ -48,6 +48,13 @@ class ToolkitItem(BaseModel):
     featured: bool = False
     enabled: bool = True
     source: str = ""  # import provenance
+    # --- loadout metadata -------------------------------------------------
+    # Ability labels used by the JIT recall index (beyond name/tags/body)
+    capabilities: list[str] = Field(default_factory=list)
+    # May be executed / called at runtime (skill scripts, MCP tools)
+    executable: bool = False
+    # Write operations still need a human confirmation before running
+    read_only: bool = True
     author_id: str = ""
     author_name: str = ""
     created_at: str = Field(default_factory=lambda: utc_now().isoformat())
@@ -73,6 +80,9 @@ class CreateToolkitRequest(BaseModel):
     featured: bool = False
     enabled: bool = True
     source: str = ""
+    capabilities: list[str] = Field(default_factory=list)
+    executable: bool = False
+    read_only: bool = True
 
 
 class UpdateToolkitRequest(BaseModel):
@@ -93,6 +103,9 @@ class UpdateToolkitRequest(BaseModel):
     featured: bool | None = None
     enabled: bool | None = None
     source: str | None = None
+    capabilities: list[str] | None = None
+    executable: bool | None = None
+    read_only: bool | None = None
 
 
 class ImportToolkitRequest(BaseModel):
@@ -462,6 +475,9 @@ class ToolkitStore:
             featured=req.featured,
             enabled=req.enabled,
             source=req.source,
+            capabilities=[c.strip() for c in req.capabilities if c.strip()],
+            executable=req.executable,
+            read_only=req.read_only,
             author_id=author_id,
             author_name=author_name,
         )

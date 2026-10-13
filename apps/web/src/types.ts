@@ -1,6 +1,17 @@
 export type Lang = "zh" | "en";
 
-export type View = "home" | "tasks" | "squad" | "knowledge" | "memory" | "agents" | "toolkit" | "admin";
+export type View =
+  | "home"
+  | "tasks"
+  | "squad"
+  | "knowledge"
+  | "memory"
+  | "agents"
+  | "toolkit"
+  | "forge"
+  | "subrooms"
+  | "decisions"
+  | "admin";
 
 export type UserRole = "admin" | "member";
 
@@ -12,20 +23,26 @@ export type InitiativeStatus =
   | "failed"
   | "done";
 
-export type AgentSlot =
-  | "product"
-  | "design"
-  | "eng"
-  | "eng_ios"
-  | "eng_android"
-  | "eng_web"
-  | "eng_backend"
-  | "eng_agent"
-  | "qa"
-  | "deploy";
+/** Built-in role slots. The authoritative list lives in the backend role
+ *  registry (`/api/roles`) and is no longer a closed set — custom / forge
+ *  created roles (e.g. `parenting`) are valid slots too. */
+export const BUILTIN_AGENT_SLOTS = [
+  "product",
+  "design",
+  "eng",
+  "eng_ios",
+  "eng_android",
+  "eng_web",
+  "eng_backend",
+  "eng_agent",
+  "qa",
+  "deploy",
+] as const;
+
+export type AgentSlot = string;
 
 export type CodingExecutor = "mock" | "claude_code" | "cursor_cli";
-export type PipelineTrack = "auto" | "express" | "standard" | "default";
+export type PipelineTrack = "auto" | "express" | "standard" | "default" | "research";
 export type Complexity = "auto" | "trivial" | "normal" | "complex";
 
 export interface PipelineStageInfo {
@@ -139,6 +156,13 @@ export interface LoginResponse {
   user: PublicUser;
 }
 
+export interface RepoConfig {
+  url: string;
+  branch?: string;
+  name?: string;
+  token?: string | null;
+}
+
 export interface RoleAgent {
   id: string;
   role: string;
@@ -148,6 +172,7 @@ export interface RoleAgent {
   status: string;
   avatar?: string | null;
   toolkit_ids?: string[];
+  repos?: RepoConfig[];
   catalog_agent_id?: string | null;
 }
 
@@ -204,6 +229,23 @@ export interface TimelineEvent {
   data?: Record<string, unknown>;
 }
 
+export interface HarnessProbe {
+  status: string;
+  detail: string;
+}
+
+export interface HarnessInfo {
+  name: string;
+  label: string;
+  probe: HarnessProbe;
+  available: boolean;
+}
+
+export interface HarnessesResponse {
+  harnesses: HarnessInfo[];
+  default: string;
+}
+
 export interface Initiative {
   id: string;
   title: string;
@@ -213,6 +255,9 @@ export interface Initiative {
   current_stage: string;
   thread_id?: string;
   room_id?: string;
+  // Initiative-locked agent harness (claude_code | opencode | codex | cursor | mock)
+  harness?: string;
+  harness_locked?: boolean;
   roles: RoleAgent[];
   participants: RoomParticipant[];
   artifacts: ArtifactRef[];
@@ -299,6 +344,125 @@ export interface PublishedAgent {
 
 export type RoleLoadout = Record<AgentSlot, string>;
 export type RoleToolkitLoadout = Record<AgentSlot, string[]>;
+
+// --- role registry / agent forge -----------------------------------------
+
+export interface RoleSpec {
+  role_key: string;
+  title: string;
+  title_en?: string;
+  summary?: string;
+  source?: "builtin" | "persona" | "custom" | "forge";
+  coding?: boolean;
+  executor?: string | null;
+  handoff_targets?: string[];
+  tags?: string[];
+}
+
+export interface AgentContractShape {
+  role_key: string;
+  title?: string;
+  inputs?: string[];
+  outputs?: string[];
+  handoff_targets?: string[];
+  timeout_seconds?: number;
+  on_fail?: "retry" | "escalate" | "halt";
+  tools_allowed?: string[];
+}
+
+export type ForgeDraftStatus = "pending-review" | "approved" | "rejected";
+
+export interface ForgeDraft {
+  id: string;
+  role_key: string;
+  title: string;
+  summary: string;
+  persona: string;
+  contract: AgentContractShape;
+  tags: string[];
+  status: ForgeDraftStatus;
+  /** Self-check findings surfaced for the reviewer. */
+  issues: string[];
+  /** Near-duplicate existing roles, for de-duplication. */
+  similar: { role_key: string; title: string; score: number }[];
+  generator: "llm" | "template";
+  requested_by?: string;
+  review_note?: string;
+  reviewed_by?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+// --- sub-rooms ------------------------------------------------------------
+
+export type SubRoomStatus = "open" | "closed" | "timeout" | "rejected";
+
+export interface SubRoomRecord {
+  id: string;
+  initiative_id: string;
+  parent_stage: string;
+  initiator_role: string;
+  goal: string;
+  lead_role: string;
+  participants: string[];
+  questions: string[];
+  max_rounds: number;
+  max_tokens: number;
+  timeout_seconds: number;
+  depth: number;
+  status: SubRoomStatus;
+  conclusion: string;
+  token_estimate: number;
+  manager_digest?: string;
+  reason?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+// --- human decisions ------------------------------------------------------
+
+export type DecisionStatus = "pending" | "answered" | "expired" | "cancelled";
+
+export interface HumanDecisionRecord {
+  id: string;
+  decision_id: string;
+  initiative_id: string;
+  stage: string;
+  question: string;
+  context?: string;
+  options: string[];
+  assignee?: string;
+  channel?: string;
+  status: DecisionStatus;
+  answer?: string;
+  answered_by?: string;
+  answered_at?: string;
+  sla_seconds: number;
+  deadline_at: string;
+  fallback_action: string;
+  fallback_reason?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface DecisionAnswerResult {
+  decision: HumanDecisionRecord;
+  accepted: boolean;
+  duplicate: boolean;
+  reason: string;
+}
+
+export interface LoadoutChoiceRecord {
+  item_id: string;
+  name: string;
+  kind: string;
+  capability?: string;
+  score?: number;
+  probe: "ok" | "degraded" | "unavailable" | "skipped";
+  detail?: string;
+  loaded: boolean;
+  read_only?: boolean;
+}
 
 export class ApiError extends Error {
   code?: number;

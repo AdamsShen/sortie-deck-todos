@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from sortie_deck.harness_providers.executor import HarnessStageExecutor
 from sortie_deck.plugins.coding import ClaudeCodeExecutor, CursorCliExecutor
 from sortie_deck.plugins.deploy import DeployShellExecutor, LlmProductExecutor
 from sortie_deck.plugins.entrypoints import load_entry_point_executors
 from sortie_deck.plugins.mock import (
+    MockCollaborativeExecutor,
     MockDeployExecutor,
     MockDesignExecutor,
     MockEngExecutor,
@@ -16,6 +18,7 @@ from sortie_deck.plugins.mock import (
     MockQaCasesExecutor,
     MockQaExecutor,
     MockSelfTestExecutor,
+    MockTechDesignExecutor,
 )
 from sortie_deck.registry import ExecutorRegistry
 
@@ -30,6 +33,7 @@ def build_default_registry(
     for executor in (
         MockIntakeExecutor(),
         MockProductExecutor(),
+        MockTechDesignExecutor(),
         MockDesignExecutor(),
         MockEngExecutor(),
         MockQaExecutor(),
@@ -38,9 +42,11 @@ def build_default_registry(
         MockIntegrateExecutor(),
         MockHandoffExecutor(),
         MockDeployExecutor(),
+        MockCollaborativeExecutor(),
         LlmProductExecutor(),
         ClaudeCodeExecutor(root, worktrees),
         CursorCliExecutor(root, worktrees),
+        HarnessStageExecutor(),
         DeployShellExecutor(),
     ):
         registry.register(executor)

@@ -52,6 +52,7 @@ plugins:
             Goals & Non-goals: 目标与非目标
             Pipeline & Graph: 航线与图编排
             Human-in-the-loop: 人在环
+            Multi-Agent Collaboration: 多 Agent 协作
             Threat Model: 威胁模型
             ADRs: 架构决策
             Architecture: 架构
@@ -71,6 +72,9 @@ plugins:
             Artifacts & Store: 产物与存储
             Web Workbench: Web 工作台
             CLI: 命令行
+            Collaboration: 协作模块
+            Notes: 笔记
+            Python Argument Unpacking: Python 参数解包
             Roadmap: 路线图
             Contributing: 贡献指南
 
@@ -99,6 +103,7 @@ nav:
       - Goals & Non-goals: design/goals.md
       - Pipeline & Graph: design/pipeline-and-graph.md
       - Human-in-the-loop: design/human-in-the-loop.md
+      - Multi-Agent Collaboration: design/multi-agent-collaboration.md
       - Threat Model: design/threat-model.md
       - ADRs: design/adr/index.md
   - Architecture:
@@ -118,6 +123,9 @@ nav:
       - Artifacts & Store: modules/artifacts.md
       - Web Workbench: modules/web.md
       - CLI: modules/cli.md
+      - Collaboration: modules/collaboration.md
+  - Notes:
+      - Python Argument Unpacking: notes/python-star-unpacking.md
   - Roadmap: roadmap.md
   - Contributing: contributing.md
 

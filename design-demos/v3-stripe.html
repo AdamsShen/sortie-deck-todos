@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<title>Sortie Deck · v3 Stripe 式专业</title>
+<style>
+  /* v3 · 逻辑三（最佳设计师）Stripe 设计团队为 Sortie Deck 定制
+     DNA：白/冷灰底、卡片化分区、极细进度条、小号大写标签、柔和色底状态 pill、
+     信任感来自"精确"——对齐、留白、克制的层级 */
+  :root{
+    --bg:#F6F9FC; --card:#FFFFFF; --border:#E3E8EE; --text:#1A1F36; --muted:#697386; --faint:#9AA5B8;
+    --green:#0E9F6E; --green-bg:#E6F6EF; --blue:#3B5BDB; --blue-bg:#EAEEFB; --red:#C9503A; --red-bg:#FBEDEA;
+    --sans:-apple-system,"PingFang SC","Helvetica Neue",sans-serif; --mono:"SF Mono",Menlo,monospace;
+  }
+  [data-theme="dark"]{
+    --bg:#12151C; --card:#191E27; --border:#272E3A; --text:#E7EAF1; --muted:#8B93A5; --faint:#5F6775;
+    --green:#3FD68F; --green-bg:#1D3229; --blue:#8AA2F5; --blue-bg:#232B42; --red:#E57760; --red-bg:#372724;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13.5px;line-height:1.6}
+  .page{max-width:1320px;margin:0 auto;padding:0 40px}
+
+  /* ── 顶栏：白条 + 精确下边 ─────────────── */
+  .bar{display:flex;align-items:center;gap:26px;height:56px;background:var(--card);border-bottom:1px solid var(--border);margin:0 -40px;padding:0 40px}
+  .brand{display:flex;align-items:center;gap:9px;font-weight:650;font-size:14.5px;letter-spacing:-.01em}
+  .mark{width:24px;height:24px;border-radius:7px;background:linear-gradient(135deg,#21B573,#0E9F6E);display:grid;place-items:center;color:#fff;font:700 10px var(--sans)}
+  nav{display:flex;gap:20px;font-size:13px;color:var(--muted);height:100%}
+  nav span{display:inline-flex;align-items:center;border-bottom:2px solid transparent}
+  nav .on{color:var(--text);font-weight:600;border-bottom-color:var(--green)}
+  .bar .right{margin-left:auto;display:flex;align-items:center;gap:12px;font-size:12.5px;color:var(--muted)}
+  .theme-btn{border:1px solid var(--border);background:var(--card);color:var(--muted);border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer}
+  .me{width:26px;height:26px;border-radius:50%;background:var(--green-bg);color:var(--green);display:grid;place-items:center;font-size:11px;font-weight:650}
+
+  /* ── 标题区：两栏，右列任务摘要卡 ─────────────── */
+  .grid{display:grid;grid-template-columns:1fr 300px;gap:28px;margin-top:30px}
+  .eyebrow{font-size:11px;letter-spacing:.14em;color:var(--muted);font-weight:600}
+  h1{font-size:24px;font-weight:700;letter-spacing:-.02em;margin:4px 0 8px}
+  .meta{display:flex;gap:8px;align-items:center;font-size:12.5px;color:var(--muted)}
+  .pill{font-size:11.5px;font-weight:600;padding:2px 9px;border-radius:99px}
+  .pill.run{color:var(--blue);background:var(--blue-bg)}
+  .progress{margin-top:16px}
+  .progress .lb{display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);margin-bottom:6px}
+  .track{height:4px;border-radius:99px;background:var(--border);overflow:hidden}
+  .fill{width:20%;height:100%;border-radius:99px;background:var(--green)}
+
+  .card{background:var(--card);border:1px solid var(--border);border-radius:10px;box-shadow:0 1px 2px rgba(16,24,40,.04)}
+  .sum{padding:16px 18px;font-size:12.5px}
+  .sum h3{font-size:12px;letter-spacing:.1em;color:var(--muted);margin-bottom:10px}
+  .sum dl{display:grid;grid-template-columns:auto 1fr;gap:6px 14px}
+  .sum dt{color:var(--faint)} .sum dd{color:var(--text);text-align:right}
+  .sum dd.mono{font-family:var(--mono);font-size:11.5px}
+
+  /* HITL 卡：需要行动的一张卡，红点 + 明确 CTA */
+  .hitl{margin-top:14px;padding:14px 16px;border-radius:10px;border:1px solid color-mix(in srgb,var(--red) 35%,var(--border));background:var(--red-bg)}
+  .hitl .t{display:flex;align-items:center;gap:7px;font-weight:650;color:var(--red);font-size:13px}
+  .hitl p{font-size:12px;color:var(--text);margin:5px 0 10px}
+  .cta{display:inline-block;background:var(--red);color:#fff;font-size:12px;font-weight:600;border-radius:7px;padding:5px 14px}
+
+  /* ── 流水线：泳道卡片 ─────────────── */
+  .rail-card{margin-top:26px;padding:20px 22px}
+  .rail-card h2{font-size:13px;letter-spacing:.1em;color:var(--muted);margin-bottom:16px}
+  .rail{display:flex;align-items:center;gap:0}
+  .node{display:flex;flex-direction:column;align-items:center;gap:6px;min-width:64px}
+  .av{width:32px;height:32px;border-radius:50%;background:var(--card);border:1px solid var(--border);display:grid;place-items:center;font-size:12px;color:var(--muted);font-weight:600;box-shadow:0 1px 2px rgba(16,24,40,.05)}
+  .done .av{background:var(--green-bg);border-color:color-mix(in srgb,var(--green) 40%,transparent);color:var(--green)}
+  .run .av{border-color:var(--blue);color:var(--blue);box-shadow:0 0 0 3px var(--blue-bg)}
+  .node .lb{font-size:11.5px;color:var(--text);font-weight:550}
+  .node .role-s{font-size:10px;color:var(--faint)}
+  .gpill{font-size:10px;font-weight:650;color:var(--red);background:var(--red-bg);padding:0 6px;border-radius:99px}
+  .tie{flex:1;height:2px;background:var(--border);margin:0 6px;margin-top:-16px}
+  .par{border:1px dashed var(--border);border-radius:12px;padding:10px 12px;display:flex;gap:12px;background:var(--bg)}
+
+  /* ── 阶段表：Stripe List ─────────────── */
+  .sec{margin-top:26px}
+  .sec h2{font-size:13px;letter-spacing:.1em;color:var(--muted);margin-bottom:10px}
+  table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden;box-shadow:0 1px 2px rgba(16,24,40,.04)}
+  thead th{font-size:10.5px;letter-spacing:.12em;color:var(--faint);text-align:left;font-weight:650;padding:9px 16px;border-bottom:1px solid var(--border);background:color-mix(in srgb,var(--bg) 60%,var(--card))}
+  td{padding:10px 16px;border-bottom:1px solid var(--border);font-size:13px}
+  tr:last-child td{border-bottom:none}
+  .id{font-family:var(--mono);font-size:11px;color:var(--faint)}
+  .dep{font-family:var(--mono);font-size:10.5px;color:var(--faint)}
+  .role{font-size:11.5px;color:var(--muted)}
+  .pill.done{color:var(--green);background:var(--green-bg)} .pill.runn{color:var(--blue);background:var(--blue-bg)}
+  .pill.que{color:var(--muted);background:color-mix(in srgb,var(--muted) 10%,transparent)}
+  .g{font-size:11px;color:var(--red);font-weight:600}
+
+  .foot{display:flex;justify-content:space-between;color:var(--faint);font-size:11.5px;margin:18px 2px 34px}
+</style>
+</head>
+<body>
+<div class="bar"><div class="page" style="display:flex;align-items:center;gap:26px;width:auto;padding:0 40px">
+  <div class="brand"><span class="mark">SD</span>Sortie Deck</div>
+  <nav><span>工作台</span><span class="on">任务</span><span>知识库</span><span>记忆</span><span>角色工场</span><span>工具箱</span><span>小队</span><span>决策中心</span><span>管理</span></nav>
+  <div class="right"><button class="theme-btn" onclick="toggleTheme()">明 / 暗</button><span>Admin</span><span class="me">A</span></div>
+</div></div>
+
+<div class="page">
+  <div class="grid">
+    <div>
+      <p class="eyebrow">任务 · MISSION</p>
+      <h1>门户预发健康检查</h1>
+      <div class="meta"><span class="pill run">● 运行中</span><span>standard 航线 · 8 角色 · 已运行 12 分钟</span></div>
+      <div class="progress">
+        <div class="lb"><span>阶段进度</span><b>2 / 10 已完成</b></div>
+        <div class="track"><div class="fill"></div></div>
+      </div>
+    </div>
+    <div>
+      <div class="card sum">
+        <h3>任务摘要</h3>
+        <dl>
+          <dt>Initiative</dt><dd class="mono">ini_9f2k31</dd>
+          <dt>航线</dt><dd>standard</dd>
+          <dt>执行器</dt><dd class="mono">claude_code</dd>
+          <dt>工作区</dt><dd class="mono">worktrees/ini_9f2k31</dd>
+          <dt>任务仓库</dt><dd class="mono">2 repos</dd>
+        </dl>
+      </div>
+      <div class="hitl">
+        <div class="t">● 门禁等待确认</div>
+        <p>技术方案评审等待人工确认，流水线已暂停在此。</p>
+        <span class="cta">去审批 /approve</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="card rail-card">
+    <h2>流水线 PIPELINE</h2>
+    <div class="rail">
+      <div class="node done"><span class="av">✓</span><span class="lb">集结</span><span class="role-s">product</span></div><div class="tie"></div>
+      <div class="node done"><span class="av">✓</span><span class="lb">PRD</span><span class="gpill">门禁</span></div><div class="tie"></div>
+      <div class="node run"><span class="av">案</span><span class="lb">技术方案</span><span class="role-s">eng</span></div><div class="tie"></div>
+      <div class="node"><span class="av">设</span><span class="lb">设计</span><span class="role-s">design</span></div><div class="tie"></div>
+      <div class="par">
+        <div class="node"><span class="av">后</span><span class="lb">后端</span></div>
+        <div class="node"><span class="av">iOS</span><span class="lb">iOS</span></div>
+        <div class="node"><span class="av">安</span><span class="lb">Android</span></div>
+        <div class="node"><span class="av">W</span><span class="lb">Web</span></div>
+      </div><div class="tie"></div>
+      <div class="node"><span class="av">测</span><span class="lb">联调测试</span><span class="gpill">门禁</span></div><div class="tie"></div>
+      <div class="node"><span class="av">上</span><span class="lb">上线</span><span class="gpill">门禁</span></div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <h2>阶段清单 · STAGES</h2>
+    <table>
+      <thead><tr><th>阶段 ID</th><th>名称</th><th>依赖</th><th>角色</th><th>门禁</th><th>状态</th></tr></thead>
+      <tr><td class="id">intake</td><td>集结</td><td class="dep">—</td><td class="role">product</td><td></td><td><span class="pill done">已完成</span></td></tr>
+      <tr><td class="id">product_prd</td><td>PRD</td><td class="dep">+intake</td><td class="role">product</td><td class="g">门禁</td><td><span class="pill done">已完成</span></td></tr>
+      <tr><td class="id">eng_tech_design</td><td>技术方案</td><td class="dep">+product_prd</td><td class="role">eng</td><td class="g">门禁</td><td><span class="pill runn">进行中</span></td></tr>
+      <tr><td class="id">design_ui</td><td>设计</td><td class="dep">+product_prd</td><td class="role">design</td><td></td><td><span class="pill que">排队中</span></td></tr>
+      <tr><td class="id">eng_backend</td><td>后端开发</td><td class="dep">+eng_tech_design</td><td class="role">eng_backend</td><td></td><td><span class="pill que">排队中</span></td></tr>
+      <tr><td class="id">eng_ios</td><td>iOS 开发</td><td class="dep">+eng_tech_design</td><td class="role">eng_ios</td><td></td><td><span class="pill que">排队中</span></td></tr>
+      <tr><td class="id">eng_android</td><td>Android 开发</td><td class="dep">+eng_tech_design</td><td class="role">eng_android</td><td></td><td><span class="pill que">排队中</span></td></tr>
+      <tr><td class="id">eng_web</td><td>Web 开发</td><td class="dep">+eng_tech_design</td><td class="role">eng_web</td><td></td><td><span class="pill que">排队中</span></td></tr>
+      <tr><td class="id">qa_verify</td><td>联调测试</td><td class="dep">+eng_*</td><td class="role">qa</td><td class="g">门禁</td><td><span class="pill que">排队中</span></td></tr>
+      <tr><td class="id">deploy</td><td>上线</td><td class="dep">+qa_verify</td><td class="role">deploy</td><td class="g">门禁</td><td><span class="pill que">排队中</span></td></tr>
+    </table>
+  </div>
+
+  <div class="foot"><span>Sortie Deck</span><span>门禁即信任边界 · 人始终在环</span></div>
+</div>
+<script>
+  const p=new URLSearchParams(location.search).get("theme");
+  if(p) document.documentElement.dataset.theme=p;
+  function toggleTheme(){
+    const h=document.documentElement;
+    h.dataset.theme=h.dataset.theme==="dark"?"light":"dark";
+  }
+</script>
+</body>
+</html>

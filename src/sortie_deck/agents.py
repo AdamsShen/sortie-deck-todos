@@ -4,14 +4,17 @@ import json
 import re
 import threading
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field
 
 from sortie_deck.models import RoleId, new_id, utc_now
 from sortie_deck.templates import load_persona
 
-AgentSlot = Literal[
+# Built-in slots: kept for seeding and UI defaults. The set is **no longer
+# closed** — `sortie_deck.roles.RoleRegistry` owns the authoritative list and
+# custom / forge-created roles are accepted as-is.
+BUILTIN_AGENT_SLOTS: tuple[str, ...] = (
     "product",
     "design",
     "eng",
@@ -22,7 +25,18 @@ AgentSlot = Literal[
     "eng_agent",
     "qa",
     "deploy",
-]
+)
+
+
+def _normalize_slot(value: str) -> str:
+    key = (value or "").strip()
+    if not key:
+        raise ValueError("slot is required")
+    return key
+
+
+# Any non-empty role key is a valid slot.
+AgentSlot = Annotated[str, AfterValidator(_normalize_slot)]
 Visibility = Literal["public", "private"]
 
 
@@ -194,7 +208,7 @@ class AgentCatalog:
                 PublishedAgent(
                     slug=s["slug"],
                     title=s["title"],
-                    slot=s["slot"],  # type: ignore[arg-type]
+                    slot=s["slot"],
                     summary=s["summary"],
                     persona=s["persona"],
                     tags=s["tags"],
