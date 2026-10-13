@@ -59,6 +59,14 @@ class Settings(BaseSettings):
     opencode_base_url: str | None = None
     opencode_api_key: str | None = None
     opencode_timeout: float = 600.0
+    # --- mission-scoped RAG namespace ----------------------------------------
+    # Auto-index key stage artifacts into the knowledge base under the
+    # initiative's namespace (tags `ini:<id>`, WeKnora folder `<prefix>/<id>`).
+    kb_mission_index: bool = True
+    # WeKnora folder prefix for per-mission namespaces (local catalog ignores it)
+    kb_mission_folder_prefix: str = "missions"
+    # Max chars per artifact body written into the mission namespace
+    kb_mission_index_max_chars: int = 4000
     # Claude Code --permission-mode for non-interactive -p runs in worktrees
     # acceptEdits | auto | bypassPermissions | default | dontAsk | plan
     coding_permission_mode: str = "acceptEdits"

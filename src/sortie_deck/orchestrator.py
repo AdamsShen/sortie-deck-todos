@@ -396,6 +396,59 @@ class Orchestrator:
         ini.timeline.append(event)
         ini.updated_at = utc_now()
 
+    # --- mission knowledge namespace (RAG writeback) ----------------------
+
+    _KB_INDEX_KINDS = frozenset(
+        {"prd.md", "tech_design.md", "design.md", "handoff.md", "integrate.md"}
+    )
+
+    async def _index_mission_artifacts(self, ini: Initiative) -> None:
+        """Best-effort writeback of key stage artifacts into the mission
+        knowledge namespace (tags ``ini:<id>``, WeKnora folder per mission).
+
+        Called after artifact sync (per run segment); scans ALL staged refs so
+        interrupting stages are covered too. Idempotent via ``meta["kb_indexed"]``;
+        failures degrade silently.
+        """
+        if not ini.artifacts:
+            return
+        try:
+            from sortie_deck.knowledge_gateway import gateway_from_settings
+
+            gateway = gateway_from_settings(self.cfg)
+        except Exception:  # noqa: BLE001 — knowledge is an enhancement
+            return
+        meta = dict(ini.meta or {})
+        indexed = list(meta.get("kb_indexed") or [])
+        pending = [
+            ref
+            for ref in ini.artifacts
+            if ref.stage not in {"", "intake", "done"}
+            and ref.kind in self._KB_INDEX_KINDS
+            and f"{ref.stage}:{ref.kind}" not in indexed
+        ]
+        if not pending:
+            return
+        try:
+            for ref in pending:
+                try:
+                    content = self.artifacts.read_text(ref.path)
+                except Exception:  # noqa: BLE001 — unreadable artifact is skipped
+                    continue
+                gateway.index_mission_artifact(
+                    initiative_id=ini.id,
+                    stage=ref.stage,
+                    kind=ref.kind,
+                    title=f"{ini.title} · {ref.stage} · {ref.kind}",
+                    content=content,
+                )
+                indexed.append(f"{ref.stage}:{ref.kind}")
+            meta["kb_indexed"] = indexed
+            ini.meta = meta
+            self.store.upsert(ini)
+        except Exception:  # noqa: BLE001 — knowledge writeback must never break a stage
+            pass
+
     def _sync_artifacts_from_upstream(self, ini: Initiative, upstream: dict[str, str], stage: str) -> None:
         existing = {(a.path) for a in ini.artifacts}
         for kind, rel in upstream.items():
@@ -1415,12 +1468,14 @@ class Orchestrator:
                 {"initiative_id": ini.id, "stage": stage},
                 timeout=self.cfg.webhook_timeout,
             )
+            await self._index_mission_artifacts(ini)
             return ini
 
         snap = await self._graph_for(ini).aget_state({"configurable": {"thread_id": ini.thread_id}})
         values = snap.values or {}
         if values.get("upstream"):
             self._sync_artifacts_from_upstream(ini, values["upstream"], values.get("stage", ini.current_stage))
+            await self._index_mission_artifacts(ini)
         ini.current_stage = values.get("stage", ini.current_stage)
         status = values.get("status", "running")
         if status == "done":
