@@ -182,6 +182,26 @@ class ArtifactRef(BaseModel):
     meta: dict[str, Any] = Field(default_factory=dict)
 
 
+class ExternalMaterial(BaseModel):
+    """A user-supplied input file attached to a mission (PRD / plan / design …).
+
+    ``pinned`` marks the material as *persistent context*: its text excerpt is
+    folded into the mission brief so every downstream stage (and squad chat)
+    keeps carrying it into the prompt. Unpinned materials are archived only.
+    """
+
+    id: str = Field(default_factory=lambda: new_id("mat_"))
+    name: str
+    # Free-form taxonomy surfaced by the UI: prd | plan | design | data | other
+    kind: str = "other"
+    mime: str = ""
+    size: int = 0
+    pinned: bool = False
+    # Decoded text for text-like materials (markdown / json / csv / …)
+    text_excerpt: str = ""
+    added_at: datetime = Field(default_factory=utc_now)
+
+
 class TimelineEvent(BaseModel):
     id: str = Field(default_factory=lambda: new_id("evt_"))
     at: datetime = Field(default_factory=utc_now)
@@ -252,6 +272,9 @@ class Initiative(BaseModel):
     roles: list[RoleAgent] = Field(default_factory=list)
     participants: list[RoomParticipant] = Field(default_factory=list)
     artifacts: list[ArtifactRef] = Field(default_factory=list)
+    # External input materials (PRD / plan / design …); pinned ones are folded
+    # into ``brief`` so they ride along into every stage prompt.
+    materials: list[ExternalMaterial] = Field(default_factory=list)
     timeline: list[TimelineEvent] = Field(default_factory=list)
     pending_hitl: HitlRequest | None = None
     human_instruction: str | None = None
@@ -324,6 +347,8 @@ class CreateInitiativeRequest(BaseModel):
     role_repos: dict[str, list[RepoConfig]] = Field(default_factory=dict)
     # Optional per-stage override (stage name -> toolkit ids)
     stage_toolkits: dict[str, list[str]] = Field(default_factory=dict)
+    # External input materials; pinned ones become persistent mission context
+    materials: list[ExternalMaterial] = Field(default_factory=list)
 
 
 class PipelineStageSpec(BaseModel):

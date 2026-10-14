@@ -44,6 +44,7 @@ from sortie_deck.models import (
     ConfirmPipelineRequest,
     CreateInitiativeRequest,
     DiscussParticipateRequest,
+    ExternalMaterial,
     HitlAction,
     HitlDecision,
     HitlSubmitRequest,
@@ -899,6 +900,27 @@ async def patch_initiative_harness(
         raise HTTPException(404, "Initiative not found") from None
     except RuntimeError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+class UpdateMaterialsRequest(BaseModel):
+    materials: list[ExternalMaterial] = Field(default_factory=list)
+
+
+@app.patch("/api/initiatives/{initiative_id}/materials")
+async def patch_initiative_materials(
+    initiative_id: str,
+    req: UpdateMaterialsRequest,
+    user: PublicUser = Depends(require_user),
+) -> dict[str, Any]:
+    """Replace a mission's external materials (recomposes the brief).
+
+    Pinned materials ride along as persistent context in every stage prompt.
+    """
+    try:
+        ini = orch().set_materials(initiative_id, req.materials)
+        return ini.model_dump(mode="json")
+    except KeyError:
+        raise HTTPException(404, "Initiative not found") from None
 
 
 @app.get("/api/pipelines")

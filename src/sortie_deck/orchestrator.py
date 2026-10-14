@@ -10,6 +10,7 @@ from sortie_deck.agents import AgentCatalog
 from sortie_deck.artifacts_s3 import build_artifact_store
 from sortie_deck.graph import build_graph_from_template, compile_pipelines
 from sortie_deck.manager import plan_digest, plan_digest_matches
+from sortie_deck.materials import compose_brief
 from sortie_deck.memory import MemoryStore
 from sortie_deck.models import (
     CODING_ROLE_VALUES,
@@ -17,6 +18,7 @@ from sortie_deck.models import (
     ArtifactRef,
     ConfirmPipelineRequest,
     CreateInitiativeRequest,
+    ExternalMaterial,
     HarnessLockedError,
     HitlAction,
     HitlDecision,
@@ -801,10 +803,11 @@ class Orchestrator:
 
         ini = Initiative(
             title=req.title,
-            brief=req.brief,
+            brief=compose_brief(req.brief, req.materials),
             template=role_template,
             status=InitiativeStatus.DRAFT,
             harness=harness,
+            materials=list(req.materials),
             roles=self._roles_from_template(
                 coding, req.role_agents, role_toolkits, template=role_template,
                 role_repos=role_repos,
@@ -816,6 +819,9 @@ class Orchestrator:
                     "coding_executor": coding,
                     "harness": harness,
                     "role_agents": req.role_agents or {},
+                    # Raw user brief, kept so materials can be re-pinned later
+                    # without stacking duplicate context sections.
+                    "brief_base": req.brief,
                     "role_repos": {
                         slot: [repo.model_dump(mode="json") for repo in repos]
                         for slot, repos in role_repos.items()
@@ -1186,6 +1192,29 @@ class Orchestrator:
 
     def get(self, initiative_id: str) -> Initiative | None:
         return self.store.get(initiative_id)
+
+    def set_materials(
+        self, initiative_id: str, materials: list[ExternalMaterial]
+    ) -> Initiative:
+        """Replace a mission's external materials; recompose the brief.
+
+        Keeps the raw user brief under ``meta["brief_base"]`` so pinning /
+        unpinning never stacks duplicate context sections.
+        """
+        from sortie_deck.materials import compose_brief, strip_materials_section
+
+        ini = self.store.get(initiative_id)
+        if ini is None:
+            raise KeyError(initiative_id)
+        meta = dict(ini.meta or {})
+        base = str(meta.get("brief_base") or strip_materials_section(ini.brief))
+        meta["brief_base"] = base
+        ini.meta = meta
+        ini.materials = list(materials)
+        ini.brief = compose_brief(base, ini.materials)
+        ini.updated_at = utc_now()
+        self.store.upsert(ini)
+        return ini
 
     async def delete_initiative(self, initiative_id: str) -> None:
         if not self.store.get(initiative_id):
