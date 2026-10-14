@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>新建任务 · Sortie Deck 设计稿</title>
+<!--
+  设计假设（Junior pass）：
+  1. 完全复用 apps/web 现有 token（--void/--panel/--line/--signal/--copper 等），
+     让新页面像从现有编辑部风长出来的，不另起风格。
+  2. 布局：左列 = 需求描述 + 外部资料导入；右列 = 上下文注入预览（实时汇总被钉住的资料）。
+  3. 核心交互：每个资料文件一枚「持续上下文」开关 + 类型标签（PRD/计划/设计稿/数据/其他，点击可换）。
+  4. 数据为演示占位，真实接入时由上传接口返回。
+-->
+<style>
+  :root,
+  [data-theme="paper"] {
+    --void: #f6f9fc;
+    --deep: #edf1f7;
+    --panel: #ffffff;
+    --panel-2: #f8fafd;
+    --line: #e3e8ee;
+    --line-hot: #cbd2dc;
+    --text: #1a1f36;
+    --muted: #697386;
+    --signal: #0e9f6e;
+    --signal-dim: #dff2e9;
+    --copper: #3b5bdb;
+    --copper-dim: #e8edfb;
+    --ice: #6e8be8;
+    --ice-dim: #e9eefb;
+    --danger: #c9503a;
+    --radius: 10px;
+    --serif: "Songti SC", "Noto Serif SC", "Source Han Serif SC", Georgia, serif;
+    --font: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  [data-theme="ink"] {
+    --void: #171a21;
+    --deep: #1c2029;
+    --panel: #20242d;
+    --panel-2: #262b35;
+    --line: #32363f;
+    --line-hot: #454a55;
+    --text: #ece9e1;
+    --muted: #8b8a80;
+    --signal: #3fd68f;
+    --signal-dim: #24422f;
+    --copper: #7b96f0;
+    --copper-dim: #2a3352;
+    --ice: #9fb4e8;
+    --ice-dim: #2b3350;
+    --danger: #e57760;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: var(--font);
+    color: var(--text);
+    background: var(--void);
+    min-height: 100vh;
+  }
+
+  /* ── 顶部导航（对齐现有 app header） ─────────────── */
+  .topbar {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    padding: 0.7rem 1.6rem;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-family: var(--serif);
+    font-weight: 700;
+    font-size: 1.05rem;
+  }
+  .brand-mark {
+    width: 28px; height: 28px;
+    border: 1.5px solid var(--text);
+    border-radius: 7px;
+    display: grid; place-items: center;
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    letter-spacing: 0;
+  }
+  .crumbs {
+    display: flex; align-items: center; gap: 0.55rem;
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    color: var(--muted);
+    letter-spacing: 0.06em;
+  }
+  .crumbs .sep { opacity: 0.4; }
+  .crumbs .here { color: var(--copper); }
+  .topbar .spacer { flex: 1; }
+  .theme-btn {
+    border: 1px solid var(--line-hot);
+    background: var(--panel-2);
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+    padding: 0.32rem 0.7rem;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  .theme-btn:hover { color: var(--text); border-color: var(--copper); }
+
+  /* ── 页面主体 ─────────────── */
+  .page {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 2.2rem 1.6rem 4rem;
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    letter-spacing: 0.22em;
+    color: var(--copper);
+    margin-bottom: 0.55rem;
+  }
+  h1.page-title {
+    font-family: var(--serif);
+    font-size: 1.75rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    margin-bottom: 0.4rem;
+  }
+  .page-sub {
+    color: var(--muted);
+    font-size: 0.85rem;
+    margin-bottom: 1.8rem;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 1.55fr 1fr;
+    gap: 1.1rem;
+    align-items: start;
+  }
+  @media (max-width: 880px) { .grid { grid-template-columns: 1fr; } }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 1.1rem;
+  }
+  .panel-label {
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    letter-spacing: 0.18em;
+    color: var(--copper);
+    margin-bottom: 0.75rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+  .panel-label .aux { color: var(--muted); letter-spacing: 0.08em; }
+
+  /* 需求描述 */
+  .field { margin-bottom: 0.9rem; }
+  .field label {
+    display: block;
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.12em;
+    color: var(--muted);
+    margin-bottom: 0.35rem;
+  }
+  .field input[type="text"],
+  .field textarea {
+    width: 100%;
+    border: 1px solid var(--line);
+    background: var(--panel-2);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 0.6rem 0.75rem;
+    font-family: var(--font);
+    font-size: 0.9rem;
+    line-height: 1.6;
+    resize: vertical;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .field textarea {
+    font-family: var(--serif);
+    min-height: 110px;
+  }
+  .field input:focus, .field textarea:focus { border-color: var(--copper); }
+
+  /* ── 资料导入区 ─────────────── */
+  .dropzone {
+    border: 1.5px dashed var(--line-hot);
+    border-radius: var(--radius);
+    background: var(--panel-2);
+    padding: 1.4rem 1rem;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+    margin-bottom: 0.9rem;
+  }
+  .dropzone:hover, .dropzone.hot {
+    border-color: var(--copper);
+    background: var(--copper-dim);
+  }
+  .dropzone .dz-main {
+    font-size: 0.88rem;
+    margin-bottom: 0.3rem;
+  }
+  .dropzone .dz-hint {
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+  }
+  .dropzone .dz-hint b { color: var(--copper); font-weight: 500; }
+
+  /* 文件卡 */
+  .file-list { display: flex; flex-direction: column; gap: 0.55rem; }
+  .file-card {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel-2);
+    padding: 0.6rem 0.75rem;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .file-card.pinned {
+    border-color: var(--signal);
+    background: linear-gradient(0deg, var(--panel-2), var(--panel-2));
+    box-shadow: inset 3px 0 0 var(--signal);
+  }
+  .type-chip {
+    font-family: var(--mono);
+    font-size: 0.6rem;
+    letter-spacing: 0.1em;
+    padding: 0.22rem 0.5rem;
+    border-radius: 5px;
+    cursor: pointer;
+    white-space: nowrap;
+    border: 1px solid transparent;
+    user-select: none;
+  }
+  .type-chip:hover { filter: brightness(0.95); }
+  .t-prd   { background: var(--copper-dim); color: var(--copper); }
+  .t-plan  { background: var(--signal-dim); color: var(--signal); }
+  .t-design{ background: var(--ice-dim); color: var(--ice); }
+  .t-data  { background: var(--deep); color: var(--muted); }
+  .t-other { background: transparent; color: var(--muted); border-color: var(--line-hot); }
+
+  .file-info { flex: 1; min-width: 0; }
+  .file-name {
+    font-size: 0.84rem;
+    font-weight: 500;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .file-meta {
+    font-family: var(--mono);
+    font-size: 0.62rem;
+    color: var(--muted);
+    letter-spacing: 0.05em;
+    margin-top: 0.15rem;
+  }
+  .file-meta .dot { margin: 0 0.35em; opacity: 0.5; }
+
+  .ctx-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+  }
+  .ctx-toggle .tgl-label {
+    font-family: var(--mono);
+    font-size: 0.62rem;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+  }
+  .ctx-toggle.on .tgl-label { color: var(--signal); }
+  .switch {
+    width: 30px; height: 17px;
+    border-radius: 999px;
+    background: var(--line-hot);
+    position: relative;
+    transition: background 0.18s;
+    flex: none;
+  }
+  .switch::after {
+    content: "";
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 13px; height: 13px;
+    border-radius: 50%;
+    background: var(--panel);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.25);
+    transition: transform 0.18s;
+  }
+  .ctx-toggle.on .switch { background: var(--signal); }
+  .ctx-toggle.on .switch::after { transform: translateX(13px); }
+
+  .file-remove {
+    border: none;
+    background: none;
+    color: var(--muted);
+    font-size: 0.95rem;
+    cursor: pointer;
+    padding: 0.1rem 0.3rem;
+    border-radius: 5px;
+    line-height: 1;
+  }
+  .file-remove:hover { color: var(--danger); background: var(--deep); }
+
+  .empty-files {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    color: var(--muted);
+    letter-spacing: 0.08em;
+    text-align: center;
+    padding: 0.4rem 0 0.2rem;
+  }
+
+  /* ── 右列：上下文注入预览 ─────────────── */
+  .ctx-list { display: flex; flex-direction: column; gap: 0.45rem; }
+  .ctx-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-family: var(--mono);
+    font-size: 0.7rem;
+  }
+  .ctx-item .pin { color: var(--signal); font-size: 0.72rem; }
+  .ctx-item .ctx-name {
+    flex: 1;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .ctx-item .ctx-tok { color: var(--muted); font-size: 0.62rem; }
+  .ctx-total {
+    margin-top: 0.9rem;
+    padding-top: 0.7rem;
+    border-top: 1px dashed var(--line);
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    color: var(--muted);
+    letter-spacing: 0.06em;
+  }
+  .ctx-total b { color: var(--text); font-weight: 600; font-size: 0.8rem; }
+  .ctx-note {
+    margin-top: 0.7rem;
+    font-size: 0.72rem;
+    color: var(--muted);
+    line-height: 1.65;
+  }
+  .ctx-note em { font-style: normal; color: var(--signal); }
+
+  .crew-panel .crew-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.8rem;
+    padding: 0.28rem 0;
+  }
+  .crew-row .k { color: var(--muted); }
+  .crew-row .v { font-family: var(--mono); font-size: 0.72rem; }
+
+  /* 底部操作 */
+  .actions {
+    display: flex;
+    gap: 0.6rem;
+    margin-top: 1.1rem;
+    justify-content: flex-end;
+  }
+  .btn {
+    border: 1px solid var(--line-hot);
+    background: var(--panel-2);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 0.55rem 1.3rem;
+    font-size: 0.85rem;
+    cursor: pointer;
+    font-family: var(--font);
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .btn:hover { border-color: var(--copper); }
+  .btn.primary {
+    background: var(--signal);
+    border-color: var(--signal);
+    color: #fff;
+    font-weight: 600;
+  }
+  .btn.primary:hover { filter: brightness(1.06); }
+  .btn.primary:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    filter: none;
+  }
+
+  .design-note {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 0 1.6rem 3rem;
+    font-family: var(--mono);
+    font-size: 0.62rem;
+    color: var(--muted);
+    letter-spacing: 0.08em;
+    line-height: 1.8;
+  }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand"><div class="brand-mark">SD</div>Sortie Deck</div>
+  <nav class="crumbs">
+    <span>任务板</span><span class="sep">/</span><span class="here">新建任务</span>
+  </nav>
+  <div class="spacer"></div>
+  <button class="theme-btn" id="themeBtn">◆ 纸 / 墨</button>
+</header>
+
+<main class="page">
+  <div class="eyebrow">MISSION INTAKE</div>
+  <h1 class="page-title">新建任务</h1>
+  <p class="page-sub">描述任务目标，导入外部资料；被钉住的资料将持续注入小队后续每轮对话的上下文。</p>
+
+  <div class="grid">
+    <!-- ── 左列 ── -->
+    <div style="display:flex; flex-direction:column; gap:1.1rem;">
+      <section class="panel">
+        <div class="panel-label">任务定义 <span class="aux">DEFINE</span></div>
+        <div class="field">
+          <label>任务标题</label>
+          <input type="text" id="titleInput" placeholder="例：客户通知中心 V2 — 渠道回执改造" />
+        </div>
+        <div class="field" style="margin-bottom:0;">
+          <label>需求描述</label>
+          <textarea id="descInput" placeholder="用自然语言描述任务目标——系统会检索历史与知识库，提出航线与编制，确认后组建小队。"></textarea>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-label">外部资料 <span class="aux" id="fileCount">0 份 · 点击标签可改类型</span></div>
+        <div class="dropzone" id="dropzone">
+          <div class="dz-main">拖入文件，或点击上传</div>
+          <div class="dz-hint">支持 <b>PRD</b> · <b>计划文档</b> · <b>设计稿</b> · <b>数据</b> 等多格式，可批量</div>
+        </div>
+        <div class="file-list" id="fileList"></div>
+      </section>
+    </div>
+
+    <!-- ── 右列 ── -->
+    <div style="display:flex; flex-direction:column; gap:1.1rem;">
+      <section class="panel">
+        <div class="panel-label">上下文注入预览 <span class="aux">CTX PREVIEW</span></div>
+        <div class="ctx-list" id="ctxList"></div>
+        <div class="ctx-total">
+          <span>预计注入</span>
+          <b id="ctxTotal">0 tokens</b>
+        </div>
+        <p class="ctx-note">
+          <em>◉ 已钉住</em> 的资料将作为<em>持续上下文</em>带入小队每轮对话；
+          未钉住的仅存档在任务资料库，供成员按需检索。
+        </p>
+      </section>
+
+      <section class="panel crew-panel">
+        <div class="panel-label">小队编制 <span class="aux">CREW</span></div>
+        <div class="crew-row"><span class="k">初始小队</span><span class="v">规划师 · 1</span></div>
+        <div class="crew-row"><span class="k">确认后扩编</span><span class="v">12 人（执行/质检）</span></div>
+        <div class="crew-row"><span class="k">执行器</span><span class="v">claude_code</span></div>
+      </section>
+
+      <div class="actions">
+        <button class="btn">取消</button>
+        <button class="btn primary" id="createBtn" disabled>创建任务 ⏎</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<div class="design-note">
+  DESIGN NOTE · 类型标签点击可循环切换（PRD→计划→设计稿→数据→其他）；「持续上下文」开关决定该文件是否进入每轮对话注入。<br>
+  本页为样式设计稿，数据为演示占位 —— 真实接入时由上传接口返回文件信息与 token 估算。
+</div>
+
+<script>
+  // ── 演示数据（真实接入时替换为上传接口） ──
+  const SAMPLES = [
+    { name: "客户通知中心-V2-PRD.md", size: "48 KB", type: "prd", label: "PRD", tok: 3200 },
+    { name: "渠道回执改造-技术方案.pdf", size: "1.2 MB", type: "plan", label: "计划", tok: 5400 },
+    { name: "通知模板-设计稿-v3.fig", size: "8.6 MB", type: "design", label: "设计稿", tok: 0 },
+    { name: "回执失败率-近30天.csv", size: "220 KB", type: "data", label: "数据", tok: 1800 },
+    { name: "会议纪要-1029.md", size: "12 KB", type: "other", label: "其他", tok: 900 },
+  ];
+  const TYPE_ORDER = ["prd", "plan", "design", "data", "other"];
+  const TYPE_LABEL = { prd: "PRD", plan: "计划", design: "设计稿", data: "数据", other: "其他" };
+
+  let files = [];
+  let sampleIdx = 0;
+
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  function addFile(f) {
+    files.push({ ...f, pinned: false, id: Date.now() + Math.random() });
+    render();
+  }
+
+  function render() {
+    const list = $("fileList");
+    $("fileCount").textContent = `${files.length} 份 · 点击标签可改类型`;
+    if (!files.length) {
+      list.innerHTML = `<div class="empty-files">── 尚未导入资料 · 支持一次多选 ──</div>`;
+    } else {
+      list.innerHTML = files.map((f, i) => `
+        <div class="file-card ${f.pinned ? "pinned" : ""}">
+          <span class="type-chip t-${f.type}" data-act="cycle" data-i="${i}" title="点击切换类型">${TYPE_LABEL[f.type]}</span>
+          <div class="file-info">
+            <div class="file-name" title="${esc(f.name)}">${esc(f.name)}</div>
+            <div class="file-meta">${f.size}<span class="dot">·</span>${f.tok ? "≈" + f.tok + " tok" : "非文本 · 供检索"}</div>
+          </div>
+          <span class="ctx-toggle ${f.pinned ? "on" : ""}" data-act="pin" data-i="${i}">
+            <span class="tgl-label">${f.pinned ? "持续上下文" : "仅存档"}</span>
+            <span class="switch"></span>
+          </span>
+          <button class="file-remove" data-act="del" data-i="${i}" title="移除">×</button>
+        </div>
+      `).join("");
+    }
+    renderCtx();
+    $("createBtn").disabled = !$("titleInput").value.trim() || !$("descInput").value.trim();
+  }
+
+  function renderCtx() {
+    const pinned = files.filter((f) => f.pinned);
+    $("ctxList").innerHTML = pinned.length
+      ? pinned.map((f) => `
+          <div class="ctx-item">
+            <span class="pin">◉</span>
+            <span class="ctx-name">${esc(f.name)}</span>
+            <span class="ctx-tok">${f.tok ? "≈" + f.tok + " tok" : "检索型"}</span>
+          </div>`).join("")
+      : `<div class="empty-files">未钉住任何资料</div>`;
+    const total = pinned.reduce((s, f) => s + f.tok, 0);
+    $("ctxTotal").textContent = total ? `≈ ${total.toLocaleString()} tokens` : "0 tokens";
+  }
+
+  $("fileList").addEventListener("click", (e) => {
+    const el = e.target.closest("[data-act]");
+    if (!el) return;
+    const i = +el.dataset.i;
+    const act = el.dataset.act;
+    if (act === "pin") files[i].pinned = !files[i].pinned;
+    if (act === "del") files.splice(i, 1);
+    if (act === "cycle") {
+      const next = TYPE_ORDER[(TYPE_ORDER.indexOf(files[i].type) + 1) % TYPE_ORDER.length];
+      files[i].type = next;
+    }
+    render();
+  });
+
+  // 拖拽 / 点击上传（原型：注入演示数据）
+  const dz = $("dropzone");
+  dz.addEventListener("click", () => {
+    if (sampleIdx < SAMPLES.length) addFile(SAMPLES[sampleIdx++]);
+  });
+  dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("hot"); });
+  dz.addEventListener("dragleave", () => dz.classList.remove("hot"));
+  dz.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dz.classList.remove("hot");
+    while (sampleIdx < SAMPLES.length) addFile(SAMPLES[sampleIdx++]);
+  });
+
+  $("titleInput").addEventListener("input", render);
+  $("descInput").addEventListener("input", render);
+  $("createBtn").addEventListener("click", () => {
+    const pinned = files.filter((f) => f.pinned).length;
+    alert(`（原型）创建任务：\n标题：${$("titleInput").value}\n资料：${files.length} 份，其中 ${pinned} 份作为持续上下文`);
+  });
+
+  // 主题切换（纸 / 墨）
+  $("themeBtn").addEventListener("click", () => {
+    const html = document.documentElement;
+    html.dataset.theme = html.dataset.theme === "paper" ? "ink" : "paper";
+  });
+
+  render();
+</script>
+</body>
+</html>
