@@ -3,6 +3,7 @@ export type Lang = "zh" | "en";
 export type View =
   | "home"
   | "tasks"
+  | "intake"
   | "squad"
   | "knowledge"
   | "memory"
@@ -200,6 +201,21 @@ export interface WorkspaceFile {
   mtime: number;
 }
 
+/** A user-supplied input file attached to a mission (PRD / plan / design …). */
+export interface ExternalMaterial {
+  id?: string;
+  name: string;
+  /** prd | plan | design | data | other (free-form, UI taxonomy) */
+  kind: string;
+  mime?: string;
+  size?: number;
+  /** Pinned materials ride along as persistent context in every prompt */
+  pinned: boolean;
+  /** Decoded text for text-like materials */
+  text_excerpt?: string;
+  added_at?: string;
+}
+
 export interface MissionWorkspace {
   initiative_id: string;
   artifacts_dir: string;
@@ -261,6 +277,8 @@ export interface Initiative {
   roles: RoleAgent[];
   participants: RoomParticipant[];
   artifacts: ArtifactRef[];
+  /** External input materials; pinned ones are folded into the brief */
+  materials?: ExternalMaterial[];
   timeline?: TimelineEvent[];
   pending_hitl?: HitlRequest | null;
   human_instruction?: string | null;

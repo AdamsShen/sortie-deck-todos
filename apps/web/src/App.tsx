@@ -4,7 +4,7 @@ import { OperatorChip } from "./components/OperatorChip";
 import { PipelineEditor } from "./components/PipelineEditor";
 import { ChatComposer, type MentionOption } from "./components/ChatComposer";
 import { MarkdownPreview, looksLikeMarkdown } from "./components/MarkdownPreview";
-import { MissionBriefingChat } from "./components/MissionBriefingChat";
+import { NewTaskPage } from "./components/NewTaskPage";
 import { RoleAvatar, AVATAR_PRESET_OPTIONS } from "./components/RoleAvatar";
 import { StageInspect } from "./components/StageInspect";
 import { PipelineRail, railFromInitiative } from "./components/PipelineRail";
@@ -1608,7 +1608,7 @@ export default function App() {
           </button>
           <button
             type="button"
-            className={view === "tasks" || view === "squad" ? "on" : ""}
+            className={view === "tasks" || view === "squad" || view === "intake" ? "on" : ""}
             onClick={() => {
               unlockSfx();
               playSfx("whoosh");
@@ -1788,46 +1788,43 @@ export default function App() {
         </main>
       )}
 
+      {view === "intake" && (
+        <NewTaskPage
+          token={token}
+          lang={lang}
+          tr={tr}
+          busy={busy}
+          setBusy={setBusy}
+          onCancel={() => setView("tasks")}
+          onError={(msg) => setError(msg)}
+          onCreated={async (id) => {
+            await refreshList();
+            await refreshDash();
+            setSelectedId(id);
+            setView("squad");
+          }}
+        />
+      )}
+
       {view === "tasks" && (
-        <div className="deck-body workbench briefing-layout">
-          <aside className="sidebar briefing-sidebar">
-            <MissionBriefingChat
-              token={token}
-              lang={lang}
-              busy={busy}
-              setBusy={setBusy}
-              onError={(msg) => setError(msg)}
-              onCreated={async (id) => {
-                await refreshList();
-                await refreshDash();
-                setSelectedId(id);
-                setView("squad");
-              }}
-              labels={{
-                title: tr("newTask"),
-                placeholder:
-                  lang === "zh"
-                    ? "描述任务目标… 可粘贴截图或拖入文件"
-                    : "Describe the mission… paste or drop files",
-                hint:
-                  lang === "zh"
-                    ? "多轮对话 · 图片/文档附件 · /confirm 确认"
-                    : "Multimodal chat · /confirm to lock plan",
-                send: tr("send"),
-                confirm: lang === "zh" ? "确认组建" : "Confirm",
-                reject: lang === "zh" ? "驳回重来" : "Reject",
-                restart: lang === "zh" ? "新会话" : "New chat",
-                waterfall: lang === "zh" ? "规划瀑布流" : "Planning waterfall",
-                attach: lang === "zh" ? "附件" : "Attach",
-              }}
-            />
-          </aside>
-          <main className="main page-pad">
-            <h2 className="page-title">{tr("taskMgmt")}</h2>
+        <main className="main page-pad">
+            <div className="title-row">
+              <h2 className="page-title">{tr("taskMgmt")}</h2>
+              <button
+                type="button"
+                className="btn primary"
+                onClick={() => {
+                  playSfx("whoosh");
+                  setView("intake");
+                }}
+              >
+                ＋ {tr("newTask")}
+              </button>
+            </div>
             <p className="hero-copy">
               {lang === "zh"
-                ? "左侧对话规划官会检索历史与知识库，提案航线与编制；确认后组建小队。"
-                : "Chat with the planner — it reads history & KB, proposes track & loadout, then creates the squad."}
+                ? "点「＋ 新开任务」进入建队页：与规划官对话提案航线与编制，或直接填写简报并导入 PRD/计划/设计稿等外部资料。"
+                : "Open “+ New mission”: chat with the planner for track & loadout, or fill the brief directly with PRD / plan / design materials."}
             </p>
             <div className="filters">
               {(["all", "draft", "running", "waiting_hitl", "done"] as const).map((f) => (
@@ -1868,8 +1865,7 @@ export default function App() {
               ))}
               {!filtered.length && <div className="empty-queue">{tr("emptyTasks")}</div>}
             </div>
-          </main>
-        </div>
+        </main>
       )}
 
       {view === "squad" && selected && (

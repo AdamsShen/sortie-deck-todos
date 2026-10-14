@@ -3505,3 +3505,298 @@ h1 {
 tr:hover td {
   background: color-mix(in srgb, var(--copper) 4%, transparent);
 }
+
+/* ── 新建任务独立页（Mission Intake） ───────────────────────────── */
+.title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.title-row .page-title {
+  margin: 0;
+}
+
+.intake-page .hero-copy {
+  margin: 0.6rem 0 1.6rem;
+}
+
+.intake-page .panel-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.intake-page .panel-label .aux {
+  color: var(--muted);
+  letter-spacing: 0.08em;
+  text-align: right;
+}
+
+.intake-grid {
+  display: grid;
+  grid-template-columns: 1.25fr 1fr;
+  gap: 1.1rem;
+  align-items: start;
+  max-width: 1180px;
+}
+@media (max-width: 900px) {
+  .intake-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.intake-col {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+}
+
+/* 规划官对话面板：占满视口高度的主要交互区 */
+.intake-chat-panel {
+  min-height: calc(100vh - 260px);
+  display: flex;
+  flex-direction: column;
+}
+.intake-chat-panel .briefing {
+  flex: 1;
+  min-height: 0;
+}
+.intake-chat-panel .briefing-chat {
+  flex: 1;
+  overflow: auto;
+}
+
+.intake-brief {
+  font-family: var(--serif);
+  min-height: 110px;
+}
+
+.dropzone {
+  border: 1.5px dashed var(--line-hot);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  padding: 1.3rem 1rem;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  margin-bottom: 0.9rem;
+}
+.dropzone:hover,
+.dropzone.hot {
+  border-color: var(--copper);
+  background: color-mix(in srgb, var(--copper) 6%, transparent);
+}
+.dz-main {
+  font-size: 0.88rem;
+  margin-bottom: 0.3rem;
+}
+.dz-hint {
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+
+.file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+.file-card {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  padding: 0.6rem 0.75rem;
+  transition: border-color 0.15s;
+}
+.file-card.pinned {
+  border-color: var(--signal);
+  box-shadow: inset 3px 0 0 var(--signal);
+}
+
+.type-chip {
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.1em;
+  padding: 0.22rem 0.5rem;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.type-chip:hover {
+  filter: brightness(0.95);
+}
+.t-prd {
+  background: color-mix(in srgb, var(--copper) 14%, transparent);
+  color: var(--copper);
+}
+.t-plan {
+  background: var(--signal-dim);
+  color: var(--signal);
+}
+.t-design {
+  background: color-mix(in srgb, var(--ice) 16%, transparent);
+  color: var(--ice);
+}
+.t-data {
+  background: var(--deep);
+  color: var(--muted);
+}
+.t-other {
+  background: transparent;
+  color: var(--muted);
+  border-color: var(--line-hot);
+}
+
+.file-info {
+  flex: 1;
+  min-width: 0;
+}
+.file-name {
+  font-size: 0.84rem;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-meta {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  color: var(--muted);
+  letter-spacing: 0.05em;
+  margin-top: 0.15rem;
+}
+.file-meta .dot {
+  margin: 0 0.35em;
+  opacity: 0.5;
+}
+
+.ctx-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  border: none;
+  background: none;
+  cursor: pointer;
+  white-space: nowrap;
+  padding: 0;
+}
+.ctx-toggle .tgl-label {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+.ctx-toggle.on .tgl-label {
+  color: var(--signal);
+}
+.ctx-toggle .switch {
+  width: 30px;
+  height: 17px;
+  border-radius: 999px;
+  background: var(--line-hot);
+  position: relative;
+  transition: background 0.18s;
+  flex: none;
+}
+.ctx-toggle .switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--panel);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform 0.18s;
+}
+.ctx-toggle.on .switch {
+  background: var(--signal);
+}
+.ctx-toggle.on .switch::after {
+  transform: translateX(13px);
+}
+
+.file-remove {
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.1rem 0.3rem;
+  border-radius: 5px;
+}
+.file-remove:hover {
+  color: var(--danger);
+  background: var(--deep);
+}
+
+.empty-files {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  color: var(--muted);
+  letter-spacing: 0.08em;
+  text-align: center;
+  padding: 0.4rem 0 0.2rem;
+}
+
+.ctx-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+}
+.ctx-item .pin {
+  color: var(--signal);
+}
+.ctx-item .ctx-name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ctx-item .ctx-tok {
+  color: var(--muted);
+  font-size: 0.62rem;
+}
+.ctx-total {
+  margin-top: 0.9rem;
+  padding-top: 0.7rem;
+  border-top: 1px dashed var(--line);
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  color: var(--muted);
+  letter-spacing: 0.06em;
+}
+.ctx-total b {
+  color: var(--text);
+  font-weight: 600;
+  font-size: 0.8rem;
+}
+.ctx-note {
+  margin-top: 0.7rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+  line-height: 1.65;
+}
+.intake-col .actions {
+  display: flex;
+  gap: 0.6rem;
+  justify-content: flex-end;
+}

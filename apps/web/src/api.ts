@@ -1,6 +1,8 @@
 import { ApiError } from "./types";
 import type {
+  CodingExecutor,
   DecisionAnswerResult,
+  ExternalMaterial,
   ForgeDraft,
   HarnessesResponse,
   HumanDecisionRecord,
@@ -37,6 +39,41 @@ export async function api<T = unknown>(path: string, { token, ...options }: ApiO
 
 export async function listRoles(token: string): Promise<RoleSpec[]> {
   return api<RoleSpec[]>("/api/roles", { token });
+}
+
+// --- mission intake -------------------------------------------------------
+
+export interface CreateInitiativePayload {
+  title: string;
+  brief: string;
+  /** External materials; pinned ones become persistent mission context */
+  materials?: ExternalMaterial[];
+  coding_executor?: CodingExecutor | "auto";
+  pipeline_track?: string;
+  auto_start?: boolean;
+}
+
+export async function createInitiative(
+  token: string,
+  body: CreateInitiativePayload,
+): Promise<Initiative> {
+  return api<Initiative>("/api/initiatives", {
+    token,
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function updateInitiativeMaterials(
+  token: string,
+  initiativeId: string,
+  materials: ExternalMaterial[],
+): Promise<Initiative> {
+  return api<Initiative>(`/api/initiatives/${encodeURIComponent(initiativeId)}/materials`, {
+    token,
+    method: "PATCH",
+    body: JSON.stringify({ materials }),
+  });
 }
 
 // --- agent harnesses --------------------------------------------------------
