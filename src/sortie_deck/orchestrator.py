@@ -196,6 +196,27 @@ class Orchestrator:
         """Expose the sub-room service to stage executors (via the graph host)."""
         from sortie_deck.subroom import build_subroom_service, set_subroom_service
 
+        def _subroom_sink(payload: dict[str, Any]) -> None:
+            """Bridge sub-room events onto the initiative SSE stream.
+
+            The service calls this synchronously from inside the discussion
+            coroutine, so the async fan-out is scheduled on the running loop
+            instead of being awaited here. Best-effort by design: a mission page
+            (or its absence) must never be able to break a running stage.
+            """
+            initiative_id = str(payload.get("initiative_id") or "")
+            if not initiative_id:
+                return
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                # Sync execution (CLI/tests): no subscriber exists, nothing to do.
+                return
+            task = loop.create_task(self._emit(initiative_id, payload))
+            # Pop the result so a delivery error is not reported as an
+            # unretrieved task exception.
+            task.add_done_callback(lambda t: t.cancelled() or t.exception())
+
         set_subroom_service(
             build_subroom_service(
                 rooms=self.rooms,
@@ -207,6 +228,7 @@ class Orchestrator:
                 timeout_seconds=float(getattr(self.cfg, "subroom_timeout_seconds", 300) or 300),
                 guardrails_load=self.guardrails_for_id,
                 guardrails_save=self._save_guardrails_for_id,
+                on_event=_subroom_sink,
             )
         )
 

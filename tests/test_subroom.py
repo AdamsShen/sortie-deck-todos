@@ -324,3 +324,60 @@ async def test_host_escalate_is_optional(tmp_path, rooms, memory) -> None:
         escalate_fn=_escalate,
     )
     assert await host2.escalate("conflict") == "manager says: conflict"
+
+
+# --- live event stream ----------------------------------------------------
+
+
+def _live_service(tmp_path: Path, rooms: RoomStore, memory: MemoryStore, sink) -> SubRoomService:
+    return SubRoomService(
+        store=SubRoomStore(tmp_path / "subrooms.json"),
+        rooms=rooms,
+        memory=memory,
+        enabled=True,
+        timeout_seconds=5.0,
+        on_event=sink,
+    )
+
+
+async def test_service_streams_state_and_turns_to_the_event_sink(
+    tmp_path, rooms, memory
+) -> None:
+    """The mission page follows a discussion live, so both states and turns fan out."""
+    events: list[dict] = []
+    svc = _live_service(tmp_path, rooms, memory, events.append)
+    sub = await svc.open(
+        initiative_id="ini_1",
+        parent_stage="build",
+        initiator_role="eng",
+        goal="对齐验收",
+        participants=["qa"],
+        reply=_reply(),
+    )
+    assert sub is not None
+    states = [e for e in events if e["type"] == "subroom"]
+    assert [e["subroom"]["status"] for e in states] == ["open", "closed"]
+    assert all(e["initiative_id"] == "ini_1" for e in events)
+    turns = [e for e in events if e["type"] == "subroom_message"]
+    assert turns, "turns must stream while the discussion is still running"
+    assert turns[0]["subroom_id"] == sub.id
+    assert turns[0]["turn"]["role"] == "qa"
+    assert turns[0]["message"]["msg_type"] == "subroom"
+
+
+async def test_broken_event_sink_never_breaks_the_subroom(tmp_path, rooms, memory) -> None:
+    def _boom(_payload: dict) -> None:
+        raise RuntimeError("subscriber gone")
+
+    svc = _live_service(tmp_path, rooms, memory, _boom)
+    sub = await svc.open(
+        initiative_id="ini_1",
+        parent_stage="build",
+        initiator_role="eng",
+        goal="对齐验收",
+        participants=["qa"],
+        reply=_reply(),
+    )
+    assert sub is not None
+    assert sub.status == "closed"
+    assert sub.conclusion

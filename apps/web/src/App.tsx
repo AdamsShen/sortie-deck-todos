@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { api, listHarnesses, updateInitiativeHarness } from "./api";
+import { api, listHarnesses, listSubRooms, updateInitiativeHarness } from "./api";
 import { OperatorChip } from "./components/OperatorChip";
 import { PipelineEditor } from "./components/PipelineEditor";
 import { ChatComposer, type MentionOption } from "./components/ChatComposer";
@@ -130,6 +130,10 @@ export default function App() {
   const [lootOpen, setLootOpen] = useState(false);
   const [briefOpen, setBriefOpen] = useState(false);
   const [chatFullscreen, setChatFullscreen] = useState(false);
+  const [subroomsOpen, setSubroomsOpen] = useState(false);
+  // Bumped on every sub-room SSE event so the panel re-pulls records/transcript
+  const [subroomSignal, setSubroomSignal] = useState(0);
+  const [subroomCount, setSubroomCount] = useState(0);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [booted, setBooted] = useState(false);
@@ -480,6 +484,13 @@ export default function App() {
     [items, selectedId, detail]
   );
 
+  // Role key → display title, used by the sub-room member chips
+  const roleTitles = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const r of selected?.roles || []) map[r.role] = r.title;
+    return map;
+  }, [selected]);
+
   const speakingRoles = useMemo(() => {
     const set = new Set<string>();
     const recent = (messages || []).slice(-12);
@@ -683,6 +694,9 @@ export default function App() {
         if (!cancelled) setDetail(data);
         const squad = await api<{ messages?: RoomMessage[] }>(`/api/initiatives/${selectedId}/squad`, { token });
         if (!cancelled) setMessages(squad.messages || []);
+        // Seed the 小群 dock badge even before the drawer is first opened
+        const subrooms = await listSubRooms(token, selectedId);
+        if (!cancelled) setSubroomCount(subrooms.length);
       } catch (e) {
         if (!cancelled) setError(errMsg(e));
       }
@@ -698,6 +712,10 @@ export default function App() {
         setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
       }
     });
+    // Sub-rooms keep their own transcript; these events keep the mission page's
+    // 小群 panel live (new rooms + turn-by-turn messages) without polling.
+    es.addEventListener("subroom", () => setSubroomSignal((v) => v + 1));
+    es.addEventListener("subroom_message", () => setSubroomSignal((v) => v + 1));
     const onUpdate = (ev: MessageEvent) => {
       const payload = JSON.parse(String(ev.data)) as { initiative?: Initiative };
       if (payload.initiative) {
@@ -2004,7 +2022,7 @@ export default function App() {
             inspectStage &&
             (inspectStage.id !== selected.current_stage || selected.status === "done")
           ) && (
-          <div className={`room-layout ${crewOpen || lootOpen || briefOpen ? "with-side" : "solo"}`}>
+          <div className={`room-layout ${crewOpen || lootOpen || briefOpen || subroomsOpen ? "with-side" : "solo"}`}>
             <section className={`panel chat-panel${chatFullscreen ? " fullscreen" : ""}`}>
               {chatFullscreen && (
                 <button
@@ -2053,6 +2071,17 @@ export default function App() {
                   }}
                 >
                   BRIEF
+                </button>
+                <button
+                  type="button"
+                  className={`room-dock-btn ${subroomsOpen ? "on" : ""}`}
+                  onClick={() => {
+                    playSfx("toggle");
+                    setSubroomsOpen((v) => !v);
+                  }}
+                >
+                  {tr("subrooms")}
+                  <em>{subroomCount}</em>
                 </button>
               </div>
                   <button
@@ -2334,6 +2363,33 @@ export default function App() {
                       </button>
                     </div>
                     <pre className="preview dim">{selected.brief}</pre>
+                  </section>
+                )}
+                {subroomsOpen && (
+                  <section className="panel room-drawer">
+                    <div className="panel-label row-between">
+                      <span>{tr("subrooms")}</span>
+                      <button
+                        type="button"
+                        className="btn ghost tiny"
+                        onClick={() => {
+                          playSfx("click");
+                          setSubroomsOpen(false);
+                        }}
+                      >
+                        {tr("collapsePanel")}
+                      </button>
+                    </div>
+                    <p className="tiny subroom-drawer-hint">{tr("subroomsHint")}</p>
+                    <SubRoomPanel
+                      token={token}
+                      lang={lang}
+                      initiativeId={selected.id}
+                      liveSignal={subroomSignal}
+                      onCount={setSubroomCount}
+                      roleTitles={roleTitles}
+                      variant="dock"
+                    />
                   </section>
                 )}
               </div>

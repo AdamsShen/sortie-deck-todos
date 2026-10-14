@@ -75,12 +75,25 @@ You are a QA engineer …
 | POST | `/api/decisions/sweep` | 结算超时决策并应用 fallback |
 | POST | `/api/bridges/dingtalk` | 钉钉机器人入站回调 |
 
+## 小群实时事件
+
+`GET /api/initiatives/{id}/events`（SSE）在既有的 `snapshot` / `room_message` 之外，
+额外承载小群流量，任务页据此免轮询地跟随讨论：
+
+| 事件 | 载荷 | 触发 |
+|------|------|------|
+| `subroom` | `subroom_id` + 完整记录 `subroom` | 小群 open / closed / timeout / rejected |
+| `subroom_message` | `subroom_id`、`parent_stage`、`turn`、`message`（无房间存储时为 `null`） | 每轮发言写入时 |
+
+`subroom_message` 是逐条流式的**辅助通道**；`/api/subrooms/{id}/transcript` 仍是重连后的
+事实来源。两个事件不进入大群时间线，只有结论回写为 `stage:<parent_stage>` 记忆。
+
 ## 工作台
 
 三处增量视图，不改动既有页面结构：
 
 - **角色锻造**：Forge 草稿列表，展示自检问题与疑似重复角色，可编辑 persona/契约后发布。
-- **小群**：只读时间线 + 结论卡片 + 预算消耗。
+- **小群**：任务页内嵌的实时视图 —— 只读时间线 + 结论卡片 + 预算消耗；成员由任务链路决定（发起 / 主持 / 参与，**不支持增删**），对话可全屏打开；独立页面视图同样只读。
 - **决策中心**：待真人决策项、超时倒计时、fallback 与回复入口。
 
 ## 测试

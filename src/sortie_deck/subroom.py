@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import threading
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -30,7 +31,13 @@ from sortie_deck.memory import CreateMemoryRequest, MemoryStore
 from sortie_deck.models import ActorKind, RoomMessage, new_id, role_key, utc_now
 from sortie_deck.rooms import MAIN_ROOM, RoomStore
 
+logger = logging.getLogger(__name__)
+
 ReplyFn = Callable[[str, str], Awaitable[str]]
+# Sub-room state/turn fan-out. Synchronous on purpose: turns are appended from
+# inside the discussion coroutine, and the sink (orchestrator) schedules the
+# async SSE delivery itself.
+EventSink = Callable[[dict[str, Any]], None]
 
 SubRoomStatus = Literal["open", "closed", "timeout", "rejected"]
 
@@ -141,6 +148,7 @@ class SubRoomService:
         max_participants: int = 4,
         guardrails_load: Callable[[str], Any] | None = None,
         guardrails_save: Callable[[str, Any], None] | None = None,
+        on_event: EventSink | None = None,
     ) -> None:
         self.store = store
         self.rooms = rooms
@@ -153,6 +161,39 @@ class SubRoomService:
         # Mission-level guardrails are injected so this module stays I/O-light
         self._guardrails_load = guardrails_load
         self._guardrails_save = guardrails_save
+        # Mission-page live view: pushes state/turn events to the initiative stream
+        self.on_event = on_event
+
+    def _emit(self, payload: dict[str, Any]) -> None:
+        """Fan a sub-room event out to the mission page (best-effort).
+
+        Events let the task page follow a discussion while it is still running;
+        the transcript endpoint stays the source of truth after a reconnect.
+        A missing or broken subscriber must never break the discussion, so
+        failures are logged and swallowed.
+        """
+        if self.on_event is None:
+            return
+        try:
+            self.on_event(payload)
+        except Exception:  # noqa: BLE001 — a dead subscriber is not a discussion failure
+            logger.warning(
+                "sub-room event delivery failed: type=%s subroom=%s",
+                payload.get("type"),
+                payload.get("subroom_id") or (payload.get("subroom") or {}).get("id"),
+                exc_info=True,
+            )
+
+    def _emit_state(self, sub: SubRoom) -> None:
+        """Broadcast a sub-room record so the page can show new/closed rooms."""
+        self._emit(
+            {
+                "type": "subroom",
+                "initiative_id": sub.initiative_id,
+                "subroom_id": sub.id,
+                "subroom": sub.model_dump(mode="json"),
+            }
+        )
 
     def _rails(self, initiative_id: str) -> Any | None:
         if self._guardrails_load is None:
@@ -244,6 +285,7 @@ class SubRoomService:
             manager_digest=manager.digest,
         )
         self.store.save(sub)
+        self._emit_state(sub)
         try:
             await asyncio.wait_for(
                 self._discuss(sub, reply=reply),
@@ -257,6 +299,7 @@ class SubRoomService:
             sub.status = "timeout"
             sub.reason = f"sub-room failed: {exc}"
         self.store.save(sub)
+        self._emit_state(sub)
         if rails is not None:
             rails.consume(tokens=sub.token_estimate, subrooms=1)
             self._save_rails(initiative_id, rails)
@@ -274,15 +317,17 @@ class SubRoomService:
         depth: int,
         reason: str,
     ) -> None:
-        self.store.save(
-            SubRoom(
-                initiative_id=initiative_id,
-                parent_stage=parent_stage,
-                initiator_role=initiator_role,
-                goal=(goal or "")[:2000],
-                depth=depth,
-                status="rejected",
-                reason=reason,
+        self._emit_state(
+            self.store.save(
+                SubRoom(
+                    initiative_id=initiative_id,
+                    parent_stage=parent_stage,
+                    initiator_role=initiator_role,
+                    goal=(goal or "")[:2000],
+                    depth=depth,
+                    status="rejected",
+                    reason=reason,
+                )
             )
         )
 
@@ -344,8 +389,9 @@ class SubRoomService:
         turn = SubRoomTurn(idx=len(sub.turns), role=role, text=text[: _TURN_TEXT_CAP])
         sub.turns.append(turn)
         sub.token_estimate += estimate_tokens(turn.text)
+        stored: RoomMessage | None = None
         if self.rooms is not None:
-            self.rooms.append(
+            stored = self.rooms.append(
                 RoomMessage(
                     initiative_id=sub.initiative_id,
                     actor_kind=ActorKind.AGENT,
@@ -363,6 +409,18 @@ class SubRoomService:
                     },
                 )
             )
+        # Streamed turn-by-turn so the task page can follow the discussion live;
+        # ``message`` is absent when no room store is wired (pure in-memory runs).
+        self._emit(
+            {
+                "type": "subroom_message",
+                "initiative_id": sub.initiative_id,
+                "subroom_id": sub.id,
+                "parent_stage": sub.parent_stage,
+                "turn": turn.model_dump(mode="json"),
+                "message": stored.model_dump(mode="json") if stored is not None else None,
+            }
+        )
 
     # --- conclusion ----------------------------------------------------
 
@@ -503,6 +561,7 @@ def build_subroom_service(
     timeout_seconds: float = 300.0,
     guardrails_load: Callable[[str], Any] | None = None,
     guardrails_save: Callable[[str, Any], None] | None = None,
+    on_event: EventSink | None = None,
 ) -> SubRoomService:
     return SubRoomService(
         store=SubRoomStore(path),
@@ -514,6 +573,7 @@ def build_subroom_service(
         timeout_seconds=timeout_seconds,
         guardrails_load=guardrails_load,
         guardrails_save=guardrails_save,
+        on_event=on_event,
     )
 
 

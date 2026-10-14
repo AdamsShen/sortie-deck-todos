@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Workbench: harness selector with probe status on draft missions, locked-harness badge, HITL "switch harness" approval action
 - **Tech design stage**: `eng_tech_design` (standard/default tracks, after PRD, before build) produces a reviewable `tech_design.md` (approach / module breakdown / risks / rollout-rollback), validated by the stage contract and gated by HITL; mock fallback `mock_tech_design`; harness missions route it through the same `harness_stage` executor
 - **Mission-scoped RAG namespace**: stage key artifacts auto-indexed per initiative (`KnowledgeGateway.index_mission_artifact`, tags `ini:<id>`, WeKnora folder `missions/<id>`, idempotent + best-effort); `retrieve(query, initiative_id=...)` ranks the mission namespace first and fills from the global pool; harness context packs retrieve with mission scope (`TDT_KB_MISSION_INDEX` switch)
+- **Mission-page sub-rooms**: the task view embeds its mission's sub-rooms — turn-by-turn live transcript, read-only member roster (opener / lead / participants, no editing) and a fullscreen conversation view; `SubRoomService.on_event` (wired through the orchestrator) pushes `subroom` / `subroom_message` onto the initiative SSE stream, so the panel needs no polling
 
 - Apache-2.0 license and open-source project docs (EN/ZH README, MkDocs Material i18n site)
 - Architecture overview, data-flow diagrams, and per-module technical + implementation plans

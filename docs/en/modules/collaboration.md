@@ -91,13 +91,32 @@ always decides.
 | POST | `/api/decisions/sweep` | Expire overdue decisions and apply their fallback |
 | POST | `/api/bridges/dingtalk` | DingTalk bot inbound callback |
 
+## Live sub-room events
+
+`GET /api/initiatives/{id}/events` (SSE) carries sub-room traffic alongside the
+existing `snapshot` / `room_message` events, so the mission page can follow a
+discussion without polling:
+
+| Event | Payload | Emitted when |
+|-------|---------|--------------|
+| `subroom` | `subroom_id` + the full record as `subroom` | a room opens / closes / times out / is rejected |
+| `subroom_message` | `subroom_id`, `parent_stage`, `turn`, `message` (`null` without a room store) | each turn is appended |
+
+`subroom_message` is a turn-by-turn **convenience** channel; the
+`/api/subrooms/{id}/transcript` endpoint stays the source of truth after a
+reconnect. Neither event touches the big-room timeline — only the conclusion is
+written back as `stage:<parent_stage>` memory.
+
 ## Workbench
 
 Three additive views, with no change to the existing page structure:
 
 - **Role Forge**: the draft queue with self-check findings and possible
   duplicates; edit the persona/contract and publish.
-- **Sub-rooms**: read-only timeline plus conclusion card and budget usage.
+- **Sub-rooms**: a live in-mission view — read-only timeline, conclusion card and
+  budget usage; the roster comes from the mission path (opener / lead /
+  participants, **no add or remove**) and the transcript opens fullscreen. The
+  standalone view stays read-only too.
 - **Decisions**: pending items, SLA countdown, fallback, and a reply box.
 
 ## Tests
