@@ -142,6 +142,25 @@ class Settings(BaseSettings):
     # Production polish
     log_level: str = "INFO"
     stage_timeout_seconds: float = 900.0
+    # --- git 回写链路（任务分支 + GitLab MR）---------------------------------
+    # 任务分支命名前缀：单仓库 sortie/<id>，多仓库 sortie/<id>-<repo>
+    git_branch_prefix: str = "sortie"
+    # push 时机：on_stage_success（编码阶段成功即 push）| on_approval（HITL 放行后
+    # 重入编码阶段时 push）| off（不回写，仅本地沙盒）
+    git_push_mode: str = "on_stage_success"
+    # GitLab API（自建/极狐）。base_url 形如 https://gitlab.example.com；
+    # api_token 未配置时回退用各仓库 RepoConfig.token 调 API。
+    gitlab_base_url: str = ""
+    gitlab_api_token: str | None = None
+    # push 全部成功后删除 workspace/repos 工作副本（分支已上 GitLab，副本即缓存；
+    # QA 打回重入编码时重新浅克隆）。磁盘安全阀，建议保持开启。
+    git_cleanup_after_push: bool = True
+    # TTL 兜底扫描：非运行中任务的 workspace 保留时长（秒），超时删除；
+    # 有未提交/未推送改动（脏状态）的改用 dirty TTL，避免误删未上库代码。
+    worktree_ttl_seconds: float = 86400.0
+    worktree_dirty_ttl_seconds: float = 604800.0
+    # 磁盘水位防护：clone 前检查可用空间，低于该值（MB）拒绝新 clone
+    min_disk_free_mb: int = 2048
 
     def resolved_token_secret(self) -> str:
         secret = (self.token_secret or "").strip()
@@ -153,8 +172,14 @@ class Settings(BaseSettings):
             )
         return secret or "tdt-dev-secret"
 
+    # --- mission layout（任务目录收敛，见 layout.py）-------------------------
+    # 任务专属数据收敛到 data/missions/<id>/{memory,artifacts,workspace,chat}。
+    # 旧布局（data/artifacts、data/worktrees、data/rooms）由启动迁移搬运。
+
     @property
     def artifacts_dir(self) -> Path:
+        # 兼容保留：仅作旧布局路径引用（doctor/迁移探测），本地产物存储已改由
+        # missions_dir + mission 布局派生（见 artifacts_s3.build_artifact_store）。
         return self.data_dir / "artifacts"
 
     @property
@@ -175,7 +200,9 @@ class Settings(BaseSettings):
 
     @property
     def worktrees_dir(self) -> Path:
-        return self.data_dir / "worktrees"
+        # 旧名保留（编码执行器调用点众多）：现在指向 missions 根，
+        # 任务沙盒实际路径为 worktrees_dir/<id>/workspace（见 plugins.coding.ensure_worktree）。
+        return self.data_dir / "missions"
 
     @property
     def missions_dir(self) -> Path:

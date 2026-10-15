@@ -146,11 +146,12 @@ class ArtifactKind(str, Enum):
 
 
 class RepoConfig(BaseModel):
-    """A git/github repository a dev agent must read before iterating.
+    """任务关联的 git 仓库（开发 agent 的迭代目标）。
 
-    ``name`` is the checkout dir name (defaults to the URL basename without
-    ``.git``); ``branch`` empty means the remote default branch; ``token`` is
-    injected into https clone URLs when present.
+    ``name`` 是 checkout 目录名（默认取 URL basename 去掉 ``.git``）；
+    ``branch`` 是**任务关联的目标分支**——任务分支 ``sortie/<initiative_id>``
+    基于它创建，编码 agent 在任务分支上迭代，push 后向它发起 MR（人工合并）；
+    空 = 远端默认分支；``token`` 注入 https clone/push URL（日志脱敏，不落远端配置）。
     """
 
     url: str
@@ -281,6 +282,8 @@ class Initiative(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
     webhook_url: str | None = None
+    # 创建者用户 id（多租户归属，workspace/删除校验用；旧数据为 None 时仅 admin 可操作他人任务）
+    created_by: str | None = None
     meta: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -337,6 +340,8 @@ class CreateInitiativeRequest(BaseModel):
     # When true with auto_start, skip human confirm (CLI/tests)
     auto_confirm_pipeline: bool = False
     creator_name: str = "Operator"
+    # 创建者用户 id（API 层从登录用户注入；多租户归属校验用）
+    created_by: str | None = None
     # Optional published agent ids keyed by pipeline slot: product/eng/qa/deploy
     role_agents: dict[str, str] = Field(default_factory=dict)
     # Toolkit ids for each role slot (applies to that role's stages)

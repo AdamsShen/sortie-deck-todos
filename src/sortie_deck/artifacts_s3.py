@@ -132,7 +132,7 @@ def build_artifact_store(settings: Any) -> LocalArtifactStore | S3ArtifactStore:
             access_key=getattr(settings, "s3_access_key", None),
             secret_key=getattr(settings, "s3_secret_key", None),
         )
-    return LocalArtifactStore(settings.artifacts_dir)
+    return LocalArtifactStore(settings.missions_dir, layout="mission")
 
 
 def quote_path(path: str) -> str:

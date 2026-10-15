@@ -14,20 +14,19 @@ def test_list_files_skips_node_modules(tmp_path: Path):
 
 
 def test_mission_workspace_paths(tmp_path: Path):
-    artifacts = tmp_path / "artifacts"
-    worktrees = tmp_path / "worktrees"
+    data = tmp_path / "data"
     ini = "ini_test"
-    art_dir = artifacts / ini / "qa"
+    # 任务目录收敛布局：data/missions/<id>/{artifacts,workspace}
+    art_dir = data / "missions" / ini / "artifacts" / "qa"
     art_dir.mkdir(parents=True)
     (art_dir / "test_cases.md").write_text("# cases\n", encoding="utf-8")
-    wt = worktrees / ini
-    wt.mkdir(parents=True)
-    (wt / "index.html").write_text("<html></html>", encoding="utf-8")
+    ws = data / "missions" / ini / "workspace"
+    ws.mkdir(parents=True)
+    (ws / "index.html").write_text("<html></html>", encoding="utf-8")
 
     info = mission_workspace(
         initiative_id=ini,
-        artifacts_dir=artifacts,
-        worktrees_dir=worktrees,
+        data_dir=data,
         repo_root=tmp_path,
     )
     assert info["worktree_exists"] is True

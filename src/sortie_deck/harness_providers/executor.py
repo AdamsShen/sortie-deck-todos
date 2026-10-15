@@ -113,7 +113,7 @@ class HarnessStageExecutor:
         workspace = ensure_worktree(
             settings.data_dir.parent, ctx.initiative_id, settings.worktrees_dir
         )
-        repo_section, repo_log = await clone_repos(ctx.repos, workspace)
+        repo_section, repo_log = await clone_repos(ctx.repos, workspace, ctx.initiative_id)
 
         pack = await self._build_context_pack(ctx)
         prompt = self._build_prompt(ctx, workspace, pack, repo_section)

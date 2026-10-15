@@ -30,6 +30,44 @@ from sortie_deck.registry import ExecutorRegistry, run_executor
 from sortie_deck.templates import load_agent_contract, load_persona, load_pipeline_template
 
 
+async def _maybe_publish(
+    state: dict[str, Any],
+    ctx: StageContext,
+    result: StageResult,
+    stage: str,
+) -> dict[str, Any] | None:
+    """编码阶段成功后的 git 回写：commit + push 任务分支 + GitLab MR（软降级）。
+
+    触发条件（TDT_GIT_PUSH_MODE）：
+    - ``on_stage_success``（默认）：编码阶段 status=ok 且该角色绑定了 mission repos；
+    - ``on_approval``：同上，但仅在该阶段经 HITL 权限门禁放行重入时（state.publish_pending）；
+    - ``off``：不回写。
+    失败不抛错——回写结果只进阶段 meta / 事件流，不污染编码结果判定。
+    """
+    from sortie_deck.git_publish import publish_repos, publish_summary_meta
+    from sortie_deck.settings import settings
+
+    mode = (settings.git_push_mode or "off").strip().lower()
+    if mode == "off" or not ctx.repos or result.status != "ok":
+        return None
+    if mode == "on_approval" and not state.get("publish_pending"):
+        return None
+    if not ctx.workspace_dir:
+        return None
+    try:
+        results = await publish_repos(
+            Path(ctx.workspace_dir),
+            ctx.initiative_id,
+            ctx.repos,
+            commit_message=f"sortie: {ctx.initiative_id} stage={stage}",
+        )
+    except Exception as exc:  # noqa: BLE001 — 回写失败不影响阶段结果
+        return {"git_publish_errors": [f"publish_repos 异常: {exc}"]}
+    if not results:
+        return None
+    return publish_summary_meta(results)
+
+
 def _coding_perm_from_instruction(instruction: str | None) -> dict[str, str]:
     """Parse Sortie Deck retry tag from human_instruction into StageContext.permissions."""
     text = instruction or ""
@@ -713,6 +751,11 @@ def build_graph_from_template(
 
         validate_stage_artifacts(stage, result.artifacts)
 
+        # git 回写（任务分支 commit/push + MR）——只影响 meta，不影响阶段判定
+        publish_meta = await _maybe_publish(state, ctx, result, stage)
+        if publish_meta:
+            result.meta = {**(result.meta or {}), **publish_meta}
+
         events = list(state.get("events") or [])
         events.append(
             {
@@ -744,6 +787,8 @@ def build_graph_from_template(
             "human_instruction": None,
             # consumed by this node's conditional edge; cleared on every entry
             "handoff_target": None,
+            # on_approval 回写标记：仅当 HITL 放行重入时置 True，消费后即清
+            "publish_pending": None,
         }
 
     def make_stage_node(stage_name: str):
@@ -821,6 +866,8 @@ def build_graph_from_template(
             update["human_instruction"] = (
                 f"{instr}\n[sortie:coding_permission_mode={retry_mode}]".strip()
             )
+            # on_approval 回写模式：放行重入编码阶段成功后触发 commit/push + MR
+            update["publish_pending"] = True
             # self-loop through the conditional edge
             update["handoff_target"] = stage_name
             return update
@@ -1072,6 +1119,8 @@ def build_graph_from_template(
                     "human_instruction": (
                         f"{instr}\n[sortie:coding_permission_mode={retry_mode}]".strip()
                     ),
+                    # on_approval 回写模式：放行重入成功后触发 publish
+                    "publish_pending": True,
                     # re-enter this same wave through the conditional edge
                     "handoff_target": wave_node_name(group),
                 }

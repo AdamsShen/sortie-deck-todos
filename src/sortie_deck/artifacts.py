@@ -39,10 +39,16 @@ class ArtifactBackend(Protocol):
 
 
 class LocalArtifactStore:
-    """Filesystem artifact store."""
+    """Filesystem artifact store.
 
-    def __init__(self, root: Path) -> None:
+    layout="flat"（历史默认）：``<root>/<initiative_id>/<stage>/<file>``；
+    layout="mission"（任务目录收敛）：``<root>/<initiative_id>/artifacts/<stage>/<file>``，
+    root 传 missions 根（data/missions），产物归入任务目录（见 layout.py）。
+    """
+
+    def __init__(self, root: Path, *, layout: str = "flat") -> None:
         self.root = root.resolve()
+        self.layout = "mission" if layout == "mission" else "flat"
         self.root.mkdir(parents=True, exist_ok=True)
 
     def resolve_safe(self, relative_path: str) -> Path:
@@ -57,6 +63,8 @@ class LocalArtifactStore:
 
     def initiative_dir(self, initiative_id: str) -> Path:
         path = self.root / initiative_id
+        if self.layout == "mission":
+            path = path / "artifacts"
         path.mkdir(parents=True, exist_ok=True)
         return path
 

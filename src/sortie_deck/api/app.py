@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -66,6 +67,7 @@ from sortie_deck.toolkit import (
 from sortie_deck.weknora import WeKnoraError
 
 _auth: AuthStore | None = None
+logger = logging.getLogger(__name__)
 _knowledge: KnowledgeStore | None = None
 _knowledge_gw: KnowledgeGateway | None = None
 _memory: MemoryStore | None = None
@@ -79,6 +81,16 @@ def get_auth() -> AuthStore:
     if _auth is None:
         _auth = AuthStore(settings.users_db, token_secret=settings.resolved_token_secret())
     return _auth
+
+
+def _ensure_mission_owner(ini: Any, user: PublicUser) -> None:
+    """多租户归属校验：仅创建者或 admin 可访问任务敏感数据（工作副本含项目源码）。
+
+    旧数据 created_by 为 None 时放行（无归属信息，无法判定），避免历史任务不可用。
+    """
+    created_by = getattr(ini, "created_by", None)
+    if created_by and created_by != user.id and user.role != "admin":
+        raise HTTPException(403, "无权访问该任务的工作副本（仅创建者或 admin）")
 
 
 def get_knowledge() -> KnowledgeStore:
@@ -152,6 +164,12 @@ async def lifespan(app: FastAPI):
 
     configure_logging(settings.log_level)
     ensure_runtime_dirs(settings)
+    # 旧布局（data/artifacts|worktrees|rooms）→ data/missions/<id>/ 启动迁移（幂等）
+    from sortie_deck.layout import migrate_legacy_layout
+
+    migrated = migrate_legacy_layout(settings.data_dir)
+    if migrated:
+        logger.info("mission layout 迁移完成: %s", migrated)
     validate_settings(settings)
     orch = get_orchestrator()
     await orch.startup()
@@ -970,6 +988,8 @@ async def create_initiative(
 ) -> dict[str, Any]:
     if not req.creator_name or req.creator_name == "Operator":
         req.creator_name = user.display_name
+    # 多租户归属：记录创建者用户 id（workspace/删除等敏感操作校验用）
+    req.created_by = user.id
     ini = await orch().create_initiative(req)
     await asyncio.sleep(0.15)
     fresh = orch().get(ini.id) or ini
@@ -1052,8 +1072,12 @@ async def get_initiative(
 
 @app.delete("/api/initiatives/{initiative_id}")
 async def delete_initiative(
-    initiative_id: str, _user: PublicUser = Depends(require_user)
+    initiative_id: str, user: PublicUser = Depends(require_user)
 ) -> dict[str, str]:
+    ini = orch().get(initiative_id)
+    if not ini:
+        raise HTTPException(404, "Initiative not found")
+    _ensure_mission_owner(ini, user)
     try:
         await orch().delete_initiative(initiative_id)
         return {"status": "deleted"}
@@ -1256,19 +1280,18 @@ async def read_artifact(
 
 @app.get("/api/initiatives/{initiative_id}/workspace")
 async def initiative_workspace(
-    initiative_id: str, _user: PublicUser = Depends(require_user)
+    initiative_id: str, user: PublicUser = Depends(require_user)
 ) -> dict[str, Any]:
     from sortie_deck.workspace import mission_workspace
 
     ini = orch().get(initiative_id)
     if not ini:
         raise HTTPException(404, "Initiative not found")
-    cfg = orch().cfg
+    _ensure_mission_owner(ini, user)
     return mission_workspace(
         initiative_id=initiative_id,
-        artifacts_dir=cfg.artifacts_dir,
-        worktrees_dir=cfg.worktrees_dir,
-        repo_root=cfg.data_dir.parent,
+        data_dir=orch().cfg.data_dir,
+        repo_root=orch().cfg.data_dir.parent,
     )
 
 

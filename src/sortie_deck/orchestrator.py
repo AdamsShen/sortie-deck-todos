@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from typing import Any
 
@@ -62,6 +63,8 @@ from sortie_deck.templates import load_persona, load_pipeline_template
 from sortie_deck.toolkit import ToolkitStore
 from sortie_deck.webhooks import notify_webhook
 
+logger = logging.getLogger(__name__)
+
 # Optional shared stores (wired by API lifespan); orchestrator stays usable without them.
 _agent_catalog: AgentCatalog | None = None
 _memory_store: MemoryStore | None = None
@@ -118,7 +121,8 @@ class Orchestrator:
             sqlite_path=self.cfg.initiatives_sqlite,
         )
         self.artifacts = build_artifact_store(self.cfg)
-        self.rooms = RoomStore(self.cfg.rooms_dir)
+        # 任务目录收敛：聊天记录落 missions/<id>/chat/（layout="mission"）
+        self.rooms = RoomStore(self.cfg.missions_dir, layout="mission")
         self.registry = build_default_registry(
             repo_root=self.cfg.data_dir.parent,
             worktrees_root=self.cfg.worktrees_dir,
@@ -129,6 +133,7 @@ class Orchestrator:
         self._lock = asyncio.Lock()
         self._subscribers: dict[str, list[asyncio.Queue]] = {}
         self._worker_task: asyncio.Task | None = None
+        self._sweep_task: asyncio.Task | None = None
         self.run_queue: SqliteRunQueue | None = None
         if str(self.cfg.run_backend).lower() == "sqlite":
             self.run_queue = SqliteRunQueue(
@@ -152,6 +157,9 @@ class Orchestrator:
         self._wire_decisions()
         if self.run_queue is not None:
             self._worker_task = asyncio.create_task(self._worker_loop())
+        self._sweep_task = asyncio.create_task(self._sweep_loop())
+        # 启动时先做一次 TTL 兜底扫描（回收上次进程崩溃残留的 workspace）
+        self._sweep_worktrees_once()
 
     def _wire_decisions(self) -> None:
         """Expose the human decision centre (escalation ladder's last resort)."""
@@ -240,6 +248,13 @@ class Orchestrator:
             except asyncio.CancelledError:
                 pass
             self._worker_task = None
+        if self._sweep_task is not None:
+            self._sweep_task.cancel()
+            try:
+                await self._sweep_task
+            except asyncio.CancelledError:
+                pass
+            self._sweep_task = None
         cm = self._resources.get("cm")
         if cm is not None:
             try:
@@ -484,8 +499,14 @@ class Orchestrator:
             if "::" in str(kind):
                 inferred = str(kind).split("::", 1)[0]
             parts = str(rel).replace("\\", "/").split("/")
+            # 旧(flat)布局: <ini>/<stage>/<file>；新(mission)布局: <ini>/artifacts/<stage>/<file>。
+            # 跳过 ini 段与布局固定段（artifacts/workspace/chat/memory），剩余首段才是 stage。
             if len(parts) >= 2 and parts[0] == ini.id:
-                inferred = parts[1]
+                rest = parts[1:]
+                if rest and rest[0] in ("artifacts", "workspace", "chat", "memory"):
+                    rest = rest[1:]
+                if rest:
+                    inferred = rest[0]
             ini.artifacts.append(
                 ArtifactRef(kind=display_kind, path=rel, stage=inferred, created_at=utc_now())
             )
@@ -829,6 +850,8 @@ class Orchestrator:
             template=role_template,
             status=InitiativeStatus.DRAFT,
             harness=harness,
+            # 多租户归属：API 层从登录用户注入，用于 workspace/删除的归属校验
+            created_by=getattr(req, "created_by", None),
             materials=list(req.materials),
             roles=self._roles_from_template(
                 coding, req.role_agents, role_toolkits, template=role_template,
@@ -1187,6 +1210,51 @@ class Orchestrator:
             return
         asyncio.create_task(self._run_until_interrupt(initiative_id))
 
+    def _active_mission_ids(self) -> set[str]:
+        """运行中/等待门禁的任务 id——TTL 扫描必须跳过它们。"""
+        return {
+            ini.id
+            for ini in self.store.list()
+            if ini.status in {InitiativeStatus.RUNNING, InitiativeStatus.WAITING_HITL}
+        }
+
+    def _sweep_worktrees_once(self) -> list[str]:
+        """执行一次 workspace TTL 兜底扫描（脏状态用延长 TTL），返回清理列表。"""
+        from sortie_deck.git_publish import sweep_worktrees
+
+        try:
+            cleaned = sweep_worktrees(
+                self.cfg.missions_dir,
+                self._active_mission_ids(),
+                ttl_seconds=self.cfg.worktree_ttl_seconds,
+                dirty_ttl_seconds=self.cfg.worktree_dirty_ttl_seconds,
+            )
+        except Exception as exc:  # noqa: BLE001 — 兜底扫描失败不影响主流程
+            logger.warning("workspace TTL sweep 异常: %s", exc)
+            return []
+        if cleaned:
+            logger.info("workspace TTL sweep 清理: %s", cleaned)
+        return cleaned
+
+    async def _sweep_loop(self) -> None:
+        """定时 TTL 兜底扫描（每小时一次），回收非活跃任务的 workspace。"""
+        while True:
+            await asyncio.sleep(3600.0)
+            await asyncio.to_thread(self._sweep_worktrees_once)
+
+    def _cleanup_mission_workspace(self, initiative_id: str) -> None:
+        """任务终态/删除时回收 workspace 沙盒（含 repos clone）。
+
+        终态（DONE/STOPPED）只删 workspace；delete_initiative 删整个任务目录。
+        """
+        from sortie_deck.git_publish import cleanup_workspace
+        from sortie_deck.layout import mission_workspace_dir
+
+        try:
+            cleanup_workspace(mission_workspace_dir(self.cfg.data_dir, initiative_id))
+        except Exception as exc:  # noqa: BLE001 — 清理失败不影响任务状态流转
+            logger.warning("任务 workspace 清理失败 ini=%s: %s", initiative_id, exc)
+
     async def _worker_loop(self) -> None:
         assert self.run_queue is not None
         while True:
@@ -1244,6 +1312,18 @@ class Orchestrator:
         self.store.delete(initiative_id)
         self.rooms.clear(initiative_id)
         self.graphs.pop(f"custom:{initiative_id}", None)
+        # 任务目录整体回收（memory/artifacts/workspace/chat）——元数据已删，档案不再保留
+        import shutil as _shutil
+
+        from sortie_deck.layout import mission_root
+
+        mission_dir = mission_root(self.cfg.data_dir, initiative_id)
+        if mission_dir.exists():
+            try:
+                _shutil.rmtree(mission_dir)
+                logger.info("任务目录已删除: %s", mission_dir)
+            except OSError as exc:
+                logger.warning("任务目录删除失败 %s: %s", mission_dir, exc)
 
     def list_room_messages(self, initiative_id: str) -> list[RoomMessage]:
         return self.rooms.list(initiative_id)
@@ -1532,9 +1612,11 @@ class Orchestrator:
         if status == "done":
             ini.status = InitiativeStatus.DONE
             ini.pending_hitl = None
+            self._cleanup_mission_workspace(ini.id)
         elif status == "stopped":
             ini.status = InitiativeStatus.STOPPED
             ini.pending_hitl = None
+            self._cleanup_mission_workspace(ini.id)
         elif snap.next:
             ini.status = InitiativeStatus.RUNNING
         else:
@@ -1616,7 +1698,7 @@ class Orchestrator:
                         "harness_locked": bool(ini.harness_locked),
                         "deploy_executor": self.cfg.deploy_executor,
                         "artifact_root": str(self.cfg.artifacts_dir),
-                        "workspace_dir": str(self.cfg.worktrees_dir / ini.id),
+                        "workspace_dir": str(self.cfg.worktrees_dir / ini.id / "workspace"),
                         "upstream": {},
                         "qa_attempt": 1,
                         "events": [],
@@ -1914,6 +1996,7 @@ class Orchestrator:
             ini, TimelineEvent(stage=ini.current_stage, kind="info", message="Stopped by user")
         )
         self.store.upsert(ini)
+        self._cleanup_mission_workspace(ini.id)
         await self._post_room(
             ini.id,
             text=f"{author_name} 停止了流水线。",

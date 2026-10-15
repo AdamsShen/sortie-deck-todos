@@ -138,19 +138,27 @@ def reveal_in_os(path: Path) -> None:
 def mission_workspace(
     *,
     initiative_id: str,
-    artifacts_dir: Path,
-    worktrees_dir: Path,
+    data_dir: Path,
     repo_root: Path,
 ) -> dict[str, Any]:
-    art_dir = (artifacts_dir / initiative_id).resolve()
-    wt_dir = (worktrees_dir / initiative_id).resolve()
+    """任务工作区视图（数据源为收敛后的任务目录 data/missions/<id>/）。
+
+    输出字段名保持历史形状（artifacts_dir/worktree_dir/...），前端无需改动；
+    语义变化：worktree_dir 现指向任务沙盒 `workspace/`（repos clone 挂其下，
+    push 成功后可被回收），不再有 "git worktree" 含义——git_from_worktree
+    仅在沙盒内恰好存在 clone 时为 True。
+    """
+    from sortie_deck.layout import mission_artifacts_dir, mission_workspace_dir
+
+    art_dir = mission_artifacts_dir(data_dir, initiative_id)
+    wt_dir = mission_workspace_dir(data_dir, initiative_id)
     wt_exists = wt_dir.is_dir()
     git_from_wt = resolve_git_repo(wt_dir) if wt_exists else None
     git_from_repo = resolve_git_repo(repo_root)
     git_repo = git_from_wt or git_from_repo
     return {
         "initiative_id": initiative_id,
-        "artifacts_dir": str(art_dir) if art_dir.exists() else str(art_dir),
+        "artifacts_dir": str(art_dir),
         "artifacts_exists": art_dir.is_dir(),
         "worktree_dir": str(wt_dir),
         "worktree_exists": wt_exists,

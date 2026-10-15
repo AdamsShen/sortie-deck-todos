@@ -28,7 +28,8 @@ def build_default_registry(
     worktrees_root: Path | None = None,
 ) -> ExecutorRegistry:
     root = repo_root or Path(__file__).resolve().parents[3]
-    worktrees = worktrees_root or (root / "data" / "worktrees")
+    # worktrees_root 实为 missions 根（data/missions），任务沙盒在 <id>/workspace
+    worktrees = worktrees_root or (root / "data" / "missions")
     registry = ExecutorRegistry()
     for executor in (
         MockIntakeExecutor(),

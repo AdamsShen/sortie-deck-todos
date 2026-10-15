@@ -5,7 +5,6 @@ import json
 import os
 import re
 import shutil
-import subprocess
 from pathlib import Path
 
 from sortie_deck.models import RepoConfig, StageContext, StageResult
@@ -164,20 +163,51 @@ def _clone_url(repo: RepoConfig) -> str:
 
 
 async def clone_repos(
-    repos: list[RepoConfig], workspace: Path
+    repos: list[RepoConfig], workspace: Path, initiative_id: str = ""
 ) -> tuple[str, list[str]]:
     """Clone each mission repo into ``workspace/repos/<name>`` before coding.
 
     Returns ``(prompt_section, log_lines)``. Already-present checkouts are
     kept (idempotent on retry); clone failures are logged but do not abort the
     stage — the agent is told which checkouts exist.
+
+    任务分支策略：clone 成功后基于目标分支 HEAD 创建任务分支
+    ``sortie/<initiative_id>``（多仓库 ``sortie/<id>-<name>``，见
+    git_publish.mission_branch），agent 在任务分支上迭代，push 后建 MR。
+    分支幂等：已存在则复用（重试场景）。
+
+    磁盘水位防护：可用空间低于 ``TDT_MIN_DISK_FREE_MB`` 时跳过 clone 并在
+    prompt/log 中说明，防止极端并发打爆服务器磁盘。
     """
     if not repos:
         return "", []
     repos_root = workspace / "repos"
     repos_root.mkdir(parents=True, exist_ok=True)
     log: list[str] = [f"mission_repos={len(repos)}"]
+
+    # 磁盘水位防护（云上多用户安全阀）
+    from sortie_deck.git_publish import mission_branch
+    from sortie_deck.settings import settings as _settings
+
+    free_mb = -1
+    try:
+        import shutil as _shutil
+
+        free_mb = int(_shutil.disk_usage(str(workspace)).free / (1024 * 1024))
+    except OSError:
+        pass
+    min_free = int(getattr(_settings, "min_disk_free_mb", 0) or 0)
+    if min_free > 0 and 0 <= free_mb < min_free:
+        log.append(f"DISK GUARD: free={free_mb}MB < min_disk_free_mb={min_free}MB, clone skipped")
+        section = (
+            "\n\nMission code repositories: NOT AVAILABLE this run — the server is low on "
+            f"disk (free {free_mb}MB < required {min_free}MB). Clones were skipped; do not "
+            "attempt file writes into repos/ and report this limitation.\n"
+        )
+        return section, log
+
     entries: list[str] = []
+    branch_notes: list[str] = []
     for repo in repos:
         target = repos_root / _repo_dirname(repo)
         display = repo.branch or "(default branch)"
@@ -192,10 +222,31 @@ async def clone_repos(
             log.append(f"repo {target.name}: clone exit={code}")
             if code != 0:
                 log.append(f"clone stderr={(err or out)[:500]}")
+            else:
+                # clone 成功后把 origin 换成无 token 的干净 URL，避免凭证落盘 .git/config
+                #（push 时用带 token 的完整 URL，见 git_publish._push_branch）
+                await _run_cmd(["git", "remote", "set-url", "origin", repo.url], cwd=target, timeout=15)
         else:
             log.append(f"repo {target.name}: git not available, clone skipped")
         if (target / ".git").exists():
-            entries.append(f"- `{target}` (branch: {display})")
+            # 任务分支：基于目标分支 HEAD 创建（幂等，已存在则复用）
+            task_branch = mission_branch(initiative_id, _repo_dirname(repo), multi_repo=len(repos) > 1)
+            code, _, err = await _run_cmd(
+                ["git", "rev-parse", "--verify", task_branch], cwd=target, timeout=15
+            )
+            if code == 0:
+                await _run_cmd(["git", "checkout", task_branch], cwd=target, timeout=15)
+                log.append(f"repo {target.name}: task branch reused={task_branch}")
+            else:
+                code, _, cerr = await _run_cmd(
+                    ["git", "checkout", "-b", task_branch], cwd=target, timeout=15
+                )
+                log.append(
+                    f"repo {target.name}: task branch created={task_branch} exit={code}"
+                    + (f" stderr={cerr[:200]}" if code != 0 else "")
+                )
+            entries.append(f"- `{target}` (base: {display}, working branch: `{task_branch}`)")
+            branch_notes.append(f"{target.name}: `{task_branch}`")
         else:
             entries.append(f"- `{target}` (branch: {display}) — CHECKOUT FAILED, see log")
     section = (
@@ -203,6 +254,12 @@ async def clone_repos(
         + "\n".join(entries)
         + "\nExplore the code, implement the PRD changes inside these checkouts.\n"
     )
+    if branch_notes:
+        section += (
+            "\nIMPORTANT — you are working on the mission's task branch; commit freely:\n"
+            + "\n".join(f"- {note}" for note in branch_notes)
+            + "\n"
+        )
     return section, log
 
 
@@ -210,37 +267,27 @@ async def clone_repos(
 
 
 def ensure_worktree(repo_root: Path, initiative_id: str, worktrees_root: Path) -> Path:
-    """Create an isolated work directory (git worktree when possible)."""
-    worktrees_root.mkdir(parents=True, exist_ok=True)
-    target = worktrees_root / initiative_id
-    if target.exists():
-        return target
+    """创建任务沙盒目录（纯普通目录，git worktree 语义已移除）。
 
-    git_dir = repo_root / ".git"
-    if git_dir.exists() and _which("git"):
-        branch = f"tdt/{initiative_id}"
-        subprocess.run(
-            ["git", "branch", branch],
-            cwd=repo_root,
-            capture_output=True,
-            check=False,
-        )
-        result = subprocess.run(
-            ["git", "worktree", "add", str(target), branch],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode == 0:
-            return target
+    历史行为是从服务器自身仓库做 ``git worktree add`` + ``tdt/<id>`` 分支——
+    与用户业务项目无关且在云上多用户下有并发竞态，已废弃。业务代码统一走
+    mission repos 的 per-task clone（``workspace/repos/<name>``，由 ``clone_repos``
+    落在沙盒下），沙盒本身只是编码 agent 的工作目录。
 
+    repo_root 参数保留仅为兼容旧调用签名，不再参与任何 git 操作。
+    路径布局：``worktrees_root/<initiative_id>/workspace``（worktrees_root 传 missions 根）。
+    """
+    target = worktrees_root / initiative_id / "workspace"
     target.mkdir(parents=True, exist_ok=True)
-    (target / "README.md").write_text(
-        f"# Workdir for {initiative_id}\nIsolated workspace (non-git fallback).\n"
-        f"Coding agents may write freely under this directory.\n",
-        encoding="utf-8",
-    )
+    readme = target / "README.md"
+    if not readme.exists():
+        readme.write_text(
+            f"# Workspace for {initiative_id}\n"
+            f"Isolated mission sandbox. Mission repos are cloned under `repos/`.\n"
+            f"Branch data lives on the remote git server (GitLab); this directory is a\n"
+            f"disposable working copy and may be reclaimed after a successful push.\n",
+            encoding="utf-8",
+        )
     return target
 
 
@@ -293,7 +340,7 @@ class ClaudeCodeExecutor:
         workspace = ensure_worktree(self.repo_root, ctx.initiative_id, self.worktrees_root)
         prd = ctx.upstream_artifacts.get("prd.md", ctx.brief)
         mcp_extra, mcp_log = await _mcp_prompt_and_log(ctx)
-        repo_section, repo_log = await clone_repos(ctx.repos, workspace)
+        repo_section, repo_log = await clone_repos(ctx.repos, workspace, ctx.initiative_id)
         mode = _permission_mode(ctx)
         prompt = (
             f"{ctx.persona}\n\n"
@@ -445,7 +492,7 @@ class CursorCliExecutor:
     async def run(self, ctx: StageContext) -> StageResult:
         workspace = ensure_worktree(self.repo_root, ctx.initiative_id, self.worktrees_root)
         prd = ctx.upstream_artifacts.get("prd.md", ctx.brief)
-        repo_section, repo_log = await clone_repos(ctx.repos, workspace)
+        repo_section, repo_log = await clone_repos(ctx.repos, workspace, ctx.initiative_id)
         query = f"{ctx.brief}\n{prd}\n{ctx.human_instruction or ''}"
         kb_meta: dict[str, str] = {}
         try:

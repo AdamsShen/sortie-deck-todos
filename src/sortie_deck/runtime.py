@@ -39,11 +39,12 @@ def configure_logging(level: str = "INFO") -> None:
 
 def ensure_runtime_dirs(cfg: Settings | None = None) -> None:
     cfg = cfg or settings
+    # 任务目录收敛后，本地产物/工作区/聊天都在 data/missions/<id>/ 下
+    #（见 layout.py）；旧布局由启动迁移搬运（api lifespan 调 migrate_legacy_layout）。
     for path in (
         cfg.data_dir,
-        cfg.artifacts_dir,
-        cfg.worktrees_dir,
-        cfg.rooms_dir,
+        cfg.missions_dir,
+        cfg.rooms_dir,  # 旧布局根，仅作迁移探测与兼容；新写入不再使用
     ):
         path.mkdir(parents=True, exist_ok=True)
 
@@ -120,7 +121,7 @@ def run_doctor(cfg: Settings | None = None) -> DoctorReport:
             )
         )
     else:
-        report.checks.append(DoctorCheck("artifacts", True, f"local → {cfg.artifacts_dir}"))
+        report.checks.append(DoctorCheck("artifacts", True, f"local → {cfg.missions_dir}"))
 
     report.checks.append(
         DoctorCheck(
