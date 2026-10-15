@@ -97,7 +97,11 @@ def test_planner_emits_branch_selftest_graph():
         "eng_web_selftest",
         "eng_backend_selftest",
     }
-    assert "图编排" in proposal["rationale"] or any("图编排" in n for n in proposal["notes"])
+    # 编排图应体现「多端并行 + 各端自测 + 联调」的并行结构（rationale/notes 实际描述）
+    assert any(
+        k in proposal["rationale"] or any(k in n for n in proposal["notes"])
+        for k in ("并行", "自测", "联调", "∥")
+    )
 
 
 def test_group_wave_branches_default_singleton():

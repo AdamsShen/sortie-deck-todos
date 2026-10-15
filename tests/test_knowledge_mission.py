@@ -16,7 +16,7 @@ from sortie_deck.models import (
     StageContext,
 )
 from sortie_deck.orchestrator import Orchestrator
-from sortie_deck.pipeline import stage_catalog
+from sortie_deck.pipeline import catalog_by_id, stage_catalog
 from sortie_deck.settings import Settings, settings
 
 

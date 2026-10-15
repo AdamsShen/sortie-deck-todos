@@ -13,13 +13,17 @@ def test_registry_includes_builtins():
 
 
 def test_probe_executor():
+    # probe_executor 只检查执行器是否具备 run 入口，返回 name/ok/module（无 status 字段）
     class E:
         name = "x"
 
-        def probe(self):
-            return {"status": "ok", "detail": "fine"}
+        def run(self, ctx):
+            return None
 
-    assert probe_executor(E())["status"] == "ok"
+    probe = probe_executor(E())
+    assert probe["name"] == "x"
+    assert probe["ok"] is True
+    assert probe["module"].endswith("test_executors_entrypoints")
 
 
 def test_load_entry_points_tolerates_empty():

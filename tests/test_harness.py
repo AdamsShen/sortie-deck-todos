@@ -154,9 +154,15 @@ def test_executor_falls_back_when_provider_missing(tmp_settings, monkeypatch):
 
 
 def test_executor_fails_hard_when_fallback_disabled(tmp_settings, monkeypatch):
+    from sortie_deck.harness_providers.base import reset_harness_registry
     from sortie_deck.settings import settings
 
+    # 显式让 opencode 探针不可达（清 base_url 并重建探针缓存），
+    # 使 fallback 关闭时确定性地走「硬失败」分支，不依赖真实 opencode 部署状态。
+    monkeypatch.setattr(settings, "opencode_base_url", "")
     monkeypatch.setattr(settings, "harness_fallback", False)
+    reset_harness_registry()
+
     executor = HarnessStageExecutor()
     result = asyncio.run(
         executor.run(_ctx(stage="intake", role="ops", harness="opencode"))
