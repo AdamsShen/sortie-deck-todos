@@ -3330,6 +3330,89 @@ textarea {
 .mem-modal .panel-label {
   padding: 1rem 1.25rem;
 }
+/* ===== 记忆详情弹框：按内容自适应尺寸（区别于新建弹框的固定大尺寸） ===== */
+.mem-modal.mem-detail-modal {
+  width: fit-content;
+  min-width: min(480px, calc(100vw - 3rem));
+  max-width: min(720px, calc(100vw - 3rem));
+  height: auto;
+  max-height: calc(100vh - 4rem);
+}
+/* 方案二 · 记忆详情：元信息条 + 简介高亮块 + 全文 */
+.mem-detail-modal .mem-detail-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding: 0.7rem 1.25rem;
+  border-bottom: 1px dashed var(--line);
+}
+.mem-detail-modal .mem-detail-sep {
+  width: 1px;
+  height: 0.7rem;
+  background: var(--line-hot);
+}
+.mem-detail-modal .mem-detail-scope {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  color: var(--muted);
+}
+.mem-detail-modal .mem-detail-tags {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  color: var(--copper);
+}
+.mem-detail-modal .mem-detail-author {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.mem-detail-modal .mem-detail-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 1rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+.mem-detail-modal .mem-detail-callout {
+  background: var(--signal-dim);
+  border: 1px solid color-mix(in srgb, var(--signal) 22%, transparent);
+  border-radius: 10px;
+  padding: 0.7rem 1rem;
+}
+.mem-detail-modal .mem-detail-callout .mem-detail-label {
+  display: block;
+  margin-bottom: 0.3rem;
+  color: var(--signal);
+}
+.mem-detail-modal .mem-detail-summary {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 0.92rem;
+  line-height: 1.75;
+  color: var(--text);
+  text-wrap: pretty;
+}
+.mem-detail-modal .mem-detail-full-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.mem-detail-modal .mem-detail-full-label::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+.mem-detail-modal .mem-detail-full .md-preview {
+  font-size: 0.8rem;
+  line-height: 1.8;
+}
 .mem-modal-main {
   flex: 1;
   display: grid;

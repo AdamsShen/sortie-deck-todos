@@ -3098,27 +3098,45 @@ export default function App() {
           )}
           {memDetail && (
             <div className="mem-overlay" onClick={() => setMemDetail(null)}>
-              <div className="panel mem-modal" onClick={(e) => e.stopPropagation()}>
+              <div className="panel mem-modal mem-detail-modal" onClick={(e) => e.stopPropagation()}>
                 <div className="panel-label row-between">
                   <span>{tr("memDetailTitle")}</span>
                   <button type="button" className="btn ghost tiny" onClick={() => setMemDetail(null)}>
                     ×
                   </button>
                 </div>
-                <div className="mem-card-top">
+                {/* 元信息条：类型 · 范围 · 标签 · 作者 · 时间 */}
+                <div className="mem-detail-meta">
                   <span className="kind-tag">{tr(memKindLabel[memDetail.kind])}</span>
-                  <span className="mem-card-scope">{memTargetLabel(memDetail)}</span>
+                  <span className="mem-detail-sep" />
+                  <span className="mem-detail-scope">{memTargetLabel(memDetail)}</span>
+                  {(memDetail.tags || []).length ? (
+                    <>
+                      <span className="mem-detail-sep" />
+                      <span className="mem-detail-tags">
+                        {(memDetail.tags || []).map((t) => `#${t}`).join(" ")}
+                      </span>
+                    </>
+                  ) : null}
+                  <span className="mem-detail-author">
+                    {memDetail.author_name || ""}
+                    {memDetail.created_at ? ` · ${displayTime(memDetail.created_at)}` : ""}
+                  </span>
                 </div>
-                {/* 简介作为标题（LLM 生成；未生成时降级为内容截断） */}
-                <p className="memory-quote">「{memDetail.summary || memDetail.content}」</p>
-                <div className="mem-detail-body">
-                  <div className="mem-detail-label">{tr("memFull")}</div>
-                  <MarkdownPreview text={memDetail.content} />
-                </div>
-                <div className="mem-card-meta">
-                  {(memDetail.tags || []).length ? `${(memDetail.tags || []).join(" · ")} · ` : ""}
-                  {memDetail.author_name || ""}
-                  {memDetail.created_at ? ` · ${displayTime(memDetail.created_at)}` : ""}
+                {/* 正文滚动区：简介高亮块 + 全文 */}
+                <div className="mem-detail-scroll">
+                  <div className="mem-detail-callout">
+                    <span className="mem-detail-label">{tr("memSummary")}</span>
+                    <p className="mem-detail-summary">
+                      {memDetail.summary || memDetail.content}
+                    </p>
+                  </div>
+                  <div className="mem-detail-full">
+                    <div className="mem-detail-full-label">
+                      <span className="mem-detail-label">{tr("memFull")}</span>
+                    </div>
+                    <MarkdownPreview text={memDetail.content} />
+                  </div>
                 </div>
               </div>
             </div>
