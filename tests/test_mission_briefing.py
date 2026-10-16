@@ -13,7 +13,7 @@ from sortie_deck.harness import (
     ToolSpec,
 )
 from sortie_deck.mission_briefing import BriefingAttachment, MissionBriefingAgent
-from sortie_deck.models import CreateInitiativeRequest, Initiative
+from sortie_deck.models import CreateInitiativeRequest, ExternalMaterial, Initiative
 from sortie_deck.settings import Settings
 
 
@@ -129,5 +129,50 @@ def test_mission_briefing_multimodal_attachments(tmp_path: Path):
         assert "Portal health" in sess.brief
         assert any(e.data and e.data.get("step") == "attachments" for e in sess.events)
         assert sess.draft.get("attachments")
+
+    asyncio.run(_run())
+
+
+def test_mission_briefing_materials_flow(tmp_path: Path):
+    """All materials join the planning discussion; on confirm they ride into the
+    created mission, while the request brief stays clean (orchestrator folds the
+    pinned ones into the persistent-context section)."""
+    cfg = Settings(
+        data_dir=tmp_path / "data",
+        pipeline_llm=False,
+        llm_cli_fallback=False,
+        default_coding_executor="mock",
+    )
+    reqs: list[CreateInitiativeRequest] = []
+
+    async def create(req: CreateInitiativeRequest) -> Initiative:
+        reqs.append(req)
+        return Initiative(title=req.title, brief=req.brief, template="default")
+
+    agent = MissionBriefingAgent(
+        settings=cfg,
+        agents=AgentCatalog(cfg.agents_db),
+        create_initiative=create,
+        list_initiatives=lambda: [],
+    )
+
+    async def _run():
+        sess = agent.start()
+        mats = [
+            ExternalMaterial(name="PRD.md", kind="prd", pinned=True, text_excerpt="需要 iOS 与 Web 预发健康检查"),
+            ExternalMaterial(name="metrics.csv", kind="data", pinned=False, text_excerpt="latency,p99\n120,300"),
+        ]
+        sess = await agent.handle(sess.id, "做预发健康检查", user_name="Ada", materials=mats)
+        assert sess.status == "awaiting_confirm"
+        # Materials persist on the session (snapshot refreshed per turn)
+        assert [m.name for m in sess.materials] == ["PRD.md", "metrics.csv"]
+        assert any(e.data and e.data.get("step") == "materials" for e in sess.events)
+        sess = await agent.handle(sess.id, "确认", user_name="Ada")
+        assert sess.status == "done"
+        assert sess.initiative_id
+        # All materials ride into the creation request
+        assert reqs and [m.name for m in reqs[0].materials] == ["PRD.md", "metrics.csv"]
+        # Request brief stays clean — no discussion-context section leaks in
+        assert "【外部资料" not in reqs[0].brief
 
     asyncio.run(_run())

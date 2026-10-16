@@ -50,6 +50,10 @@ type Props = {
   accept?: string;
   maxAttachments?: number;
   maxBytes?: number;
+  /** When true the send button becomes a stop button invoking onStop. */
+  stopping?: boolean;
+  stopLabel?: string;
+  onStop?: () => void;
 };
 
 type Trigger = {
@@ -157,6 +161,9 @@ export function ChatComposer({
   accept = DEFAULT_ACCEPT,
   maxAttachments = 6,
   maxBytes = 4 * 1024 * 1024,
+  stopping = false,
+  stopLabel = "停止",
+  onStop,
 }: Props) {
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -417,9 +424,15 @@ export function ChatComposer({
             </button>
           </>
         ) : null}
-        <button className="btn primary" type="submit" disabled={disabled || !canSend}>
-          {sendLabel}
-        </button>
+        {stopping && onStop ? (
+          <button className="btn primary composer-stop" type="button" onClick={onStop}>
+            {stopLabel}
+          </button>
+        ) : (
+          <button className="btn primary" type="submit" disabled={disabled || !canSend}>
+            {sendLabel}
+          </button>
+        )}
       </div>
     </form>
   );

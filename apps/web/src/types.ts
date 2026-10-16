@@ -262,6 +262,14 @@ export interface HarnessesResponse {
   default: string;
 }
 
+export interface MissionShare {
+  user_id: string;
+  username?: string;
+  display_name?: string;
+  added_by?: string;
+  added_at?: string;
+}
+
 export interface Initiative {
   id: string;
   title: string;
@@ -285,6 +293,10 @@ export interface Initiative {
   created_at?: string;
   updated_at?: string;
   webhook_url?: string | null;
+  /** 创建者用户 id（共享/删除权限判定用；旧数据为空） */
+  created_by?: string | null;
+  /** 共享给其他账号用户的记录（被共享者拥有除删除外的全部权限） */
+  shared_with?: MissionShare[];
   meta?: Record<string, unknown>;
 }
 
@@ -333,6 +345,8 @@ export interface MemoryEntry {
   scope_id: string;
   kind: MemoryKind;
   content: string;
+  /** 一句话简介（写入时 LLM 生成，失败降级为 content 截断） */
+  summary?: string;
   tags: string[];
   source?: string;
   author_id?: string;

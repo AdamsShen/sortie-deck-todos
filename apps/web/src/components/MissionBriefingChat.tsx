@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { api } from "../api";
 import { playSfx } from "../sfx";
-import type { RepoConfig } from "../types";
+import type { ExternalMaterial, RepoConfig } from "../types";
 import { ChatComposer, type ComposerAttachment, type ComposerPayload } from "./ChatComposer";
 
 type RepoRow = { url: string; branch: string };
 type ReposBySlot = Record<string, RepoRow[]>;
+
+/** localStorage key holding the resumable briefing session id. */
+const SESSION_KEY = "briefing_session_id";
 
 export type BriefingAttachment = {
   name: string;
@@ -38,6 +41,7 @@ export type BriefingSession = {
   messages: BriefingMessage[];
   events: BriefingEvent[];
   draft?: Record<string, unknown>;
+  materials?: ExternalMaterial[];
   initiative_id?: string | null;
 };
 
@@ -48,6 +52,14 @@ type Props = {
   setBusy: (v: boolean) => void;
   onCreated: (initiativeId: string) => void;
   onError: (msg: string) => void;
+  /** Snapshot of the intake page's external-materials panel (all join the discussion). */
+  materials: ExternalMaterial[];
+  /** Chat-composer attachments land in the external-materials panel instead of the message. */
+  onImportFiles: (atts: ComposerAttachment[]) => void;
+  /** Materials restored from a resumed briefing session (backfill the panel). */
+  onMaterialsLoaded?: (mats: ExternalMaterial[]) => void;
+  /** Clears the parent's external-materials panel — wired to the "新会话" button. */
+  onReset?: () => void;
   labels: {
     title: string;
     placeholder: string;
@@ -57,7 +69,6 @@ type Props = {
     reject: string;
     restart: string;
     waterfall: string;
-    attach?: string;
   };
 };
 
@@ -80,6 +91,10 @@ export function MissionBriefingChat({
   onCreated,
   onError,
   labels,
+  materials,
+  onImportFiles,
+  onMaterialsLoaded,
+  onReset,
 }: Props) {
   const [session, setSession] = useState<BriefingSession | null>(null);
   const [input, setInput] = useState("");
@@ -87,11 +102,27 @@ export function MissionBriefingChat({
   const [bootError, setBootError] = useState("");
   const [repos, setRepos] = useState<ReposBySlot>({});
   const bottomRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const locked = busy || sending;
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      // Resume the last session (messages + materials) when possible.
+      const saved = typeof localStorage !== "undefined" ? localStorage.getItem(SESSION_KEY) : null;
+      if (saved) {
+        try {
+          const s = await api<BriefingSession>(`/api/briefing/sessions/${saved}`, { token });
+          if (!cancelled) {
+            setSession(s);
+            setBootError("");
+            onMaterialsLoaded?.(s.materials || []);
+            return;
+          }
+        } catch {
+          // Stale id — fall through and start a fresh session.
+        }
+      }
       try {
         const s = await api<BriefingSession>("/api/briefing/sessions", {
           token,
@@ -101,6 +132,11 @@ export function MissionBriefingChat({
         if (!cancelled) {
           setSession(s);
           setBootError("");
+          try {
+            localStorage.setItem(SESSION_KEY, s.id);
+          } catch {
+            /* storage unavailable */
+          }
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -133,6 +169,13 @@ export function MissionBriefingChat({
       setInput("");
       setRepos({});
       setBootError("");
+      // 新会话：同时清空父组件的外部资料（附件）面板，等价于从零重建任务
+      onReset?.();
+      try {
+        localStorage.setItem(SESSION_KEY, s.id);
+      } catch {
+        /* storage unavailable */
+      }
       playSfx("whoosh");
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err));
@@ -239,6 +282,8 @@ export function MissionBriefingChat({
     );
     playSfx("click");
 
+    const ac = new AbortController();
+    abortRef.current = ac;
     try {
       const s = await api<BriefingSession>(`/api/briefing/sessions/${session.id}/messages`, {
         token,
@@ -246,7 +291,9 @@ export function MissionBriefingChat({
         body: JSON.stringify({
           text,
           attachments: attachments.map(toApiAttachment),
+          materials,
         }),
+        signal: ac.signal,
       });
       setSession(s);
       playSfx(s.status === "awaiting_confirm" || s.status === "done" ? "ok" : "toggle");
@@ -254,28 +301,44 @@ export function MissionBriefingChat({
         onCreated(s.initiative_id);
       }
     } catch (err) {
-      // Roll back optimistic bubble + restore draft text
-      setSession((prev) =>
-        prev
-          ? {
-              ...prev,
-              messages: (prev.messages || []).filter((m) => m !== optimistic && m.at !== optimistic.at),
-              events: (prev.events || []).filter((e) => !String(e.id).startsWith("local_")),
-            }
-          : prev,
-      );
-      setInput(text);
-      onError(err instanceof Error ? err.message : String(err));
-      playSfx("warn");
+      const aborted = ac.signal.aborted;
+      setSession((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          // On abort keep the user bubble (the backend persisted the turn);
+          // on real errors roll it back and restore the draft text.
+          messages: aborted
+            ? prev.messages || []
+            : (prev.messages || []).filter((m) => m !== optimistic && m.at !== optimistic.at),
+          events: (prev.events || []).filter((e) => !String(e.id).startsWith("local_")),
+        };
+      });
+      if (aborted) {
+        playSfx("toggle");
+      } else {
+        setInput(text);
+        onError(err instanceof Error ? err.message : String(err));
+        playSfx("warn");
+      }
     } finally {
+      abortRef.current = null;
       setSending(false);
       setBusy(false);
     }
   }
 
+  /** Abort the in-flight planning request (the backend cancels on disconnect). */
+  function stop() {
+    abortRef.current?.abort();
+  }
+
   function onSubmit(e?: FormEvent | KeyboardEvent, payload?: ComposerPayload) {
     e?.preventDefault?.();
-    void send(payload?.text ?? input, payload?.attachments ?? []);
+    // Composer attachments are routed into the external-materials panel; the
+    // message itself only carries text (materials travel via props snapshot).
+    if (payload?.attachments?.length) onImportFiles(payload.attachments);
+    void send(payload?.text ?? input);
   }
 
   const waterfall = (session?.events || []).filter((e) =>
@@ -414,14 +477,15 @@ export function MissionBriefingChat({
         placeholder={labels.placeholder}
         hint={labels.hint}
         sendLabel={sending ? (lang === "zh" ? "规划中…" : "Planning…") : labels.send}
+        stopping={sending}
+        stopLabel={lang === "zh" ? "停止" : "Stop"}
+        onStop={stop}
         disabled={locked || !session || session?.status === "done"}
         mentions={[]}
         commands={[
           { id: "confirm", label: labels.confirm, hint: "confirm plan" },
           { id: "reject", label: labels.reject, hint: "reject plan" },
         ]}
-        attachmentsEnabled
-        attachLabel={labels.attach || (lang === "zh" ? "附件" : "Attach")}
       />
     </div>
   );

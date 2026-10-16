@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { api, listHarnesses, listSubRooms, updateInitiativeHarness } from "./api";
+import { api, listHarnesses, listMissionShares, listSubRooms, updateInitiativeHarness } from "./api";
 import { OperatorChip } from "./components/OperatorChip";
 import { PipelineEditor } from "./components/PipelineEditor";
 import { ChatComposer, type MentionOption } from "./components/ChatComposer";
@@ -10,6 +10,7 @@ import { StageInspect } from "./components/StageInspect";
 import { PipelineRail, railFromInitiative } from "./components/PipelineRail";
 import { ForgeReview } from "./components/ForgeReview";
 import { SubRoomPanel } from "./components/SubRoomPanel";
+import { ShareManager } from "./components/ShareManager";
 import { DecisionCenter } from "./components/DecisionCenter";
 import { unlockSfx, playSfx, loadSfxMuted, setSfxMuted, loadBgmMuted, setBgmMuted, startBgm } from "./sfx";
 import { categoryLabel, statusLabel, t, type I18nKey } from "./i18n";
@@ -36,6 +37,7 @@ import type {
   MemoryEntry,
   MemoryKind,
   MemoryScope,
+  MissionShare,
   MissionWorkspace,
   PipelineTrackInfo,
   PipelineStageInfo,
@@ -131,6 +133,11 @@ export default function App() {
   const [briefOpen, setBriefOpen] = useState(false);
   const [chatFullscreen, setChatFullscreen] = useState(false);
   const [subroomsOpen, setSubroomsOpen] = useState(false);
+  // 任务详情页共享抽屉（只读成员列表，管理入口在任务列表页弹窗）
+  const [sharesOpen, setSharesOpen] = useState(false);
+  const [shares, setShares] = useState<MissionShare[]>([]);
+  // 任务列表页共享管理弹窗：值为任务 id
+  const [shareModalId, setShareModalId] = useState<string | null>(null);
   // Bumped on every sub-room SSE event so the panel re-pulls records/transcript
   const [subroomSignal, setSubroomSignal] = useState(0);
   const [subroomCount, setSubroomCount] = useState(0);
@@ -168,6 +175,25 @@ export default function App() {
     category: "playbook",
   });
   const [memories, setMemories] = useState<MemoryEntry[]>([]);
+  // 记忆库看板（方案三）：筛选/搜索/弹窗写入/删除撤销
+  const [memModalOpen, setMemModalOpen] = useState(false);
+  const [memQuery, setMemQuery] = useState("");
+  const [memScopeFilter, setMemScopeFilter] = useState<"all" | "workspace" | "user">("all");
+  const [memKindFilter, setMemKindFilter] = useState<"" | MemoryKind>("");
+  const [memToast, setMemToast] = useState(false);
+  const memUndoRef = useRef<MemoryEntry | null>(null);
+  const memToastTimer = useRef<number | null>(null);
+  // 「我的」定向共享：所有任务 / 指定任务 / 指定 Agent（scope_id 复用 memForm.scope_id 存目标 id）
+  const [memTarget, setMemTarget] = useState<"all" | "mission" | "agent">("all");
+  // 任务详情页「记忆」面板（绑定索引 + 执行中读取记录）
+  const [memPanelOpen, setMemPanelOpen] = useState(false);
+  const [missionMemories, setMissionMemories] = useState<{
+    bound: MemoryEntry[];
+    read_ids: string[];
+  } | null>(null);
+  // 记忆卡片详情（简介作标题 + 全文渲染）与 md 导入
+  const [memDetail, setMemDetail] = useState<MemoryEntry | null>(null);
+  const memImportRef = useRef<HTMLInputElement | null>(null);
   const [memForm, setMemForm] = useState<{
     scope: MemoryScope;
     scope_id: string;
@@ -242,6 +268,38 @@ export default function App() {
   const avatarFileRef = useRef<HTMLInputElement | null>(null);
 
   const tr = useCallback((key: I18nKey | string) => t(lang, key), [lang]);
+
+  // 记忆类型 → i18n key
+  const memKindLabel: Record<MemoryKind, I18nKey> = {
+    fact: "kindFact",
+    preference: "kindPreference",
+    episode: "kindEpisode",
+    lesson: "kindLesson",
+  };
+
+  const filteredMemories = useMemo(() => {
+    const q = memQuery.trim().toLowerCase();
+    return memories.filter((m) => {
+      // 「我的」含全部个人域：user / 指定任务(mission) / 指定 Agent(agent)
+      if (memScopeFilter === "user" && !["user", "mission", "agent"].includes(m.scope)) return false;
+      if (memScopeFilter === "workspace" && m.scope !== "workspace") return false;
+      if (memKindFilter && m.kind !== memKindFilter) return false;
+      if (q && !m.content.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [memories, memQuery, memScopeFilter, memKindFilter]);
+
+  // 记忆作用域目标显示名（任务 / Agent 用标题回显，找不到退化为 id 前缀）
+  const memTargetLabel = useCallback(
+    (m: MemoryEntry): string => {
+      if (m.scope === "workspace") return tr("scopeGlobalShort");
+      if (m.scope === "user") return tr("scopeMineShort");
+      if (m.scope === "mission")
+        return `${tr("scopeMission")} · ${items.find((i) => i.id === m.scope_id)?.title || m.scope_id.slice(0, 10)}`;
+      return `${tr("scopeAgent")} · ${agentList.find((a) => a.id === m.scope_id)?.title || m.scope_id.slice(0, 10)}`;
+    },
+    [tr, items, agentList]
+  );
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -626,8 +684,52 @@ export default function App() {
     setArtifactPreviewPath("");
     setArtifactPreviewKind("");
     setWorkspace(null);
+    setSharesOpen(false);
+    setShares([]);
+    setMemPanelOpen(false);
+    setMissionMemories(null);
     prevArtCountRef.current = 0;
   }, [selectedId]);
+
+  // 打开详情页记忆面板：拉取生成时绑定的记忆 + 执行中读取记录
+  useEffect(() => {
+    if (!token || !memPanelOpen || !selectedId) return;
+    let cancelled = false;
+    api<{ bound: MemoryEntry[]; read_ids: string[] }>(
+      `/api/initiatives/${selectedId}/memories`,
+      { token }
+    )
+      .then((d) => {
+        if (!cancelled) setMissionMemories({ bound: d.bound || [], read_ids: d.read_ids || [] });
+      })
+      .catch((e) => {
+        if (!cancelled) setError(errMsg(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, memPanelOpen, selectedId]);
+
+  // 当前账号是否为任务创建者（旧数据 created_by 为空视为 owner，保持历史行为）
+  const isMissionOwner = Boolean(
+    user && (!selected?.created_by || selected.created_by === user.id || user.role === "admin")
+  );
+
+  // 打开详情页共享抽屉时拉取最新共享成员列表（只读展示）
+  useEffect(() => {
+    if (!token || !sharesOpen || !selectedId) return;
+    let cancelled = false;
+    listMissionShares(token, selectedId)
+      .then((d) => {
+        if (!cancelled) setShares(d || []);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(errMsg(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, sharesOpen, selectedId]);
 
   const artCount = (selected?.artifacts || []).length;
 
@@ -989,6 +1091,12 @@ export default function App() {
     await refreshDash();
   }
 
+  // 共享弹窗变更回调：同步任务列表与当前详情（徽标计数随之更新）
+  function onShareChanged(updated: Initiative) {
+    setItems((prev) => prev.map((it) => (it.id === updated.id ? updated : it)));
+    if (selectedId === updated.id) setDetail(updated);
+  }
+
   async function openArtifact(path: string, kind?: string) {
     const data = await api<{ content: string }>(`/api/initiatives/${selectedId}/artifacts/${path}`, { token });
     setArtifactPreview(data.content);
@@ -1038,6 +1146,7 @@ export default function App() {
     }
   }, [view, user]);
 
+  // 记忆表单默认 scope 是 workspace；非管理员登录后自动切回 user（workspace 仅管理员可写）
   useEffect(() => {
     if (view === "knowledge" && token) {
       refreshKb().catch((e) => setError(errMsg(e)));
@@ -1140,25 +1249,36 @@ export default function App() {
     }
   }, [view, token, refreshAgents]);
 
+  // 写入记忆（弹窗表单）：全局约定 / 我的三种目标（所有任务 / 指定任务 / 指定 Agent）
   async function saveMemory(e: FormEvent) {
     e.preventDefault();
+    if (!memForm.content.trim()) return;
+    let scope: MemoryScope = memForm.scope;
+    let scopeId = scope === "workspace" ? "global" : user?.id || "";
+    // 「我的」定向共享：映射到 mission / agent 域（须已选目标）
+    if (scope === "user" && memTarget !== "all") {
+      if (!memForm.scope_id) {
+        setError(memTarget === "mission" ? tr("memPickTask") : tr("memPickAgent"));
+        return;
+      }
+      scope = memTarget === "mission" ? "mission" : "agent";
+      scopeId = memForm.scope_id;
+    }
     setBusy(true);
     try {
       await api("/api/memory", {
         token,
         method: "POST",
         body: JSON.stringify({
-          scope: memForm.scope,
-          scope_id: memForm.scope === "user" ? (user?.id || "") : memForm.scope_id || "global",
+          scope,
+          scope_id: scopeId,
           kind: memForm.kind,
           content: memForm.content,
-          tags: memForm.tags
-            .split(",")
-            .map((s) => s.trim())
-            .filter(Boolean),
+          tags: [],
         }),
       });
-      setMemForm({ ...memForm, content: "", tags: "" });
+      setMemForm({ ...memForm, content: "" });
+      setMemModalOpen(false);
       await refreshMemory();
     } catch (err) {
       setError(errMsg(err));
@@ -1167,10 +1287,48 @@ export default function App() {
     }
   }
 
+  // 导入 md 文档：读入内容作为记忆全文，简介由 LLM 异步总结（失败降级截断）
+  function importMemoryMd(file: File | undefined) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => setMemForm((f) => ({ ...f, content: String(reader.result || "") }));
+    reader.readAsText(file);
+  }
+
+  // 删除记忆：不弹确认，toast 提供撤销（撤销 = 原内容重新写入）
   async function deleteMemory(id: string) {
-    if (!confirm(tr("delete") + "?")) return;
+    const entry = memories.find((m) => m.id === id);
     await api(`/api/memory/${id}`, { token, method: "DELETE" });
     await refreshMemory();
+    if (entry) {
+      memUndoRef.current = entry;
+      setMemToast(true);
+      if (memToastTimer.current) window.clearTimeout(memToastTimer.current);
+      memToastTimer.current = window.setTimeout(() => setMemToast(false), 4000);
+    }
+  }
+
+  async function undoDeleteMemory() {
+    const entry = memUndoRef.current;
+    if (!entry) return;
+    memUndoRef.current = null;
+    setMemToast(false);
+    try {
+      await api("/api/memory", {
+        token,
+        method: "POST",
+        body: JSON.stringify({
+          scope: entry.scope,
+          scope_id: entry.scope_id,
+          kind: entry.kind,
+          content: entry.content,
+          tags: entry.tags || [],
+        }),
+      });
+      await refreshMemory();
+    } catch (err) {
+      setError(errMsg(err));
+    }
   }
 
   function startNewAgent() {
@@ -1646,17 +1804,20 @@ export default function App() {
           >
             {tr("knowledge")}
           </button>
-          <button
-            type="button"
-            className={view === "memory" ? "on" : ""}
-            onClick={() => {
-              unlockSfx();
-              playSfx("whoosh");
-              setView("memory");
-            }}
-          >
-            {tr("memory")}
-          </button>
+          {/* 记忆库仅管理员可见：普通用户不提供该设置界面 */}
+          {user?.role === "admin" && (
+            <button
+              type="button"
+              className={view === "memory" ? "on" : ""}
+              onClick={() => {
+                unlockSfx();
+                playSfx("whoosh");
+                setView("memory");
+              }}
+            >
+              {tr("memory")}
+            </button>
+          )}
           <button
             type="button"
             className={view === "agents" ? "on" : ""}
@@ -1857,32 +2018,104 @@ export default function App() {
               ))}
             </div>
             <div className="list">
-              {filtered.map((item) => (
-                <div key={item.id} className={`mission-wrap ${item.id === selectedId ? "active" : ""}`}>
-                  <button
-                    type="button"
-                    className="mission"
-                    onClick={() => {
-                      setSelectedId(item.id);
-                      setView("squad");
-                    }}
-                  >
-                    <div className="mission-top">
-                      <span className="mission-id">{item.id.slice(0, 10)}</span>
-                      <span className={`st ${item.status}`}>{statusLabel(lang, item.status)}</span>
+              {filtered.map((item) => {
+                const shared = item.shared_with || [];
+                const canDelete = !item.created_by || item.created_by === user?.id || user?.role === "admin";
+                return (
+                  <div key={item.id} className={`mission-wrap ${item.id === selectedId ? "active" : ""}`}>
+                    {/* 卡片用 div 承载：footer 内要放共享/删除按钮，button 嵌 button 非法 */}
+                    <div
+                      className="mission"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => {
+                        setSelectedId(item.id);
+                        setView("squad");
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          setSelectedId(item.id);
+                          setView("squad");
+                        }
+                      }}
+                    >
+                      <div className="mission-top">
+                        <span className="mission-id">{item.id.slice(0, 10)}</span>
+                        <span className={`st ${item.status}`}>{statusLabel(lang, item.status)}</span>
+                      </div>
+                      <strong>{item.title}</strong>
+                      <span className="mission-stage">
+                        {item.current_stage} · {(item.participants || []).length} {tr("membersInSquad")}
+                      </span>
+                      <div className="mission-foot">
+                        {/* 协作者头像堆叠：被共享账号首字母，最多 3 个 + 溢出计数 */}
+                        <span className="avstack">
+                          {shared.length ? (
+                            <>
+                              {shared.slice(0, 3).map((s, idx) => (
+                                <span
+                                  className={`avatar av-${idx % 3}`}
+                                  key={s.user_id}
+                                  title={s.display_name || s.username || s.user_id}
+                                >
+                                  {(s.display_name || s.username || "?").slice(0, 1).toUpperCase()}
+                                </span>
+                              ))}
+                              {shared.length > 3 && <span className="avatar av-more">+{shared.length - 3}</span>}
+                            </>
+                          ) : (
+                            <span className="av-empty">{tr("shareEmptyShort")}</span>
+                          )}
+                        </span>
+                        <span className="foot-x">
+                          {/* 共享入口：任务列表页管理共享（owner 添加/移除，被共享者可退出） */}
+                          <button
+                            type="button"
+                            className="add-dot"
+                            title={tr("sharedUsers")}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setShareModalId(item.id);
+                            }}
+                          >
+                            ＋
+                          </button>
+                          {/* 删除是 owner 专属权限：被共享用户无删除入口（旧数据 created_by 为空保持原行为） */}
+                          {canDelete && (
+                            <button
+                              type="button"
+                              className="mission-del round"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                removeTask(item.id);
+                              }}
+                            >
+                              ×
+                            </button>
+                          )}
+                        </span>
+                      </div>
                     </div>
-                    <strong>{item.title}</strong>
-                    <span className="mission-stage">
-                      {item.current_stage} · {(item.participants || []).length} {tr("membersInSquad")}
-                    </span>
-                  </button>
-                  <button type="button" className="mission-del" onClick={() => removeTask(item.id)}>
-                    ×
-                  </button>
-                </div>
-              ))}
+                  </div>
+                );
+              })}
               {!filtered.length && <div className="empty-queue">{tr("emptyTasks")}</div>}
             </div>
+            {shareModalId &&
+              (() => {
+                const target = items.find((i) => i.id === shareModalId);
+                return target ? (
+                  <ShareManager
+                    token={token}
+                    lang={lang}
+                    initiative={target}
+                    currentUser={user}
+                    onClose={() => setShareModalId(null)}
+                    onChanged={onShareChanged}
+                    onError={setError}
+                  />
+                ) : null;
+              })()}
         </main>
       )}
 
@@ -2022,7 +2255,7 @@ export default function App() {
             inspectStage &&
             (inspectStage.id !== selected.current_stage || selected.status === "done")
           ) && (
-          <div className={`room-layout ${crewOpen || lootOpen || briefOpen || subroomsOpen ? "with-side" : "solo"}`}>
+          <div className={`room-layout ${crewOpen || lootOpen || briefOpen || subroomsOpen || sharesOpen || memPanelOpen ? "with-side" : "solo"}`}>
             <section className={`panel chat-panel${chatFullscreen ? " fullscreen" : ""}`}>
               {chatFullscreen && (
                 <button
@@ -2082,6 +2315,28 @@ export default function App() {
                 >
                   {tr("subrooms")}
                   <em>{subroomCount}</em>
+                </button>
+                <button
+                  type="button"
+                  className={`room-dock-btn ${sharesOpen ? "on" : ""}`}
+                  onClick={() => {
+                    playSfx("toggle");
+                    setSharesOpen((v) => !v);
+                  }}
+                >
+                  {tr("share")}
+                  <em>{(selected.shared_with || []).length}</em>
+                </button>
+                <button
+                  type="button"
+                  className={`room-dock-btn ${memPanelOpen ? "on" : ""}`}
+                  onClick={() => {
+                    playSfx("toggle");
+                    setMemPanelOpen((v) => !v);
+                  }}
+                >
+                  {tr("memory")}
+                  <em>{((selected.meta?.memory_ids as string[]) || []).length}</em>
                 </button>
               </div>
                   <button
@@ -2179,7 +2434,7 @@ export default function App() {
                 commands={commandOptions}
               />
             </section>
-            {(crewOpen || lootOpen || briefOpen) && (
+            {(crewOpen || lootOpen || briefOpen || sharesOpen || memPanelOpen) && (
               <div className="stack room-side">
                 {crewOpen && (
                   <section className="panel room-drawer">
@@ -2392,6 +2647,80 @@ export default function App() {
                     />
                   </section>
                 )}
+                {sharesOpen && (
+                  <section className="panel room-drawer share-drawer">
+                    <div className="panel-label row-between">
+                      <span>{tr("sharedUsers")}</span>
+                      <button
+                        type="button"
+                        className="btn ghost tiny"
+                        onClick={() => {
+                          playSfx("click");
+                          setSharesOpen(false);
+                        }}
+                      >
+                        {tr("collapsePanel")}
+                      </button>
+                    </div>
+                    <p className="tiny subroom-drawer-hint">{tr("shareHint")}</p>
+                    {/* 详情页只读展示共享成员；添加/移除在任务列表页的共享弹窗里操作 */}
+                    <div className="share-list">
+                      <div className="share-row">
+                        <span className="share-name">
+                          {isMissionOwner ? tr("shareSelfOwner") : tr("shareOwner")}
+                        </span>
+                        <em className="share-tag">{tr("shareOwnerTag")}</em>
+                      </div>
+                      {shares.map((s) => (
+                        <div className="share-row" key={s.user_id}>
+                          <span className="share-name">
+                            {s.display_name || s.username || s.user_id}
+                            {s.username ? <code>{s.username}</code> : null}
+                          </span>
+                        </div>
+                      ))}
+                      {!shares.length && <p className="empty-queue">{tr("shareEmpty")}</p>}
+                    </div>
+                  </section>
+                )}
+                {memPanelOpen && (
+                  <section className="panel room-drawer">
+                    <div className="panel-label row-between">
+                      <span>{tr("memory")}</span>
+                      <button
+                        type="button"
+                        className="btn ghost tiny"
+                        onClick={() => {
+                          playSfx("click");
+                          setMemPanelOpen(false);
+                        }}
+                      >
+                        {tr("collapsePanel")}
+                      </button>
+                    </div>
+                    <p className="tiny subroom-drawer-hint">{tr("memBound")}</p>
+                    {missionMemories?.bound.length ? (
+                      <div className="share-list">
+                        {missionMemories.bound.map((m) => {
+                          const wasRead = missionMemories.read_ids.includes(m.id);
+                          return (
+                            <div className="share-row" key={m.id}>
+                              <span className="share-name" style={{ flexDirection: "column", alignItems: "flex-start" }}>
+                                <span>
+                                  <code>{m.kind}</code> {memTargetLabel(m)}
+                                  {wasRead ? <em className="share-tag" style={{ marginLeft: "0.4rem" }}>{tr("memRead")}</em> : null}
+                                </span>
+                                <span className="tiny">{m.summary || m.content}</span>
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="empty-queue">{tr("memPanelEmpty")}</p>
+                    )}
+                  </section>
+                )}
               </div>
             )}
           </div>
@@ -2529,89 +2858,278 @@ export default function App() {
       )}
 
       {view === "memory" && (
-        <div className="deck-body workbench">
-          <aside className="sidebar">
-            <div className="panel-label">{tr("memoryTitle")}</div>
-            <p className="kb-hint">{tr("memoryHint")}</p>
-            <form className="form" onSubmit={saveMemory}>
-              <p className="kb-hint">{tr("memoryScopeHint")}</p>
-              <label>
-                <span>{tr("memScope")}</span>
-                <select
-                  value={memForm.scope}
-                  onChange={(e) =>
-                    setMemForm({
-                      ...memForm,
-                      scope: e.target.value as MemoryScope,
-                      scope_id: e.target.value === "workspace" ? "global" : memForm.scope_id,
-                    })
-                  }
-                >
-                  <option value="workspace">{tr("scopeWorkspaceLabel")}</option>
-                  <option value="user">{tr("scopeUserLabel")}</option>
-                  <option value="mission">{tr("scopeMissionLabel")}</option>
-                  <option value="agent">{tr("scopeAgentLabel")}</option>
-                </select>
-              </label>
-              {(memForm.scope === "mission" || memForm.scope === "agent") && (
-                <label>
-                  <span>{tr("memScopeId")}</span>
-                  <input
-                    value={memForm.scope_id}
-                    onChange={(e) => setMemForm({ ...memForm, scope_id: e.target.value })}
-                    required
-                  />
-                </label>
-              )}
-              <label>
-                <span>{tr("memKind")}</span>
-                <select value={memForm.kind} onChange={(e) => setMemForm({ ...memForm, kind: e.target.value as MemoryKind })}>
-                  <option value="fact">{tr("kindFact")}</option>
-                  <option value="preference">{tr("kindPreference")}</option>
-                  <option value="episode">{tr("kindEpisode")}</option>
-                  <option value="lesson">{tr("kindLesson")}</option>
-                </select>
-              </label>
-              <label>
-                <span>{tr("memTags")}</span>
-                <input value={memForm.tags} onChange={(e) => setMemForm({ ...memForm, tags: e.target.value })} />
-              </label>
-              <label>
-                <span>{tr("memContent")}</span>
-                <textarea
-                  value={memForm.content}
-                  onChange={(e) => setMemForm({ ...memForm, content: e.target.value })}
-                  required
-                />
-              </label>
-              <button className="btn primary" type="submit" disabled={busy}>
-                {tr("newMemory")}
-              </button>
-            </form>
-          </aside>
-          <main className="main page-pad">
+        <main className="main page-pad">
+          <div className="title-row">
             <h2 className="page-title">{tr("memoryTitle")}</h2>
-            <div className="mem-list">
-              {memories.map((m) => (
-                <div key={m.id} className="mem-card">
-                  <div className="mission-top">
-                    <span className="mission-id">
-                      {m.scope}/{m.kind}
-                    </span>
-                    <button type="button" className="btn danger" onClick={() => deleteMemory(m.id)}>
-                      {tr("delete")}
-                    </button>
-                  </div>
-                  <p>{m.content}</p>
-                  <span className="kb-meta">
-                    {(m.tags || []).join(" · ")} · {m.author_name}
-                  </span>
-                </div>
+            <button
+              className="btn primary"
+              type="button"
+              onClick={() => {
+                playSfx("click");
+                setMemForm({ ...memForm, content: "" });
+                setMemModalOpen(true);
+              }}
+            >
+              ＋ {tr("memNew")}
+            </button>
+          </div>
+          <p className="hero-copy">{tr("memoryHint")}</p>
+          {/* 工具行：范围分段 + 类型筛选 + 搜索 */}
+          <div className="mem-toolbar">
+            <div className="mem-seg">
+              {(["all", "workspace", "user"] as const).map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  className={memScopeFilter === s ? "on" : ""}
+                  onClick={() => setMemScopeFilter(s)}
+                >
+                  {s === "all" ? tr("scopeAll") : s === "workspace" ? tr("scopeGlobalShort") : tr("scopeMineShort")}
+                </button>
               ))}
-              {!memories.length && <div className="empty-queue">{tr("emptyMemory")}</div>}
             </div>
-          </main>
-        </div>
+            {(["", "preference", "lesson", "episode", "fact"] as const).map((k) => (
+              <button
+                key={k || "all"}
+                type="button"
+                className={`mem-chip ${memKindFilter === k ? "on" : ""}`}
+                onClick={() => setMemKindFilter(k)}
+              >
+                {k ? tr(memKindLabel[k]) : tr("scopeAll")}
+              </button>
+            ))}
+            <input
+              className="mem-search"
+              value={memQuery}
+              onChange={(e) => setMemQuery(e.target.value)}
+              placeholder={tr("memSearch")}
+            />
+          </div>
+          {/* 记忆卡网格：类型色条 + 衬线引语（方案三签名细节） */}
+          <div className="memory-grid">
+            {filteredMemories.map((m) => (
+              <div
+                key={m.id}
+                className={`memory-card k-${m.kind}`}
+                role="button"
+                tabIndex={0}
+                onClick={() => setMemDetail(m)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") setMemDetail(m);
+                }}
+              >
+                <button
+                  type="button"
+                  className="btn ghost tiny mem-del"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void deleteMemory(m.id);
+                  }}
+                >
+                  {tr("delete")}
+                </button>
+                <div className="mem-card-top">
+                  <span className="kind-tag">{tr(memKindLabel[m.kind])}</span>
+                  <span className="mem-card-scope">{memTargetLabel(m)}</span>
+                </div>
+                <p className="memory-quote">「{m.summary || m.content}」</p>
+                <div className="mem-card-meta">
+                  {(m.tags || []).length ? `${(m.tags || []).join(" · ")} · ` : ""}
+                  {m.author_name || ""}
+                  {m.created_at ? ` · ${displayTime(m.created_at)}` : ""}
+                </div>
+              </div>
+            ))}
+            {!filteredMemories.length && <div className="empty-queue">{tr("emptyMemory")}</div>}
+          </div>
+          {memModalOpen && (
+            <div className="mem-overlay" onClick={() => setMemModalOpen(false)}>
+              <form className="panel mem-modal" onSubmit={saveMemory} onClick={(e) => e.stopPropagation()}>
+                <div className="panel-label row-between">
+                  <span>{tr("memNew")}</span>
+                  <button type="button" className="btn ghost tiny" onClick={() => setMemModalOpen(false)}>
+                    ×
+                  </button>
+                </div>
+                {/* 左右分栏：左编辑 / 右实时预览；弹框放大，md 预览常驻不再受字数阈值限制 */}
+                <div className="mem-modal-main">
+                  <div className="mem-edit">
+                    <div className="mem-modal-row2">
+                      <label>
+                        <span>{tr("memScope")}</span>
+                        {/* 全局约定（全员共享）或我的（支持三种生效范围） */}
+                        <select
+                          value={memForm.scope}
+                          onChange={(e) =>
+                            setMemForm({
+                              ...memForm,
+                              scope: e.target.value as MemoryScope,
+                              scope_id: e.target.value === "workspace" ? "global" : "",
+                            })
+                          }
+                        >
+                          <option value="workspace">{tr("scopeGlobalShort")}</option>
+                          <option value="user">{tr("scopeMineShort")}</option>
+                        </select>
+                      </label>
+                      <label>
+                        <span>{tr("memKind")}</span>
+                        <select
+                          value={memForm.kind}
+                          onChange={(e) => setMemForm({ ...memForm, kind: e.target.value as MemoryKind })}
+                        >
+                          <option value="preference">{tr("kindPreference")}</option>
+                          <option value="lesson">{tr("kindLesson")}</option>
+                          <option value="episode">{tr("kindEpisode")}</option>
+                          <option value="fact">{tr("kindFact")}</option>
+                        </select>
+                      </label>
+                    </div>
+                    {memForm.scope === "user" && (
+                      <>
+                        <div>
+                          <span className="kind-tag">{tr("memTarget")}</span>
+                          <div className="mem-seg" style={{ marginTop: "0.3rem" }}>
+                            {(["all", "mission", "agent"] as const).map((t) => (
+                              <button
+                                key={t}
+                                type="button"
+                                className={memTarget === t ? "on" : ""}
+                                onClick={() => {
+                                  setMemTarget(t);
+                                  setMemForm({ ...memForm, scope_id: "" });
+                                }}
+                              >
+                                {t === "all" ? tr("memTargetAll") : t === "mission" ? tr("memTargetMission") : tr("memTargetAgent")}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        {memTarget === "mission" && (
+                          <label>
+                            <span>{tr("memPickTask")}</span>
+                            <select
+                              value={memForm.scope_id}
+                              onChange={(e) => setMemForm({ ...memForm, scope_id: e.target.value })}
+                              required
+                            >
+                              <option value="">—</option>
+                              {items.map((i) => (
+                                <option key={i.id} value={i.id}>
+                                  {i.title}（{i.id.slice(0, 10)}）
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        )}
+                        {memTarget === "agent" && (
+                          <label>
+                            <span>{tr("memPickAgent")}</span>
+                            <select
+                              value={memForm.scope_id}
+                              onChange={(e) => setMemForm({ ...memForm, scope_id: e.target.value })}
+                              required
+                            >
+                              <option value="">—</option>
+                              {agentList.map((a) => (
+                                <option key={a.id} value={a.id}>
+                                  {a.title}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        )}
+                      </>
+                    )}
+                    <label className="mem-content-label">
+                      <span>{tr("memContent")}</span>
+                      <textarea
+                        value={memForm.content}
+                        onChange={(e) => setMemForm({ ...memForm, content: e.target.value })}
+                        required
+                        autoFocus
+                      />
+                    </label>
+                  </div>
+                  {/* 右栏：Markdown 实时渲染，导入文档后立即可读 */}
+                  <div className="mem-preview-pane">
+                    <div className="mem-preview-head">
+                      <span className="flabel">{tr("memPreview")}</span>
+                    </div>
+                    {memForm.content.trim() ? (
+                      <MarkdownPreview text={memForm.content} />
+                    ) : (
+                      <p className="mem-preview-empty">{tr("memImportHint")}</p>
+                    )}
+                  </div>
+                </div>
+                {/* 底栏：导入 / 元信息摘要 / 写入 */}
+                <div className="mem-modal-foot">
+                  <button type="button" className="btn ghost" onClick={() => memImportRef.current?.click()}>
+                    {tr("memImport")}
+                  </button>
+                  <input
+                    ref={memImportRef}
+                    type="file"
+                    accept=".md,.markdown,.txt,text/markdown,text/plain"
+                    hidden
+                    onChange={(e) => {
+                      importMemoryMd(e.target.files?.[0]);
+                      e.target.value = "";
+                    }}
+                  />
+                  <span className="mem-foot-meta">
+                    {memForm.scope === "workspace"
+                      ? `${tr("scopeGlobalShort")} · ${tr("memTargetAll")}`
+                      : `${tr("scopeMineShort")} · ${
+                          memTarget === "all"
+                            ? tr("memTargetAll")
+                            : memTarget === "mission"
+                              ? tr("memTargetMission")
+                              : tr("memTargetAgent")
+                        }`}
+                  </span>
+                  <button className="btn primary" type="submit" disabled={busy}>
+                    {tr("newMemory")}
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
+          {memDetail && (
+            <div className="mem-overlay" onClick={() => setMemDetail(null)}>
+              <div className="panel mem-modal" onClick={(e) => e.stopPropagation()}>
+                <div className="panel-label row-between">
+                  <span>{tr("memDetailTitle")}</span>
+                  <button type="button" className="btn ghost tiny" onClick={() => setMemDetail(null)}>
+                    ×
+                  </button>
+                </div>
+                <div className="mem-card-top">
+                  <span className="kind-tag">{tr(memKindLabel[memDetail.kind])}</span>
+                  <span className="mem-card-scope">{memTargetLabel(memDetail)}</span>
+                </div>
+                {/* 简介作为标题（LLM 生成；未生成时降级为内容截断） */}
+                <p className="memory-quote">「{memDetail.summary || memDetail.content}」</p>
+                <div className="mem-detail-body">
+                  <div className="mem-detail-label">{tr("memFull")}</div>
+                  <MarkdownPreview text={memDetail.content} />
+                </div>
+                <div className="mem-card-meta">
+                  {(memDetail.tags || []).length ? `${(memDetail.tags || []).join(" · ")} · ` : ""}
+                  {memDetail.author_name || ""}
+                  {memDetail.created_at ? ` · ${displayTime(memDetail.created_at)}` : ""}
+                </div>
+              </div>
+            </div>
+          )}
+          {memToast && (
+            <div className="mem-toast">
+              {tr("memDeleted")}
+              <u onClick={() => void undoDeleteMemory()}>{tr("memUndo")}</u>
+            </div>
+          )}
+        </main>
       )}
 
       {view === "agents" && (

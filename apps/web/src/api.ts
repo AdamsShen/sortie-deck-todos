@@ -1,12 +1,13 @@
 import { ApiError } from "./types";
 import type {
-  CodingExecutor,
   DecisionAnswerResult,
   ExternalMaterial,
   ForgeDraft,
   HarnessesResponse,
   HumanDecisionRecord,
   Initiative,
+  MissionShare,
+  PublicUser,
   RoleSpec,
   SubRoomRecord,
 } from "./types";
@@ -35,6 +36,42 @@ export async function api<T = unknown>(path: string, { token, ...options }: ApiO
   return res.json() as Promise<T>;
 }
 
+// --- mission shares -------------------------------------------------------
+
+/** 按账号名 / 显示名 / 用户 id 搜索账号（分享面板选人用） */
+export async function searchUsers(token: string, q: string): Promise<PublicUser[]> {
+  return api<PublicUser[]>(`/api/users/search?q=${encodeURIComponent(q)}`, { token });
+}
+
+export async function listMissionShares(token: string, initiativeId: string): Promise<MissionShare[]> {
+  return api<MissionShare[]>(`/api/initiatives/${encodeURIComponent(initiativeId)}/shares`, { token });
+}
+
+/** 共享任务给指定账号用户（仅创建者或 admin；返回更新后的任务） */
+export async function addMissionShare(
+  token: string,
+  initiativeId: string,
+  userId: string,
+): Promise<Initiative> {
+  return api<Initiative>(`/api/initiatives/${encodeURIComponent(initiativeId)}/shares`, {
+    token,
+    method: "POST",
+    body: JSON.stringify({ user_id: userId }),
+  });
+}
+
+/** 取消共享：创建者/admin 可移除任意成员，被共享用户可移除自己（退出共享） */
+export async function removeMissionShare(
+  token: string,
+  initiativeId: string,
+  userId: string,
+): Promise<Initiative> {
+  return api<Initiative>(
+    `/api/initiatives/${encodeURIComponent(initiativeId)}/shares/${encodeURIComponent(userId)}`,
+    { token, method: "DELETE" },
+  );
+}
+
 // --- role registry --------------------------------------------------------
 
 export async function listRoles(token: string): Promise<RoleSpec[]> {
@@ -42,27 +79,6 @@ export async function listRoles(token: string): Promise<RoleSpec[]> {
 }
 
 // --- mission intake -------------------------------------------------------
-
-export interface CreateInitiativePayload {
-  title: string;
-  brief: string;
-  /** External materials; pinned ones become persistent mission context */
-  materials?: ExternalMaterial[];
-  coding_executor?: CodingExecutor | "auto";
-  pipeline_track?: string;
-  auto_start?: boolean;
-}
-
-export async function createInitiative(
-  token: string,
-  body: CreateInitiativePayload,
-): Promise<Initiative> {
-  return api<Initiative>("/api/initiatives", {
-    token,
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-}
 
 export async function updateInitiativeMaterials(
   token: string,

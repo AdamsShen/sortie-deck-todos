@@ -124,6 +124,9 @@ nav:
       - Web Workbench: modules/web.md
       - CLI: modules/cli.md
       - Collaboration: modules/collaboration.md
+      - Mission Memory: modules/mission-memory.md
+  - Principles:
+      - Mission Memory Principles: principles/mission-memory.md
   - Notes:
       - Python Argument Unpacking: notes/python-star-unpacking.md
   - Roadmap: roadmap.md

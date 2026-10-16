@@ -1,9 +1,10 @@
 import { useMemo, useRef, useState, type DragEvent } from "react";
-import { createInitiative, updateInitiativeMaterials } from "../api";
+import { updateInitiativeMaterials } from "../api";
 import { playSfx } from "../sfx";
 import type { I18nKey } from "../i18n";
 import type { ExternalMaterial, Lang } from "../types";
 import { MissionBriefingChat } from "./MissionBriefingChat";
+import type { ComposerAttachment } from "./ChatComposer";
 
 type Props = {
   token: string;
@@ -83,6 +84,11 @@ function uid(): string {
 
 let seq = 0;
 
+function defaultPinned(kind: MaterialKind): boolean {
+  // Text docs default to pinned; binaries (design mockups) default to archived.
+  return kind === "prd" || kind === "plan" || kind === "data";
+}
+
 async function toDraft(file: File): Promise<DraftMaterial> {
   const kind = detectKind(file.name);
   let textExcerpt = "";
@@ -101,18 +107,31 @@ async function toDraft(file: File): Promise<DraftMaterial> {
     kind,
     mime: file.type || "application/octet-stream",
     size: file.size,
-    // Text docs default to pinned; binaries (design mockups) default to archived.
-    pinned: kind === "prd" || kind === "plan" || kind === "data",
+    pinned: defaultPinned(kind),
     text_excerpt: textExcerpt,
   };
 }
 
+/** Chat-composer attachments land in the external-materials panel (single intake). */
+function fromAttachment(a: ComposerAttachment): DraftMaterial | null {
+  if ((a.size || 0) > MAX_BYTES) return null;
+  const kind: MaterialKind = a.kind === "image" ? "design" : detectKind(a.name);
+  seq += 1;
+  return {
+    uid: `${Date.now()}-${seq}`,
+    id: uid(),
+    name: a.name || "file",
+    kind,
+    mime: a.mime || "application/octet-stream",
+    size: a.size || 0,
+    pinned: defaultPinned(kind),
+    text_excerpt: a.textExcerpt || "",
+  };
+}
+
 export function NewTaskPage({ token, lang, tr, busy, setBusy, onCancel, onCreated, onError }: Props) {
-  const [title, setTitle] = useState("");
-  const [brief, setBrief] = useState("");
   const [materials, setMaterials] = useState<DraftMaterial[]>([]);
   const [dragging, setDragging] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const pinned = useMemo(() => materials.filter((m) => m.pinned), [materials]);
@@ -120,7 +139,6 @@ export function NewTaskPage({ token, lang, tr, busy, setBusy, onCancel, onCreate
     () => Math.round(pinned.reduce((sum, m) => sum + estimateTokens(m.text_excerpt), 0)),
     [pinned],
   );
-  const canSubmit = Boolean(title.trim() && brief.trim()) && !submitting;
 
   async function addFiles(list: FileList | null) {
     if (!list || !list.length) return;
@@ -141,6 +159,31 @@ export function NewTaskPage({ token, lang, tr, busy, setBusy, onCancel, onCreate
         continue;
       }
       drafts.push(await toDraft(file));
+    }
+    if (drafts.length) {
+      playSfx("toggle");
+      setMaterials((prev) => [...prev, ...drafts]);
+    }
+  }
+
+  function addAttachments(atts: ComposerAttachment[]) {
+    const room = MAX_FILES - materials.length;
+    if (room <= 0) {
+      onError(lang === "zh" ? `最多 ${MAX_FILES} 份资料` : `Up to ${MAX_FILES} materials`);
+      return;
+    }
+    const drafts: DraftMaterial[] = [];
+    for (const att of atts.slice(0, room)) {
+      const draft = fromAttachment(att);
+      if (!draft) {
+        onError(
+          lang === "zh"
+            ? `${att.name} 超过 ${formatSize(MAX_BYTES)}，已跳过`
+            : `${att.name} exceeds ${formatSize(MAX_BYTES)}, skipped`,
+        );
+        continue;
+      }
+      drafts.push(draft);
     }
     if (drafts.length) {
       playSfx("toggle");
@@ -184,24 +227,6 @@ export function NewTaskPage({ token, lang, tr, busy, setBusy, onCancel, onCreate
     onCreated(id);
   }
 
-  async function submit() {
-    if (!canSubmit) return;
-    setSubmitting(true);
-    try {
-      const ini = await createInitiative(token, {
-        title: title.trim(),
-        brief: brief.trim(),
-        materials: materialsPayload,
-      });
-      playSfx("ok");
-      onCreated(ini.id);
-    } catch (err) {
-      onError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
   function onDrop(e: DragEvent) {
     e.preventDefault();
     setDragging(false);
@@ -213,14 +238,15 @@ export function NewTaskPage({ token, lang, tr, busy, setBusy, onCancel, onCreate
   const plannerLabels = useMemo(
     () => ({
       title: zh ? "建队规划官" : "Squad planner",
-      placeholder: zh ? "描述任务目标… 可粘贴截图或拖入文件" : "Describe the mission… paste or drop files",
-      hint: zh ? "多轮对话 · 图片/文档附件 · /confirm 确认" : "Multimodal chat · /confirm to lock plan",
+      placeholder: zh ? "描述任务目标…" : "Describe the mission…",
+      hint: zh
+        ? "多轮对话 · 附件请从右侧外部资料导入 · /confirm 确认"
+        : "Multimodal chat · attach via external materials · /confirm",
       send: tr("send"),
       confirm: zh ? "确认组建" : "Confirm",
       reject: zh ? "驳回重来" : "Reject",
       restart: zh ? "新会话" : "New chat",
       waterfall: zh ? "规划瀑布流" : "Planning waterfall",
-      attach: zh ? "附件" : "Attach",
     }),
     [lang, tr],
   );
@@ -232,8 +258,8 @@ export function NewTaskPage({ token, lang, tr, busy, setBusy, onCancel, onCreate
         <h2 className="page-title">{tr("newTask")}</h2>
         <p className="hero-copy">
           {zh
-            ? "与建队规划官对话，或直接填写简报；导入的外部资料中被钉住的将持续注入小队每轮对话的上下文。"
-            : "Chat with the squad planner or fill the brief directly; pinned materials keep feeding every squad turn."}
+            ? "与建队规划官多轮对话组建小队；导入的外部资料全部参与规划讨论，被钉住的将在任务创建后持续注入每轮对话的上下文。"
+            : "Chat with the squad planner to form the squad; all imported materials join the planning discussion, and pinned ones keep feeding every squad turn after creation."}
         </p>
 
         <div className="intake-grid">
@@ -247,40 +273,17 @@ export function NewTaskPage({ token, lang, tr, busy, setBusy, onCancel, onCreate
                 onError={onError}
                 onCreated={handlePlannerCreated}
                 labels={plannerLabels}
+                materials={materialsPayload}
+                onImportFiles={addAttachments}
+                onMaterialsLoaded={(mats) =>
+                  setMaterials(mats.map((m) => ({ ...m, uid: `rst_${m.id}` })))
+                }
+                onReset={() => setMaterials([])}
               />
             </section>
           </div>
 
           <div className="intake-col">
-            <section className="panel">
-              <div className="panel-label">
-                {tr("intakeDefine")}
-                <span className="aux">DEFINE</span>
-              </div>
-              <div className="field">
-                <label>{tr("title")}</label>
-                <input
-                  type="text"
-                  value={title}
-                  placeholder={zh ? "例：客户通知中心 V2 — 渠道回执改造" : "e.g. Notification Center V2"}
-                  onChange={(e) => setTitle(e.target.value)}
-                />
-              </div>
-              <div className="field">
-                <label>{tr("brief")}</label>
-                <textarea
-                  className="intake-brief"
-                  value={brief}
-                  placeholder={
-                    zh
-                      ? "用自然语言描述任务目标——系统会检索历史与知识库，提案航线与编制，确认后组建小队。"
-                      : "Describe the goal in natural language — the planner reads history & KB, then forms the squad."
-                  }
-                  onChange={(e) => setBrief(e.target.value)}
-                />
-              </div>
-            </section>
-
             <section className="panel">
               <div className="panel-label">
                 {tr("intakeMaterials")}
@@ -360,9 +363,7 @@ export function NewTaskPage({ token, lang, tr, busy, setBusy, onCancel, onCreate
                 )}
               </div>
             </section>
-          </div>
 
-          <div className="intake-col">
             <section className="panel">
               <div className="panel-label">
                 {tr("intakeCtxPreview")}
@@ -392,9 +393,6 @@ export function NewTaskPage({ token, lang, tr, busy, setBusy, onCancel, onCreate
             <div className="actions">
               <button type="button" className="btn" onClick={onCancel}>
                 {tr("cancel")}
-              </button>
-              <button type="button" className="btn primary" disabled={!canSubmit} onClick={submit}>
-                {submitting ? tr("intakeCreating") : tr("intakeCreate")}
               </button>
             </div>
           </div>

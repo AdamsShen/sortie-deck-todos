@@ -89,6 +89,14 @@ class MissionMemoryStore:
     def memory_file(self, initiative_id: str) -> Path:
         return self.memory_dir(initiative_id) / "memory.md"
 
+    def entries_dir(self, initiative_id: str) -> Path:
+        """单条记忆全文目录：Agent 按 MEMORY_INDEX.md 中的 id 按需读取。"""
+        return self.memory_dir(initiative_id) / "entries"
+
+    def usage_log(self, initiative_id: str) -> Path:
+        """记忆使用记录（best-effort）：Agent 取用全文后追加一行 id。"""
+        return self.memory_dir(initiative_id) / "usage.log"
+
     # --- rolling summary ----------------------------------------------------
 
     def load_memory_md(self, initiative_id: str) -> str:
@@ -286,3 +294,58 @@ def get_mission_memory() -> MissionMemoryStore:
 def reset_mission_memory() -> None:
     global _STORE
     _STORE = None
+
+
+_SCOPE_LABEL = {"workspace": "全局约定", "user": "我的", "mission": "任务", "agent": "Agent"}
+
+
+def write_memory_pack(
+    mem_store: Any,
+    *,
+    initiative_id: str,
+    user_id: str | None = None,
+    agent_ids: list[str] | None = None,
+) -> None:
+    """把共享记忆「索引 + 单条全文」落进任务目录（Claude Code MEMORY.md 模式）。
+
+    memory/MEMORY_INDEX.md   简介索引，Agent 读它决定加载哪条
+    memory/entries/<id>.md   单条全文，Agent 按需读取
+    memory/usage.log         取用全文后追加 id（best-effort 使用记录）
+
+    任何失败静默降级：记忆包只是增强，不能阻塞任务启动。
+    """
+    try:
+        entries = mem_store.context_candidates(
+            user_id=user_id,
+            mission_id=initiative_id,
+            agent_ids=agent_ids,
+            limit=40,
+        )
+    except Exception:  # noqa: BLE001 — memory must never break a stage run
+        return
+    try:
+        mdir = get_mission_memory().memory_dir(initiative_id)
+        edir = get_mission_memory().entries_dir(initiative_id)
+        edir.mkdir(parents=True, exist_ok=True)
+        lines = [
+            "# Memory Index",
+            "",
+            "需要某条记忆的完整内容时，读取 memory/entries/<id>.md；",
+            "取用后执行 `echo <id> >> memory/usage.log` 记录使用（best-effort）。",
+            "",
+        ]
+        keep: set[str] = set()
+        for e in entries:
+            keep.add(e.id)
+            label = _SCOPE_LABEL.get(e.scope, e.scope)
+            lines.append(f"- {e.id} | {label} / {e.kind} | {e.display_summary()}")
+            try:
+                (edir / f"{e.id}.md").write_text(e.content, encoding="utf-8")
+            except OSError:
+                pass
+        for f in edir.glob("*.md"):
+            if f.stem not in keep:
+                f.unlink(missing_ok=True)  # 已删除记忆的条目文件一并清理
+        (mdir / "MEMORY_INDEX.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except Exception:  # noqa: BLE001 — memory must never break a stage run
+        return

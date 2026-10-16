@@ -42,12 +42,19 @@ class MemoryEntry(BaseModel):
     scope_id: str = "global"
     kind: MemoryKind = "fact"
     content: str
+    # 一句话简介（写入时 LLM 生成；失败降级为 content 截断）。注入提示词时
+    # 只带简介行，Agent 需要时按 id 取全文（Claude Code MEMORY.md 模式）。
+    summary: str = ""
     tags: list[str] = Field(default_factory=list)
     source: str = "manual"
     author_id: str = ""
     author_name: str = ""
     created_at: str = Field(default_factory=lambda: utc_now().isoformat())
     updated_at: str = Field(default_factory=lambda: utc_now().isoformat())
+
+    def display_summary(self) -> str:
+        """简介行：summary 为空时降级为 content 截断（旧数据兼容）。"""
+        return (self.summary or self.content or "").strip()[:40]
 
 
 class CreateMemoryRequest(BaseModel):
@@ -83,6 +90,25 @@ _SEED: list[dict] = [
 ]
 
 
+def _terms(text: str) -> set[str]:
+    """检索分词：拉丁词 + CJK 双字组（bigram），小写化。"""
+    import re
+
+    lowered = (text or "").lower()
+    terms: set[str] = set(re.findall(r"[a-z0-9]{2,}", lowered))
+    cjk = re.findall(r"[\u4e00-\u9fff]", lowered)
+    terms.update(f"{a}{b}" for a, b in zip(cjk, cjk[1:]))
+    return terms
+
+
+def _score_entry(entry: MemoryEntry, terms: set[str]) -> int:
+    """关键词重合度打分：content + summary + tags 命中越多分越高。"""
+    if not terms:
+        return 0
+    hay = _terms(f"{entry.content} {entry.summary} {' '.join(entry.tags)}")
+    return len(terms & hay)
+
+
 class MemoryStore:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -103,6 +129,49 @@ class MemoryStore:
             ]
             self._write(entries)
 
+    @property
+    def index_path(self) -> Path:
+        """记忆索引文件（派生物，从 entries 重建，不作为数据源）。"""
+        return self.path.parent / "memory" / "MEMORY_INDEX.md"
+
+    def rebuild_index(self) -> None:
+        """重建记忆索引文件：每条一行「id | 作用域/类型 | 简介」。"""
+        with self._lock:
+            self._write_index(self._read())
+
+    def _write_index(self, entries: list[MemoryEntry]) -> None:
+        scope_label = {
+            "workspace": "全局约定",
+            "user": "我的",
+            "mission": "任务",
+            "agent": "Agent",
+        }
+        lines = ["# Memory Index", ""]
+        for e in entries:
+            label = scope_label.get(e.scope, e.scope)
+            target = "" if e.scope == "workspace" else f" · {e.scope_id[:10]}"
+            lines.append(f"- {e.id} | {label}{target} / {e.kind} | {e.display_summary()}")
+        try:
+            self.index_path.parent.mkdir(parents=True, exist_ok=True)
+            self.index_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except OSError:
+            pass  # 索引是派生物，写失败不影响数据
+
+    def set_summary(self, mem_id: str, summary: str) -> MemoryEntry:
+        """写入 LLM 生成的简介并刷新索引（简介生成失败时调用方降级为截断）。"""
+        with self._lock:
+            entries = self._read()
+            for i, e in enumerate(entries):
+                if e.id != mem_id:
+                    continue
+                data = e.model_dump()
+                data["summary"] = summary.strip()[:60]
+                data["updated_at"] = utc_now().isoformat()
+                entries[i] = MemoryEntry.model_validate(data)
+                self._write(entries)
+                return entries[i]
+        raise KeyError(mem_id)
+
     def _read(self) -> list[MemoryEntry]:
         return [MemoryEntry.model_validate(x) for x in json.loads(self.path.read_text(encoding="utf-8"))]
 
@@ -111,6 +180,8 @@ class MemoryStore:
             json.dumps([e.model_dump(mode="json") for e in entries], ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        # 索引是派生物，随每次数据变更重建（调用方已持锁，禁止再走 list()/加锁）
+        self._write_index(entries)
 
     def list(
         self,
@@ -215,6 +286,51 @@ class MemoryStore:
         ]
         return out[:limit]
 
+    def context_candidates(
+        self,
+        *,
+        user_id: str | None = None,
+        mission_id: str | None = None,
+        agent_ids: list[str] | None = None,
+        stage: str | None = None,
+        query: str | None = None,
+        limit: int = 8,
+    ) -> list[MemoryEntry]:
+        """任务注入候选集：四层作用域合并 + query 相关性打分排序。
+
+        Plan-time 绑定（meta.memory_ids）与 stage 注入共用此入口；返回
+        MemoryEntry 列表，注入文本由 render_block 渲染为简介行。
+        """
+        terms = _terms(query or "")
+        buckets: list[list[MemoryEntry]] = []
+        buckets.append(self.list(scope="workspace", scope_id="global"))
+        if user_id:
+            buckets.append(self.list(scope="user", scope_id=user_id, user_id=user_id))
+        if mission_id:
+            buckets.append(
+                [
+                    e
+                    for e in self.list(scope="mission", scope_id=mission_id)
+                    if stage_applies(e, stage)
+                ]
+            )
+        for aid in agent_ids or []:
+            buckets.append(self.list(scope="agent", scope_id=aid))
+        # 打分排序：相关度优先，同分保持 updated_at 倒序（list 已排序）
+        scored = [(e, _score_entry(e, terms)) for b in buckets for e in b]
+        scored.sort(key=lambda pair: pair[1], reverse=True)
+        return [e for e, _ in scored[:limit]]
+
+    def render_block(self, entries: list[MemoryEntry]) -> str:
+        """候选集 → 提示词简介块（只注入 summary 行，全文由 Agent 按需取）。"""
+        chunks = [f"- [{e.kind}|{e.id}] {e.display_summary()}" for e in entries]
+        if not chunks:
+            return ""
+        body = "Memory brief:\n" + "\n".join(chunks)
+        if len(body) <= CONTEXT_BLOCK_MAX_CHARS:
+            return body
+        return body[: CONTEXT_BLOCK_MAX_CHARS - 3].rstrip() + "..."
+
     def context_block(
         self,
         *,
@@ -222,30 +338,19 @@ class MemoryStore:
         mission_id: str | None = None,
         agent_ids: list[str] | None = None,
         stage: str | None = None,
+        query: str | None = None,
         limit: int = 12,
     ) -> str:
         """Compact memory brief for agent prompts / chat injection."""
-        chunks: list[str] = []
-        for e in self.list(scope="workspace", scope_id="global"):
-            chunks.append(f"- [{e.kind}] {e.content}")
-        if user_id:
-            for e in self.list(scope="user", scope_id=user_id, user_id=user_id):
-                chunks.append(f"- [you/{e.kind}] {e.content}")
-        if mission_id:
-            for e in self.list(scope="mission", scope_id=mission_id):
-                if not stage_applies(e, stage):
-                    continue
-                chunks.append(f"- [mission/{e.kind}] {e.content}")
-        for aid in agent_ids or []:
-            for e in self.list(scope="agent", scope_id=aid):
-                chunks.append(f"- [agent/{e.kind}] {e.content}")
-        if not chunks:
-            return ""
-        body = "Memory brief:\n" + "\n".join(chunks[:limit])
-        if len(body) <= CONTEXT_BLOCK_MAX_CHARS:
-            return body
-        trimmed = body[: CONTEXT_BLOCK_MAX_CHARS - 3].rstrip()
-        return trimmed + "..."
+        entries = self.context_candidates(
+            user_id=user_id,
+            mission_id=mission_id,
+            agent_ids=agent_ids,
+            stage=stage,
+            query=query,
+            limit=limit,
+        )
+        return self.render_block(entries)
 
 
 class Mem0Memory:

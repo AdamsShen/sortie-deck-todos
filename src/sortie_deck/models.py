@@ -256,6 +256,22 @@ class RoomParticipant(BaseModel):
     joined_at: datetime = Field(default_factory=utc_now)
 
 
+class MissionShare(BaseModel):
+    """任务共享记录：一条对应一个被分享的账号用户。
+
+    被分享者拥有除删除外的全部任务权限（查看详情/对话/启动停止等），
+    删除仍仅限创建者或 admin。输入输出示例：
+    {"user_id": "usr_ab12", "username": "operator", "display_name": "Operator",
+     "added_by": "usr_cd34", "added_at": "2026-10-15T08:00:00Z"}
+    """
+
+    user_id: str
+    username: str = ""
+    display_name: str = ""
+    added_by: str = ""
+    added_at: datetime = Field(default_factory=utc_now)
+
+
 class Initiative(BaseModel):
     id: str = Field(default_factory=lambda: new_id("ini_"))
     title: str
@@ -284,6 +300,8 @@ class Initiative(BaseModel):
     webhook_url: str | None = None
     # 创建者用户 id（多租户归属，workspace/删除校验用；旧数据为 None 时仅 admin 可操作他人任务）
     created_by: str | None = None
+    # 共享给其他账号用户的记录（被分享者拥有除删除外的全部权限）
+    shared_with: list[MissionShare] = Field(default_factory=list)
     meta: dict[str, Any] = Field(default_factory=dict)
 
 

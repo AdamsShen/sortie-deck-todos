@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +50,7 @@ from sortie_deck.models import (
     HitlDecision,
     HitlSubmitRequest,
     JoinRoomRequest,
+    MissionShare,
     PipelineNotConfirmedError,
     PostRoomMessageRequest,
     UpdatePipelineRequest,
@@ -84,13 +85,50 @@ def get_auth() -> AuthStore:
 
 
 def _ensure_mission_owner(ini: Any, user: PublicUser) -> None:
-    """多租户归属校验：仅创建者或 admin 可访问任务敏感数据（工作副本含项目源码）。
+    """多租户归属校验：仅创建者或 admin 可执行删除等 owner 专属操作。
 
     旧数据 created_by 为 None 时放行（无归属信息，无法判定），避免历史任务不可用。
     """
     created_by = getattr(ini, "created_by", None)
     if created_by and created_by != user.id and user.role != "admin":
-        raise HTTPException(403, "无权访问该任务的工作副本（仅创建者或 admin）")
+        raise HTTPException(403, "仅任务创建者或 admin 可执行该操作")
+
+
+def _is_mission_shared_with(ini: Any, user_id: str) -> bool:
+    """判断用户是否在任务的共享名单中。"""
+    return any(s.user_id == user_id for s in getattr(ini, "shared_with", []) or [])
+
+
+def _ensure_mission_access(ini: Any, user: PublicUser) -> None:
+    """任务访问校验：创建者 / admin / 被共享用户可访问（删除另有 owner 校验）。
+
+    共享用户拥有除删除外的全部权限（查看详情/对话、启动/停止、HITL 等）。
+    旧数据 created_by 为 None 时放行，保持历史任务行为不变。
+    """
+    created_by = getattr(ini, "created_by", None)
+    if not created_by:
+        return
+    if user.role == "admin" or created_by == user.id:
+        return
+    if _is_mission_shared_with(ini, user.id):
+        return
+    raise HTTPException(403, "无权访问该任务（未共享给当前账号）")
+
+
+def _visible_initiatives(items: list[Any], user: PublicUser) -> list[Any]:
+    """任务列表按账号过滤：创建者 / 被共享用户 / admin 可见。
+
+    旧数据 created_by 为 None 时无归属信息，保持全员可见（与既有行为一致）。
+    """
+    if user.role == "admin":
+        return items
+    return [
+        i
+        for i in items
+        if not getattr(i, "created_by", None)
+        or i.created_by == user.id
+        or _is_mission_shared_with(i, user.id)
+    ]
 
 
 def get_knowledge() -> KnowledgeStore:
@@ -219,6 +257,17 @@ def require_admin(user: PublicUser = Depends(require_user)) -> PublicUser:
     return user
 
 
+def _mission_access_guard(
+    initiative_id: str, user: PublicUser = Depends(require_user)
+) -> PublicUser:
+    """FastAPI 依赖：任务级访问校验（创建者/admin/被共享用户，删除另走 owner 校验）。"""
+    ini = orch().get(initiative_id)
+    if not ini:
+        raise HTTPException(404, "Initiative not found")
+    _ensure_mission_access(ini, user)
+    return user
+
+
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
     o = orch()
@@ -283,9 +332,26 @@ async def admin_delete_user(user_id: str, _admin: PublicUser = Depends(require_a
         raise HTTPException(400, str(exc)) from exc
 
 
+@app.get("/api/users/search")
+async def search_users(
+    q: str = Query(default=""),
+    _user: PublicUser = Depends(require_user),
+) -> list[dict[str, Any]]:
+    """按账号名 / 显示名 / 用户 id 模糊搜索账号（任务分享面板选人用，最多返回 20 条）。"""
+    kw = q.strip().lower()
+    users = get_auth().list_users()
+    if kw:
+        users = [
+            u
+            for u in users
+            if kw in u.id.lower() or kw in u.username.lower() or kw in (u.display_name or "").lower()
+        ]
+    return [u.model_dump() for u in users[:20]]
+
+
 @app.get("/api/dashboard")
 async def dashboard(user: PublicUser = Depends(require_user)) -> dict[str, Any]:
-    items = orch().list_initiatives()
+    items = _visible_initiatives(orch().list_initiatives(), user)
     by_status: dict[str, int] = {}
     for i in items:
         by_status[i.status.value] = by_status.get(i.status.value, 0) + 1
@@ -427,9 +493,57 @@ async def list_memory(
 async def create_memory(
     req: CreateMemoryRequest, user: PublicUser = Depends(require_user)
 ) -> dict[str, Any]:
-    return get_memory().create(req, author_id=user.id, author_name=user.display_name).model_dump(
-        mode="json"
-    )
+    # workspace 全员共享，写入影响所有任务，仅管理员可创建
+    if req.scope == "workspace" and user.role != "admin":
+        raise HTTPException(403, "workspace 记忆仅管理员可创建")
+    entry = get_memory().create(req, author_id=user.id, author_name=user.display_name)
+
+    # 异步生成一句话简介（Claude Code MEMORY.md 模式的索引行）；失败降级为
+    # content 截断（display_summary 兜底），绝不阻塞写入响应
+    async def _fill_summary(entry_id: str, content: str) -> None:
+        try:
+            from sortie_deck.llm import LlmClient
+
+            llm = LlmClient(timeout=15.0)
+            if not llm.enabled:
+                return  # 无 LLM 环境保持截断简介
+            data = await llm.chat_json(
+                system=(
+                    "为一条 Agent 记忆生成不超过 30 字的中文简介，"
+                    "保留约束与适用场景，直接给出简介文本，JSON 格式 {\"summary\": \"...\"}。"
+                ),
+                user=content,
+            )
+            s = str(data.get("summary") or "").strip()
+            if s:
+                get_memory().set_summary(entry_id, s)
+        except Exception:  # noqa: BLE001 — 简介是增强项，失败保持截断
+            logger.info("记忆简介生成失败，降级为截断: id=%s", entry_id)
+
+    asyncio.create_task(_fill_summary(entry.id, entry.content))
+    return entry.model_dump(mode="json")
+
+
+class MemoryLookupRequest(BaseModel):
+    ids: list[str] = Field(default_factory=list)
+
+
+@app.post("/api/memory/lookup")
+async def lookup_memories(
+    req: MemoryLookupRequest, user: PublicUser = Depends(require_user)
+) -> list[dict[str, Any]]:
+    """按 id 批量取记忆（任务详情页「记忆」面板用）。
+
+    可见性与 /api/memory 列表一致：他人 user 域私密记忆不返回。
+    """
+    if not req.ids:
+        return []
+    known = {e.id: e for e in get_memory().list(user_id=user.id)}
+    return [
+        known[i].model_dump(mode="json")
+        for i in req.ids
+        if i in known
+    ]
 
 
 @app.patch("/api/memory/{mem_id}")
@@ -438,6 +552,9 @@ async def update_memory(
 ) -> dict[str, Any]:
     try:
         entry = get_memory().get(mem_id)
+        # workspace 为全局共享数据，修改/删除收敛到管理员，防止非管理员篡改全员约定
+        if entry.scope == "workspace" and user.role != "admin":
+            raise HTTPException(403, "workspace 记忆仅管理员可修改")
         if entry.scope == "user" and entry.scope_id != user.id and user.role != "admin":
             raise HTTPException(403, "forbidden")
         return get_memory().update(mem_id, req).model_dump(mode="json")
@@ -449,6 +566,9 @@ async def update_memory(
 async def delete_memory(mem_id: str, user: PublicUser = Depends(require_user)) -> dict[str, str]:
     try:
         entry = get_memory().get(mem_id)
+        # workspace 为全局共享数据，删除收敛到管理员（与创建/修改一致）
+        if entry.scope == "workspace" and user.role != "admin":
+            raise HTTPException(403, "workspace 记忆仅管理员可删除")
         if (
             user.role != "admin"
             and entry.author_id
@@ -908,7 +1028,7 @@ class UpdateHarnessRequest(BaseModel):
 async def patch_initiative_harness(
     initiative_id: str,
     req: UpdateHarnessRequest,
-    user: PublicUser = Depends(require_user),
+    _user: PublicUser = Depends(_mission_access_guard),
 ) -> dict[str, Any]:
     """Draft-only harness change; started missions require HITL switch_harness."""
     try:
@@ -928,7 +1048,7 @@ class UpdateMaterialsRequest(BaseModel):
 async def patch_initiative_materials(
     initiative_id: str,
     req: UpdateMaterialsRequest,
-    user: PublicUser = Depends(require_user),
+    _user: PublicUser = Depends(_mission_access_guard),
 ) -> dict[str, Any]:
     """Replace a mission's external materials (recomposes the brief).
 
@@ -974,9 +1094,9 @@ async def get_stage_catalog(_user: PublicUser = Depends(require_user)) -> dict[s
 @app.get("/api/initiatives")
 async def list_initiatives(
     status: str | None = Query(default=None),
-    _user: PublicUser = Depends(require_user),
+    user: PublicUser = Depends(require_user),
 ) -> list[dict[str, Any]]:
-    items = orch().list_initiatives()
+    items = _visible_initiatives(orch().list_initiatives(), user)
     if status:
         items = [i for i in items if i.status.value == status]
     return [i.model_dump(mode="json") for i in items]
@@ -999,6 +1119,7 @@ async def create_initiative(
 class BriefingMessageBody(BaseModel):
     text: str = ""
     attachments: list[dict[str, Any]] = Field(default_factory=list)
+    materials: list[ExternalMaterial] = Field(default_factory=list)
 
 
 @app.post("/api/briefing/sessions")
@@ -1026,13 +1147,29 @@ async def post_briefing_message(
     from sortie_deck.mission_briefing import BriefingAttachment
 
     atts = [BriefingAttachment.model_validate(a) for a in (body.attachments or [])]
-    try:
-        sess = await get_briefing().handle(
+    # Run planning as a task so a client abort ("stop" button) cancels it.
+    task = asyncio.create_task(
+        get_briefing().handle(
             session_id,
             body.text,
             user_name=user.display_name or user.username,
             attachments=atts,
+            materials=list(body.materials or []),
         )
+    )
+    while True:
+        done, _ = await asyncio.wait({task}, timeout=0.4)
+        if done:
+            break
+        if await request.is_disconnected():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+            raise HTTPException(499, "briefing interrupted") from None
+    try:
+        sess = task.result()
+    except asyncio.CancelledError:
+        raise HTTPException(499, "briefing interrupted") from None
     except KeyError:
         raise HTTPException(404, "briefing session not found") from None
     return sess.model_dump(mode="json")
@@ -1062,11 +1199,12 @@ async def set_briefing_repos(
 
 @app.get("/api/initiatives/{initiative_id}")
 async def get_initiative(
-    initiative_id: str, _user: PublicUser = Depends(require_user)
+    initiative_id: str, user: PublicUser = Depends(require_user)
 ) -> dict[str, Any]:
     ini = orch().get(initiative_id)
     if not ini:
         raise HTTPException(404, "Initiative not found")
+    _ensure_mission_access(ini, user)
     return ini.model_dump(mode="json")
 
 
@@ -1077,6 +1215,7 @@ async def delete_initiative(
     ini = orch().get(initiative_id)
     if not ini:
         raise HTTPException(404, "Initiative not found")
+    # 删除是 owner 专属权限：被共享用户拥有除删除外的全部权限
     _ensure_mission_owner(ini, user)
     try:
         await orch().delete_initiative(initiative_id)
@@ -1085,9 +1224,100 @@ async def delete_initiative(
         raise HTTPException(404, "Initiative not found") from None
 
 
+class AddMissionShareRequest(BaseModel):
+    # 被分享的目标用户 id（来自 /api/users/search 结果）
+    user_id: str
+
+
+@app.get("/api/initiatives/{initiative_id}/shares")
+async def list_mission_shares(
+    initiative_id: str, user: PublicUser = Depends(require_user)
+) -> list[dict[str, Any]]:
+    """任务共享成员列表：创建者与被共享用户均可见。"""
+    ini = orch().get(initiative_id)
+    if not ini:
+        raise HTTPException(404, "Initiative not found")
+    _ensure_mission_access(ini, user)
+    return [s.model_dump(mode="json") for s in ini.shared_with]
+
+
+@app.post("/api/initiatives/{initiative_id}/shares")
+async def add_mission_share(
+    initiative_id: str,
+    req: AddMissionShareRequest,
+    user: PublicUser = Depends(require_user),
+) -> dict[str, Any]:
+    """共享任务给指定账号用户（仅创建者或 admin 可操作；重复共享幂等返回）。"""
+    ini = orch().get(initiative_id)
+    if not ini:
+        raise HTTPException(404, "Initiative not found")
+    _ensure_mission_owner(ini, user)
+    target = get_auth().get_by_id(req.user_id)
+    if not target:
+        raise HTTPException(404, "user not found")
+    if target.id == ini.created_by:
+        raise HTTPException(400, "cannot share to the mission owner")
+    if not _is_mission_shared_with(ini, target.id):
+        ini.shared_with.append(
+            MissionShare(
+                user_id=target.id,
+                username=target.username,
+                display_name=target.display_name,
+                added_by=user.id,
+            )
+        )
+        orch().store.upsert(ini)
+        logger.info("任务共享已添加: initiative=%s user=%s by=%s", initiative_id, target.id, user.id)
+    return ini.model_dump(mode="json")
+
+
+@app.delete("/api/initiatives/{initiative_id}/shares/{share_user_id}")
+async def remove_mission_share(
+    initiative_id: str,
+    share_user_id: str,
+    user: PublicUser = Depends(require_user),
+) -> dict[str, Any]:
+    """取消共享：创建者/admin 可移除任意成员，被共享用户可移除自己（退出共享）。"""
+    ini = orch().get(initiative_id)
+    if not ini:
+        raise HTTPException(404, "Initiative not found")
+    is_owner = user.role == "admin" or (ini.created_by and ini.created_by == user.id)
+    if not is_owner and share_user_id != user.id:
+        raise HTTPException(403, "仅任务创建者或 admin 可移除其他共享成员")
+    if _is_mission_shared_with(ini, share_user_id):
+        ini.shared_with = [s for s in ini.shared_with if s.user_id != share_user_id]
+        orch().store.upsert(ini)
+        logger.info("任务共享已取消: initiative=%s user=%s by=%s", initiative_id, share_user_id, user.id)
+    return ini.model_dump(mode="json")
+
+
+@app.get("/api/initiatives/{initiative_id}/memories")
+async def mission_memories(
+    initiative_id: str, user: PublicUser = Depends(_mission_access_guard)
+) -> dict[str, Any]:
+    """任务记忆面板数据：生成时绑定的记忆 + Agent 执行中实际读取的记录。"""
+    ini = orch().get(initiative_id)
+    if not ini:
+        raise HTTPException(404, "Initiative not found")
+    bound_ids = [str(i) for i in (ini.meta or {}).get("memory_ids", [])]
+    known = {e.id: e for e in get_memory().list(user_id=user.id)}
+    bound = [known[i].model_dump(mode="json") for i in bound_ids if i in known]
+    # 执行中读取记录：Agent 取全文后追加 usage.log（best-effort，可能不存在）
+    read_ids: list[str] = []
+    try:
+        from sortie_deck.mission_memory import get_mission_memory
+
+        log = get_mission_memory().usage_log(initiative_id)
+        if log.exists():
+            read_ids = [ln.strip() for ln in log.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    except Exception:  # noqa: BLE001 — 使用记录只是增强
+        read_ids = []
+    return {"bound": bound, "read_ids": read_ids}
+
+
 @app.post("/api/initiatives/{initiative_id}/start")
 async def start_initiative(
-    initiative_id: str, user: PublicUser = Depends(require_user)
+    initiative_id: str, user: PublicUser = Depends(_mission_access_guard)
 ) -> dict[str, Any]:
     try:
         ini = await orch().start_pipeline(initiative_id, author_name=user.display_name)
@@ -1108,7 +1338,7 @@ async def start_initiative(
 async def patch_pipeline(
     initiative_id: str,
     req: UpdatePipelineRequest,
-    user: PublicUser = Depends(require_user),
+    user: PublicUser = Depends(_mission_access_guard),
 ) -> dict[str, Any]:
     try:
         ini = await orch().update_pipeline(initiative_id, req, author_name=user.display_name)
@@ -1123,7 +1353,7 @@ async def patch_pipeline(
 async def confirm_pipeline_route(
     initiative_id: str,
     req: ConfirmPipelineRequest | None = None,
-    user: PublicUser = Depends(require_user),
+    user: PublicUser = Depends(_mission_access_guard),
 ) -> dict[str, Any]:
     try:
         ini = await orch().confirm_pipeline(
@@ -1138,7 +1368,7 @@ async def confirm_pipeline_route(
 
 @app.post("/api/initiatives/{initiative_id}/hitl")
 async def submit_hitl(
-    initiative_id: str, req: HitlSubmitRequest, user: PublicUser = Depends(require_user)
+    initiative_id: str, req: HitlSubmitRequest, user: PublicUser = Depends(_mission_access_guard)
 ) -> dict[str, Any]:
     try:
         # 「撤退」常误打到 /hitl；stop 在任意状态下都走专用路径
@@ -1166,7 +1396,7 @@ async def submit_hitl(
 
 @app.post("/api/initiatives/{initiative_id}/stop")
 async def stop_initiative(
-    initiative_id: str, user: PublicUser = Depends(require_user)
+    initiative_id: str, user: PublicUser = Depends(_mission_access_guard)
 ) -> dict[str, Any]:
     try:
         ini = await orch().stop(initiative_id, author_name=user.display_name)
@@ -1192,7 +1422,7 @@ def _squad_payload(initiative_id: str) -> dict[str, Any]:
 @app.get("/api/initiatives/{initiative_id}/squad")
 @app.get("/api/initiatives/{initiative_id}/room")
 async def get_squad(
-    initiative_id: str, _user: PublicUser = Depends(require_user)
+    initiative_id: str, _user: PublicUser = Depends(_mission_access_guard)
 ) -> dict[str, Any]:
     return _squad_payload(initiative_id)
 
@@ -1200,7 +1430,7 @@ async def get_squad(
 @app.post("/api/initiatives/{initiative_id}/squad/join")
 @app.post("/api/initiatives/{initiative_id}/room/join")
 async def join_squad(
-    initiative_id: str, req: JoinRoomRequest, user: PublicUser = Depends(require_user)
+    initiative_id: str, req: JoinRoomRequest, user: PublicUser = Depends(_mission_access_guard)
 ) -> dict[str, Any]:
     try:
         name = req.name or user.display_name
@@ -1215,7 +1445,7 @@ async def join_squad(
 async def set_squad_discussing(
     initiative_id: str,
     req: DiscussParticipateRequest,
-    user: PublicUser = Depends(require_user),
+    user: PublicUser = Depends(_mission_access_guard),
 ) -> dict[str, Any]:
     try:
         ini = await orch().set_discussing(
@@ -1238,7 +1468,7 @@ async def set_squad_discussing(
 async def post_squad_message(
     initiative_id: str,
     req: PostRoomMessageRequest,
-    user: PublicUser = Depends(require_user),
+    user: PublicUser = Depends(_mission_access_guard),
 ) -> dict[str, Any]:
     try:
         msg, ini = await orch().post_human_message(
@@ -1259,7 +1489,7 @@ async def post_squad_message(
 
 @app.get("/api/initiatives/{initiative_id}/artifacts/{artifact_path:path}")
 async def read_artifact(
-    initiative_id: str, artifact_path: str, _user: PublicUser = Depends(require_user)
+    initiative_id: str, artifact_path: str, _user: PublicUser = Depends(_mission_access_guard)
 ) -> dict[str, Any]:
     from sortie_deck.artifacts import ArtifactPathError
 
@@ -1280,14 +1510,13 @@ async def read_artifact(
 
 @app.get("/api/initiatives/{initiative_id}/workspace")
 async def initiative_workspace(
-    initiative_id: str, user: PublicUser = Depends(require_user)
+    initiative_id: str, user: PublicUser = Depends(_mission_access_guard)
 ) -> dict[str, Any]:
     from sortie_deck.workspace import mission_workspace
 
     ini = orch().get(initiative_id)
     if not ini:
         raise HTTPException(404, "Initiative not found")
-    _ensure_mission_owner(ini, user)
     return mission_workspace(
         initiative_id=initiative_id,
         data_dir=orch().cfg.data_dir,
@@ -1346,8 +1575,10 @@ async def initiative_events(
     if not user:
         raise HTTPException(401, "login required")
     o = orch()
-    if not o.get(initiative_id):
+    ini = o.get(initiative_id)
+    if not ini:
         raise HTTPException(404, "Initiative not found")
+    _ensure_mission_access(ini, user)
 
     queue = o.subscribe(initiative_id)
 

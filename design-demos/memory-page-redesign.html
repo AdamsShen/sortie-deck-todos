@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="paper">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>记忆库 · 三个交互版本 — Sortie Deck</title>
+<style>
+/* ===== 真实主题 token（摘自 apps/web/src/styles.css） ===== */
+:root, [data-theme="paper"] {
+  --void: #f6f9fc; --deep: #edf1f7; --panel: #ffffff; --panel-2: #f8fafd;
+  --line: #e3e8ee; --line-hot: #cbd2dc; --text: #1a1f36; --muted: #697386;
+  --signal: #0e9f6e; --signal-dim: #dff2e9; --copper: #3b5bdb; --danger: #c9503a;
+  --amber: #b7791f;
+  --serif: "Songti SC", "Noto Serif SC", "Source Han Serif SC", Georgia, serif;
+  --font: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --radius: 10px;
+}
+[data-theme="ink"] {
+  --void: #171a21; --deep: #1c2029; --panel: #20242d; --panel-2: #262b35;
+  --line: #32363f; --line-hot: #454a55; --text: #ece9e1; --muted: #8b8a80;
+  --signal: #3fd68f; --signal-dim: #24422f; --copper: #7b96f0; --danger: #e57760;
+  --amber: #d9a441;
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 36px 44px 72px; font-family: var(--font); color: var(--text); background: var(--void); transition: background-color .3s, color .3s; }
+body { text-wrap: pretty; }
+
+/* ===== 页头 ===== */
+.topbar { display: flex; align-items: baseline; justify-content: space-between; }
+h1 { font-size: 17px; margin: 0; }
+.theme-toggle { font-family: var(--mono); font-size: 11px; color: var(--muted); border: 1px solid var(--line); background: var(--panel); border-radius: 99px; padding: 4px 12px; cursor: pointer; }
+.sub { font-family: var(--mono); font-size: 11px; color: var(--muted); margin: 4px 0 30px; }
+
+/* ===== 版式 ===== */
+.variant { margin-bottom: 48px; }
+.v-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+.v-tag { font-family: var(--mono); font-size: 10px; letter-spacing: .1em; color: var(--signal); border: 1px solid var(--signal-dim); border-radius: 99px; padding: 1px 8px; }
+.v-name { font-size: 13px; font-weight: 600; }
+.v-note { font-size: 12px; color: var(--muted); margin: 0 0 12px; line-height: 1.7; max-width: 860px; }
+
+/* ===== 模拟窗口 ===== */
+.frame { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--void); }
+.mocktop { display: flex; align-items: center; gap: 14px; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.brand { font-weight: 700; font-size: 13px; }
+.brand small { font-family: var(--mono); font-size: 9px; color: var(--muted); display: block; letter-spacing: .06em; }
+.mocknav { display: flex; gap: 2px; font-size: 11px; color: var(--muted); }
+.mocknav span { padding: 3px 9px; border-radius: 6px; }
+.mocknav .on { color: var(--signal); background: var(--signal-dim); }
+
+/* ===== 通用控件 ===== */
+input, textarea, select, button { font: inherit; color: inherit; }
+button { cursor: pointer; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { border: none; background: transparent; color: var(--muted); font-size: 12px; padding: 5px 12px; }
+.seg button.on { background: var(--signal-dim); color: var(--signal); }
+.chip { font-family: var(--mono); font-size: 10px; letter-spacing: .06em; border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: 99px; padding: 2px 10px; }
+.chip.on { color: var(--signal); border-color: var(--signal); }
+.field-label { font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: .08em; margin: 0 0 6px; }
+.text-input { width: 100%; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 7px 10px; font-size: 12px; outline: none; }
+.text-input:focus { border-color: var(--signal); }
+.btn-primary { border: none; background: var(--signal); color: #fff; border-radius: 8px; font-size: 12px; padding: 8px 0; width: 100%; }
+.btn-primary:hover { filter: brightness(1.05); }
+.del-btn { border: 1px solid var(--line); background: var(--panel); color: var(--muted); border-radius: 7px; font-size: 11px; padding: 2px 9px; }
+.del-btn:hover { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 50%, transparent); }
+.kind-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.kind-dot.k-preference { background: var(--signal); }
+.kind-dot.k-lesson { background: var(--copper); }
+.kind-dot.k-style { background: var(--amber); }
+.kind-dot.k-fact { background: var(--muted); }
+.kind-tag { font-family: var(--mono); font-size: 9.5px; letter-spacing: .08em; color: var(--muted); }
+.mono { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+.empty { font-family: var(--mono); font-size: 11px; color: var(--muted); opacity: .7; text-align: center; padding: 28px 0; }
+
+/* ===== V1 · 双栏工作台 ===== */
+.v1-layout { display: grid; grid-template-columns: 272px 1fr; min-height: 460px; }
+.v1-side { padding: 16px; border-right: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; gap: 14px; }
+.v1-side .hint { font-size: 11px; color: var(--muted); line-height: 1.7; margin: 0; }
+.v1-main { padding: 16px 20px; display: flex; flex-direction: column; }
+.v1-tools { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.v1-tools .text-input { width: 220px; }
+.v1-list { display: flex; flex-direction: column; }
+.v1-row { display: flex; align-items: flex-start; gap: 10px; padding: 12px 4px; border-bottom: 1px solid var(--line); }
+.v1-row:last-child { border-bottom: none; }
+.v1-row .dot { margin-top: 6px; }
+.v1-row .body { flex: 1; min-width: 0; }
+.v1-row .content { font-size: 13px; line-height: 1.6; }
+.v1-row .meta { margin-top: 3px; }
+.v1-row .del-btn { opacity: 0; transition: opacity .15s; margin-top: 2px; }
+.v1-row:hover .del-btn { opacity: 1; }
+
+/* ===== V2 · 情报流 ===== */
+.v2-wrap { display: flex; flex-direction: column; min-height: 460px; }
+.v2-tools { display: flex; align-items: center; gap: 10px; padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.v2-tools .text-input { width: 200px; margin-left: auto; }
+.v2-feed { flex: 1; padding: 6px 20px 14px; overflow-y: auto; }
+.v2-group { font-family: var(--mono); font-size: 10px; letter-spacing: .1em; color: var(--muted); margin: 16px 0 4px; display: flex; align-items: center; gap: 8px; }
+.v2-group::after { content: ""; flex: 1; border-top: 1px dashed var(--line); }
+.v2-item { display: flex; gap: 12px; padding: 10px 0 10px 10px; border-left: 2px solid var(--line); margin-left: 3px; position: relative; }
+.v2-item::before { content: ""; position: absolute; left: -5px; top: 17px; width: 8px; height: 8px; border-radius: 50%; background: var(--panel); border: 2px solid var(--line-hot); }
+.v2-item.k-preference::before { border-color: var(--signal); }
+.v2-item.k-lesson::before { border-color: var(--copper); }
+.v2-item.k-style::before { border-color: var(--amber); }
+.v2-item:hover { border-left-color: var(--line-hot); }
+.v2-item .content { font-size: 13px; line-height: 1.6; }
+.v2-item .meta { margin-top: 2px; display: flex; gap: 10px; align-items: center; }
+.v2-item .del-btn { opacity: 0; }
+.v2-item:hover .del-btn { opacity: 1; }
+.v2-composer { display: flex; gap: 8px; align-items: flex-end; padding: 12px 20px; background: var(--panel); border-top: 1px solid var(--line); }
+.v2-composer textarea { flex: 1; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); padding: 8px 10px; font-size: 12px; resize: none; height: 38px; outline: none; }
+.v2-composer textarea:focus { border-color: var(--signal); }
+.v2-composer .send { border: none; background: var(--signal); color: #fff; border-radius: 8px; font-size: 12px; padding: 8px 16px; }
+
+/* ===== V3 · 卡片看板 ===== */
+.v3-wrap { padding: 16px 20px 20px; min-height: 460px; display: flex; flex-direction: column; }
+.v3-tools { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.v3-tools .text-input { width: 220px; }
+.v3-new { margin-left: auto; border: none; background: var(--signal); color: #fff; border-radius: 8px; font-size: 12px; padding: 6px 14px; }
+.v3-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-content: start; flex: 1; }
+.v3-card { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px 12px; display: flex; flex-direction: column; gap: 8px; transition: border-color .15s; }
+.v3-card:hover { border-color: var(--line-hot); }
+.v3-card::before { content: ""; position: absolute; left: 0; top: 12px; bottom: 12px; width: 3px; border-radius: 0 3px 3px 0; }
+.v3-card.k-preference::before { background: var(--signal); }
+.v3-card.k-lesson::before { background: var(--copper); }
+.v3-card.k-style::before { background: var(--amber); }
+.v3-card.k-fact::before { background: var(--muted); }
+.v3-card .quote { font-family: var(--serif); font-size: 13.5px; line-height: 1.75; flex: 1; }
+.v3-card .meta { display: flex; align-items: center; gap: 8px; }
+.v3-card .del-btn { opacity: 0; position: absolute; top: 10px; right: 10px; }
+.v3-card:hover .del-btn { opacity: 1; }
+/* V3 modal */
+.v3-overlay { position: absolute; inset: 0; background: rgba(10,14,12,.45); display: none; align-items: center; justify-content: center; z-index: 5; border-radius: 0 0 14px 14px; }
+.v3-overlay.open { display: flex; }
+.v3-modal { width: 360px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.v3-modal .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.toast { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--line); border-radius: 99px; font-size: 11px; color: var(--muted); padding: 5px 14px; display: none; box-shadow: 0 4px 14px rgba(0,0,0,.08); }
+.toast.show { display: block; }
+.toast u { color: var(--signal); cursor: pointer; margin-left: 6px; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>记忆库 · 三个交互版本</h1>
+  <button class="theme-toggle" onclick="toggleTheme()">切换 paper / ink</button>
+</div>
+<p class="sub">同一份真实数据 · 写入 / 筛选 / 搜索 / 删除 全部可操作 · 全部使用 Sortie Deck 主题变量</p>
+
+<!-- ================= V1 ================= -->
+<section class="variant">
+  <div class="v-head"><span class="v-tag">方案一</span><span class="v-name">双栏工作台 — 现状精修</span></div>
+  <p class="v-note">保留「左写右读」骨架，把糙的地方逐个修掉：scope 下拉换成<b>分段控件 + 任务选择器</b>（不再手填 ini_id）；类型用分段控件；右侧加<b>搜索 + 类型筛选</b>；删除收进 hover。与现有 App 一致性最高，迁移成本最小。</p>
+  <div class="frame">
+    <div class="mocktop"><span class="brand">Sortie Deck<small>前线小队 · 共交付，无伤谍</small></span>
+      <nav class="mocknav"><span>作战图</span><span>任务</span><span>知识库</span><span class="on">记忆库</span><span>角色工坊</span><span>工具箱</span><span>决策中心</span><span>管理</span></nav>
+    </div>
+    <div class="v1-layout">
+      <aside class="v1-side">
+        <div>
+          <p class="field-label">写入范围</p>
+          <div class="seg" data-v1-scope><button class="on" data-v="workspace">工作区</button><button data-v="user">我的</button></div>
+        </div>
+        <div>
+          <p class="field-label">绑定目标</p>
+          <select class="text-input" data-v1-target>
+            <option value="global">全局约定（所有任务共享）</option>
+            <option value="ini_1708d3">任务 · 继续（ini_1708d3）</option>
+            <option value="ini_98a7db">任务 · 客户通知中心 V2</option>
+          </select>
+        </div>
+        <div>
+          <p class="field-label">记忆类型</p>
+          <div class="seg" data-v1-kind>
+            <button class="on" data-v="preference">偏好</button><button data-v="lesson">教训</button><button data-v="style">风格</button><button data-v="fact">事实</button>
+          </div>
+        </div>
+        <div>
+          <p class="field-label">记忆内容</p>
+          <textarea class="text-input" data-v1-text rows="4" placeholder="例：产物优先、可验收，避免空话 PRD。"></textarea>
+        </div>
+        <button class="btn-primary" data-v1-add>写入记忆</button>
+        <p class="hint">工作区＝全员可见；「我的」仅本人注入。任务需绑定 ini_id，Agent 需绑定角色 ID。</p>
+      </aside>
+      <div class="v1-main">
+        <div class="v1-tools">
+          <input class="text-input" data-v1-q placeholder="搜索记忆…" />
+          <span data-v1-chips></span>
+        </div>
+        <div class="v1-list" data-v1-list></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= V2 ================= -->
+<section class="variant">
+  <div class="v-head"><span class="v-tag">方案二</span><span class="v-name">情报流 — 像作战日志一样读记忆</span></div>
+  <p class="v-note">左侧表单整个拿掉，写入收成底部 <b>composer</b>（像发一条作战简报）；阅读面变成<b>按绑定目标分组的时间线</b>，色点即类型。浏览效率最高，「记忆是持续沉淀的」这层语义最强。</p>
+  <div class="frame">
+    <div class="mocktop"><span class="brand">Sortie Deck<small>前线小队 · 共交付，无伤谍</small></span>
+      <nav class="mocknav"><span>作战图</span><span>任务</span><span>知识库</span><span class="on">记忆库</span><span>角色工坊</span><span>工具箱</span><span>决策中心</span><span>管理</span></nav>
+    </div>
+    <div class="v2-wrap">
+      <div class="v2-tools">
+        <div class="seg" data-v2-scope><button class="on" data-v="all">全部</button><button data-v="workspace">工作区</button><button data-v="user">我的</button></div>
+        <span data-v2-chips></span>
+        <input class="text-input" data-v2-q placeholder="搜索记忆…" />
+      </div>
+      <div class="v2-feed" data-v2-feed></div>
+      <div class="v2-composer">
+        <select class="text-input" style="width:86px;" data-v2-kind><option value="preference">偏好</option><option value="lesson">教训</option><option value="style">风格</option><option value="fact">事实</option></select>
+        <select class="text-input" style="width:150px;" data-v2-target><option value="global">全局约定</option><option value="ini_1708d3">任务 · 继续</option><option value="ini_98a7db">任务 · 通知中心 V2</option></select>
+        <textarea data-v2-text placeholder="记一条：收敛后的结论、教训、偏好…"></textarea>
+        <button class="send" data-v2-add>写入</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= V3 ================= -->
+<section class="variant">
+  <div class="v-head"><span class="v-tag">方案三</span><span class="v-name">卡片看板 — 引语式记忆卡</span></div>
+  <p class="v-note">记忆按「一句可执行的约定」呈现：卡片网格 + 类型色条 + <b>衬线引语排版</b>（这是本版的签名细节）；写入收进「＋ 新建记忆」弹窗；删除带<b>撤销 toast</b>。最「产品化」、可扫读性最好。</p>
+  <div class="frame" style="position:relative;">
+    <div class="mocktop"><span class="brand">Sortie Deck<small>前线小队 · 共交付，无伤谍</small></span>
+      <nav class="mocknav"><span>作战图</span><span>任务</span><span>知识库</span><span class="on">记忆库</span><span>角色工坊</span><span>工具箱</span><span>决策中心</span><span>管理</span></nav>
+    </div>
+    <div class="v3-wrap">
+      <div class="v3-tools">
+        <div class="seg" data-v3-scope><button class="on" data-v="all">全部</button><button data-v="workspace">工作区</button><button data-v="user">我的</button></div>
+        <span data-v3-chips></span>
+        <input class="text-input" data-v3-q placeholder="搜索记忆…" />
+        <button class="v3-new" data-v3-new>＋ 新建记忆</button>
+      </div>
+      <div class="v3-grid" data-v3-grid></div>
+    </div>
+    <div class="v3-overlay" data-v3-overlay>
+      <div class="v3-modal">
+        <div class="row2">
+          <div><p class="field-label">范围</p><select class="text-input" data-v3-f-scope><option value="workspace">工作区</option><option value="user">我的</option></select></div>
+          <div><p class="field-label">类型</p><select class="text-input" data-v3-f-kind><option value="preference">偏好</option><option value="lesson">教训</option><option value="style">风格</option><option value="fact">事实</option></select></div>
+        </div>
+        <div><p class="field-label">绑定目标</p><select class="text-input" data-v3-f-target><option value="global">全局约定</option><option value="ini_1708d3">任务 · 继续</option><option value="ini_98a7db">任务 · 通知中心 V2</option></select></div>
+        <div><p class="field-label">内容</p><textarea class="text-input" rows="3" data-v3-f-text placeholder="一句可执行的约定…"></textarea></div>
+        <button class="btn-primary" data-v3-save>写入记忆</button>
+      </div>
+    </div>
+    <div class="toast" data-v3-toast>已删除 <u data-v3-undo>撤销</u></div>
+  </div>
+</section>
+
+<script>
+/* ===== 真实数据（取自现网记忆库 + 同构 demo 数据） ===== */
+function seed() {
+  return [
+    { id: 1, scope: "workspace", target: "global", kind: "preference", text: "产物优先、可验收：避免空话 PRD。", author: "Sortie", at: "10-14 16:20" },
+    { id: 2, scope: "workspace", target: "global", kind: "lesson", text: "默认先对齐再出击：讨论未收敛前不要 /start。", author: "Sortie", at: "10-14 16:22" },
+    { id: 3, scope: "workspace", target: "ini_1708d3", kind: "lesson", text: "ga_verify 先跑冒烟再全量，避免重复部署。", author: "Admin", at: "10-15 09:12" },
+    { id: 4, scope: "user", target: "usr_admin", kind: "preference", text: "回复与代码注释统一用中文。", author: "Admin", at: "10-13 11:02" },
+    { id: 5, scope: "workspace", target: "ini_98a7db", kind: "style", text: "通知中心文案口吻：短句、动词开头。", author: "Sortie", at: "10-15 10:05" },
+  ];
+}
+const KIND_ZH = { preference: "偏好", lesson: "教训", style: "风格", fact: "事实" };
+const TARGET_ZH = { global: "全局约定", ini_1708d3: "任务 · 继续", ini_98a7db: "任务 · 通知中心 V2", usr_admin: "我" };
+const KINDS = ["preference", "lesson", "style", "fact"];
+
+function esc(s) { return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+function meta(m) {
+  return `<span class="kind-tag">${KIND_ZH[m.kind]}</span><span class="mono">${esc(TARGET_ZH[m.target] || m.target)} · ${esc(m.author)} · ${m.at}</span>`;
+}
+function chipsHtml(state, key) {
+  return KINDS.map((k) => `<button class="chip ${state[key] === k ? "on" : ""}" data-kind="${k}">${KIND_ZH[k]}</button>`).join("");
+}
+function match(m, state, qKey, kindKey, scopeKey) {
+  const q = (state[qKey] || "").trim().toLowerCase();
+  if (state[kindKey] && m.kind !== state[kindKey]) return false;
+  if (state[scopeKey] && state[scopeKey] !== "all" && m.scope !== state[scopeKey]) return false;
+  if (q && !m.text.toLowerCase().includes(q)) return false;
+  return true;
+}
+
+/* ===== V1：双栏工作台 ===== */
+function initV1() {
+  const state = { items: seed(), scope: "workspace", kind: "preference", target: "global", q: "", chip: "" };
+  const $ = (sel) => document.querySelector(sel);
+  const list = $('[data-v1-list]');
+  const chips = $('[data-v1-chips]');
+  function render() {
+    const rows = state.items.filter((m) => match(m, state, "q", "chip", null)).filter((m) => m.scope === state.scope);
+    list.innerHTML = rows.length ? rows.map((m) => `
+      <div class="v1-row">
+        <span class="kind-dot dot k-${m.kind}"></span>
+        <div class="body"><div class="content">${esc(m.text)}</div><div class="meta">${meta(m)}</div></div>
+        <button class="del-btn" data-del="${m.id}">删除</button>
+      </div>`).join("") : `<div class="empty">该范围内暂无记忆</div>`;
+    chips.innerHTML = chipsHtml(state, "chip");
+  }
+  document.querySelectorAll("[data-v1-scope] button").forEach((b) => b.onclick = () => {
+    document.querySelectorAll("[data-v1-scope] button").forEach((x) => x.classList.remove("on"));
+    b.classList.add("on"); state.scope = b.dataset.v;
+    $('[data-v1-target]').value = state.scope === "user" ? "usr_admin" : "global";
+    render();
+  });
+  document.querySelectorAll("[data-v1-kind] button").forEach((b) => b.onclick = () => {
+    document.querySelectorAll("[data-v1-kind] button").forEach((x) => x.classList.remove("on"));
+    b.classList.add("on"); state.kind = b.dataset.v;
+  });
+  $('[data-v1-target]').onchange = (e) => (state.target = e.target.value);
+  $('[data-v1-q]').oninput = (e) => { state.q = e.target.value; render(); };
+  chips.onclick = (e) => {
+    const b = e.target.closest("[data-kind]"); if (!b) return;
+    state.chip = state.chip === b.dataset.kind ? "" : b.dataset.kind; render();
+  };
+  $('[data-v1-add]').onclick = () => {
+    const text = $('[data-v1-text]').value.trim(); if (!text) return;
+    state.items.unshift({ id: Date.now(), scope: state.scope, target: state.target, kind: state.kind, text, author: "Admin", at: "10-15 现在" });
+    $('[data-v1-text]').value = ""; render();
+  };
+  list.onclick = (e) => {
+    const b = e.target.closest("[data-del]"); if (!b) return;
+    state.items = state.items.filter((m) => m.id !== +b.dataset.del); render();
+  };
+  render();
+}
+
+/* ===== V2：情报流 ===== */
+function initV2() {
+  const state = { items: seed(), scope: "all", kind: "", q: "", chip: "" };
+  const $ = (sel) => document.querySelector(sel);
+  const feed = $('[data-v2-feed]');
+  const chips = $('[data-v2-chips]');
+  function render() {
+    const rows = state.items.filter((m) => match(m, state, "q", "chip", "scope"));
+    const groups = {};
+    rows.forEach((m) => { (groups[m.target] = groups[m.target] || []).push(m); });
+    feed.innerHTML = Object.keys(groups).length ? Object.entries(groups).map(([t, ms]) => `
+      <div class="v2-group">${esc(TARGET_ZH[t] || t)}</div>
+      ${ms.map((m) => `
+        <div class="v2-item k-${m.kind}">
+          <span class="kind-dot k-${m.kind}" style="margin-top:7px;"></span>
+          <div style="flex:1;min-width:0;">
+            <div class="content">${esc(m.text)}</div>
+            <div class="meta">${meta(m)}<button class="del-btn" data-del="${m.id}">删除</button></div>
+          </div>
+        </div>`).join("")}`).join("") : `<div class="empty">没有匹配的记忆</div>`;
+    chips.innerHTML = chipsHtml(state, "chip");
+  }
+  document.querySelectorAll("[data-v2-scope] button").forEach((b) => b.onclick = () => {
+    document.querySelectorAll("[data-v2-scope] button").forEach((x) => x.classList.remove("on"));
+    b.classList.add("on"); state.scope = b.dataset.v; render();
+  });
+  $('[data-v2-q]').oninput = (e) => { state.q = e.target.value; render(); };
+  chips.onclick = (e) => {
+    const b = e.target.closest("[data-kind]"); if (!b) return;
+    state.chip = state.chip === b.dataset.kind ? "" : b.dataset.kind; render();
+  };
+  $('[data-v2-add]').onclick = () => {
+    const text = $('[data-v2-text]').value.trim(); if (!text) return;
+    state.items.unshift({ id: Date.now(), scope: $('[data-v2-target]').value === "usr_admin" ? "user" : "workspace", target: $('[data-v2-target]').value, kind: $('[data-v2-kind]').value, text, author: "Admin", at: "10-15 现在" });
+    $('[data-v2-text]').value = ""; render();
+  };
+  feed.onclick = (e) => {
+    const b = e.target.closest("[data-del]"); if (!b) return;
+    state.items = state.items.filter((m) => m.id !== +b.dataset.del); render();
+  };
+  render();
+}
+
+/* ===== V3：卡片看板 ===== */
+function initV3() {
+  const state = { items: seed(), scope: "all", q: "", chip: "", lastDeleted: null };
+  const $ = (sel) => document.querySelector(sel);
+  const grid = $('[data-v3-grid]');
+  const chips = $('[data-v3-chips]');
+  const toast = $('[data-v3-toast]');
+  function render() {
+    const rows = state.items.filter((m) => match(m, state, "q", "chip", "scope"));
+    grid.innerHTML = rows.length ? rows.map((m) => `
+      <div class="v3-card k-${m.kind}">
+        <button class="del-btn" data-del="${m.id}">删除</button>
+        <div><span class="kind-tag">${KIND_ZH[m.kind]}</span><span class="mono" style="margin-left:8px;">${m.scope === "user" ? "我的" : "工作区"}</span></div>
+        <div class="quote">「${esc(m.text)}」</div>
+        <div class="meta"><span class="mono">${esc(TARGET_ZH[m.target] || m.target)} · ${esc(m.author)} · ${m.at}</span></div>
+      </div>`).join("") : `<div class="empty" style="grid-column:1/-1;">没有匹配的记忆</div>`;
+    chips.innerHTML = chipsHtml(state, "chip");
+  }
+  document.querySelectorAll("[data-v3-scope] button").forEach((b) => b.onclick = () => {
+    document.querySelectorAll("[data-v3-scope] button").forEach((x) => x.classList.remove("on"));
+    b.classList.add("on"); state.scope = b.dataset.v; render();
+  });
+  $('[data-v3-q]').oninput = (e) => { state.q = e.target.value; render(); };
+  chips.onclick = (e) => {
+    const b = e.target.closest("[data-kind]"); if (!b) return;
+    state.chip = state.chip === b.dataset.kind ? "" : b.dataset.kind; render();
+  };
+  $('[data-v3-new]').onclick = () => $('[data-v3-overlay]').classList.add("open");
+  $('[data-v3-overlay]').onclick = (e) => { if (e.target === $('[data-v3-overlay]')) $('[data-v3-overlay]').classList.remove("open"); };
+  $('[data-v3-save]').onclick = () => {
+    const text = $('[data-v3-f-text]').value.trim(); if (!text) return;
+    const scope = $('[data-v3-f-scope]').value;
+    state.items.unshift({ id: Date.now(), scope, target: scope === "user" ? "usr_admin" : $('[data-v3-f-target]').value, kind: $('[data-v3-f-kind]').value, text, author: "Admin", at: "10-15 现在" });
+    $('[data-v3-f-text]').value = ""; $('[data-v3-overlay]').classList.remove("open"); render();
+  };
+  let toastTimer;
+  grid.onclick = (e) => {
+    const b = e.target.closest("[data-del]"); if (!b) return;
+    const id = +b.dataset.del;
+    state.lastDeleted = state.items.find((m) => m.id === id);
+    state.items = state.items.filter((m) => m.id !== id); render();
+    toast.classList.add("show");
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.classList.remove("show"), 3500);
+  };
+  $('[data-v3-undo]').onclick = () => {
+    if (state.lastDeleted) { state.items.unshift(state.lastDeleted); state.lastDeleted = null; render(); }
+    toast.classList.remove("show");
+  };
+  render();
+}
+
+function toggleTheme() {
+  const el = document.documentElement;
+  el.dataset.theme = el.dataset.theme === "paper" ? "ink" : "paper";
+}
+if (location.hash === "#ink") document.documentElement.dataset.theme = "ink";
+
+initV1(); initV2(); initV3();
+</script>
+</body>
+</html>

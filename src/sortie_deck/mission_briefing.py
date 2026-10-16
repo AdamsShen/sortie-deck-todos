@@ -28,7 +28,13 @@ from sortie_deck.harness import (
     new_session_id,
 )
 from sortie_deck.knowledge_gateway import KnowledgeGateway, gateway_from_settings
-from sortie_deck.models import CreateInitiativeRequest, Initiative, RepoConfig, utc_now
+from sortie_deck.models import (
+    CreateInitiativeRequest,
+    ExternalMaterial,
+    Initiative,
+    RepoConfig,
+    utc_now,
+)
 from sortie_deck.pipeline import apply_proposal_to_meta
 from sortie_deck.settings import Settings
 from sortie_deck.settings import settings as default_settings
@@ -64,6 +70,9 @@ class BriefingSession(BaseModel):
     messages: list[BriefingMessage] = Field(default_factory=list)
     events: list[HarnessEvent] = Field(default_factory=list)
     draft: dict[str, Any] = Field(default_factory=dict)
+    # External materials imported on the intake page; every handle() refreshes
+    # them from the client's material panel snapshot.
+    materials: list[ExternalMaterial] = Field(default_factory=list)
     initiative_id: str | None = None
     created_at: str = Field(default_factory=lambda: utc_now().isoformat())
     updated_at: str = Field(default_factory=lambda: utc_now().isoformat())
@@ -113,6 +122,30 @@ def _compose_brief(text: str, attachments: list[BriefingAttachment]) -> str:
     return "\n".join(parts).strip()
 
 
+# Per-material excerpt cap folded into the planning-discussion context (chars).
+_MAX_MATERIAL_DISCUSSION_CHARS = 6000
+
+
+def _materials_context(mats: list[ExternalMaterial]) -> str:
+    """Planning-discussion context from imported materials.
+
+    All materials carrying a text excerpt (pinned or not) join the discussion
+    while the mission is being planned. Only pinned ones are later folded into
+    the mission brief as persistent context (see materials.compose_brief).
+    """
+    parts: list[str] = []
+    for m in mats:
+        excerpt = (m.text_excerpt or "").strip()
+        if not excerpt:
+            continue
+        tag = "持续上下文" if m.pinned else "讨论参考"
+        parts.append(f"- {m.name}（{m.kind} · {tag}）")
+        parts.append(f"```\n{excerpt[:_MAX_MATERIAL_DISCUSSION_CHARS]}\n```")
+    if not parts:
+        return ""
+    return "【外部资料 · 规划讨论】\n" + "\n".join(parts)
+
+
 class BriefingStore:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -160,6 +193,12 @@ class BriefingStore:
 
 _CONFIRM_RE = re.compile(r"^(确认|confirm|/confirm|同意|就这样|开干|组建)\b", re.I)
 _REJECT_RE = re.compile(r"^(驳回|reject|/reject|重来|改一下)\b", re.I)
+# 续聊词：中断后用「继续」等词恢复，不应覆盖此前已确定的标题/需求上下文
+_CONTINUE_RE = re.compile(r"^(继续|接着|继续刚才|按刚才|按之前|沿用|continue|go\s*on|resume)\b", re.I)
+_WELCOME_PREFIX = "我是建队规划官"  # start() 注入的欢迎语，拼历史时需剔除
+# 拼入规划上下文的历史轮次上限（防上下文膨胀）
+_MAX_PRIOR_TURNS = 12
+_MAX_PRIOR_CHARS = 6000
 
 _SLOT_TITLES = {
     "design": "Design Navigator",
@@ -243,12 +282,17 @@ class MissionBriefingAgent:
         *,
         user_name: str = "Operator",
         attachments: list[BriefingAttachment] | None = None,
+        materials: list[ExternalMaterial] | None = None,
     ) -> BriefingSession:
         sess = self.store.get(session_id)
         text = (text or "").strip()
         atts = _sanitize_attachments(attachments)
+        # Materials snapshot is refreshed only when provided, so the confirm
+        # turn (which sends no materials) keeps the session's last panel state.
+        if materials is not None:
+            sess.materials = [ExternalMaterial.model_validate(m) for m in materials]
         if not text and not atts:
-            return sess
+            return self.store.save(sess)
         if sess.status == "done":
             sess.messages.append(
                 BriefingMessage(role="assistant", text="本会话已组建完成，请到「小队」查看。")
@@ -257,6 +301,9 @@ class MissionBriefingAgent:
 
         display_text = text or (f"[附件 ×{len(atts)}]" if atts else "")
         sess.messages.append(BriefingMessage(role="user", text=display_text, attachments=atts))
+        # Persist the user turn up front: if the client aborts mid-planning the
+        # session keeps the message and can be continued afterwards.
+        self.store.save(sess)
         harness, state = self._bind(sess)
 
         async def run_tool(name: str, args: dict[str, Any]) -> ToolResult:
@@ -301,11 +348,48 @@ class MissionBriefingAgent:
             return self._persist(sess, state)
 
         composed = _compose_brief(text, atts)
-        sess.title = (text.split("\n", 1)[0] if text else (atts[0].name if atts else "Untitled"))[:48]
+        # 续聊词（继续/接着…）不覆盖此前已确定的标题，避免标题变成「继续」
+        new_title = (text.split("\n", 1)[0] if text else (atts[0].name if atts else "Untitled"))[:48]
+        if not _CONTINUE_RE.search(text) or not sess.title:
+            sess.title = new_title
         sess.brief = composed
+
+        # 继承本轮之前的会话上下文：中断后说「继续」也能还原需求与多端拆分。
+        # 仅取历史轮次（排除刚 appended 的当前轮），剔除欢迎语，限长防上下文膨胀。
+        prior_msgs = sess.messages[:-1] if len(sess.messages) > 1 else []
+        prior_turns: list[str] = []
+        for m in prior_msgs:
+            if m.role not in ("user", "assistant"):
+                continue
+            if m.role == "assistant" and (m.text or "").startswith(_WELCOME_PREFIX):
+                continue
+            t = (m.text or "").strip()
+            if t:
+                prior_turns.append(f"[{m.role}] {t}")
+        prior_turns = prior_turns[-_MAX_PRIOR_TURNS:]
+        prior_block = "\n".join(prior_turns)
+        if len(prior_block) > _MAX_PRIOR_CHARS:
+            prior_block = prior_block[-_MAX_PRIOR_CHARS:]
+
+        # Discussion context: 历史对话 + 当前需求 + 全部导入资料（钉住或未钉）
+        discussion = composed
+        if prior_block:
+            discussion = f"{prior_block}\n\n{composed}"
+        mat_ctx = _materials_context(sess.materials)
+        if mat_ctx:
+            discussion = f"{discussion}\n\n{mat_ctx}"
         self._current_brief = composed
         state.status = "planning"
-        state.goal = composed
+        state.goal = discussion
+        if sess.materials:
+            pinned_n = sum(1 for m in sess.materials if m.pinned)
+            harness.emit(
+                state,
+                EventKind.WATERFALL,
+                f"⓪ 导入外部资料 {len(sess.materials)} 份（钉住 {pinned_n}）",
+                step="materials",
+                names=[m.name for m in sess.materials],
+            )
         if atts:
             harness.emit(
                 state,
@@ -316,15 +400,15 @@ class MissionBriefingAgent:
             )
 
         harness.emit(state, EventKind.WATERFALL, "① 查阅历史任务", step="history")
-        await run_tool("search_history", {"query": sess.brief})
+        await run_tool("search_history", {"query": discussion})
         harness.emit(state, EventKind.WATERFALL, "② 检索知识库", step="knowledge")
-        await run_tool("retrieve_knowledge", {"query": sess.brief})
+        await run_tool("retrieve_knowledge", {"query": composed})
         harness.emit(state, EventKind.WATERFALL, "③ 提案交付航线", step="pipeline")
-        await run_tool("propose_pipeline", {"title": sess.title, "brief": sess.brief})
+        await run_tool("propose_pipeline", {"title": sess.title, "brief": discussion})
         harness.emit(state, EventKind.WATERFALL, "④ 匹配小队编制", step="loadout")
         await run_tool(
             "propose_loadout",
-            {"brief": sess.brief, "stages": state.context.get("stages") or []},
+            {"brief": discussion, "stages": state.context.get("stages") or []},
         )
         harness.emit(state, EventKind.WATERFALL, "⑤ 补齐缺失角色", step="roles")
         await run_tool("ensure_missing_roles", {"slots": state.context.get("needed_slots") or []})
@@ -436,6 +520,9 @@ class MissionBriefingAgent:
         req = CreateInitiativeRequest(
             title=str(draft.get("title") or sess.title or "Untitled"),
             brief=str(draft.get("brief") or sess.brief),
+            # Materials ride into the mission; orchestrator folds pinned ones
+            # into the brief as persistent context (materials.compose_brief).
+            materials=list(sess.materials or []),
             coding_executor=str(draft.get("coding_executor") or self._coding_executor()),  # type: ignore[arg-type]
             role_agents=dict(draft.get("role_agents") or {}),
             role_repos={

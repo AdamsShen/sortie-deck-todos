@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="paper">
+<head>
+<meta charset="UTF-8" />
+<title>新建记忆 · 大弹框 + 实时预览</title>
+<style>
+  :root, [data-theme="paper"] {
+    --void: #f6f9fc; --deep: #edf1f7; --panel: #ffffff; --panel-2: #f8fafd;
+    --line: #e3e8ee; --line-hot: #cbd2dc; --text: #1a1f36; --muted: #697386;
+    --signal: #0e9f6e; --signal-dim: #dff2e9; --copper: #3b5bdb; --ice: #6e8be8;
+    --danger: #c9503a; --amber: #b7791f;
+    --serif: "Songti SC", "Noto Serif SC", "Source Han Serif SC", Georgia, serif;
+    --font: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: var(--font); color: var(--text); background: var(--void); padding: 28px; }
+  h1 { font-size: 17px; margin: 0 0 4px; }
+  .sub { font-size: 12px; color: var(--muted); margin: 0 0 24px; }
+  .row { display: flex; gap: 28px; align-items: flex-start; flex-wrap: wrap; }
+
+  .frame { position: relative; width: 860px; height: 760px; border: 1px solid var(--line);
+           border-radius: 14px; background: var(--void); overflow: hidden; box-shadow: 0 8px 30px rgba(26,31,54,.07); }
+  .v-head { padding: 12px 18px; border-bottom: 1px solid var(--line); display: flex; align-items: baseline; gap: 8px; background: var(--panel); }
+  .v-tag { font-family: var(--mono); font-size: 10px; letter-spacing: .08em; color: var(--signal);
+           border: 1px solid var(--signal); border-radius: 99px; padding: 1px 8px; }
+  .v-name { font-size: 12.5px; font-weight: 600; }
+
+  .bg-page { padding: 16px 18px; }
+  .bg-toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; }
+  .bg-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel); }
+  .bg-seg button { border: none; background: transparent; color: var(--muted); font-size: 11px; padding: 4px 10px; }
+  .bg-seg button.on { background: var(--signal-dim); color: var(--signal); }
+  .bg-new { margin-left: auto; border: none; background: var(--signal); color: #fff; border-radius: 8px; font-size: 11px; padding: 5px 12px; }
+  .bg-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .bg-card { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 11px 13px 10px; }
+  .bg-card::before { content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; border-radius: 0 3px 3px 0; }
+  .bg-card.k-preference::before { background: var(--signal); }
+  .bg-card.k-lesson::before { background: var(--copper); }
+  .bg-card .tag { font-family: var(--mono); font-size: 9px; letter-spacing: .08em; color: var(--muted); }
+  .bg-card .quote { font-family: var(--serif); font-size: 12px; line-height: 1.7; margin: 5px 0 0; }
+
+  .overlay-dim { position: absolute; inset: 0; background: rgba(10,14,12,.5); display: flex; align-items: center; justify-content: center; z-index: 5; }
+  .x-btn { border: none; background: transparent; color: var(--muted); font-size: 16px; line-height: 1; padding: 3px 6px; border-radius: 6px; }
+  .x-btn:hover { color: var(--text); background: var(--deep); }
+  .btn-primary { border: none; background: var(--signal); color: #fff; border-radius: 8px; font-size: 13px; padding: 10px 18px; }
+  .btn-primary:hover { filter: brightness(1.06); }
+  .btn-ghost { border: 1px solid var(--line); background: var(--panel); color: var(--muted); border-radius: 8px; font-size: 12px; padding: 9px 14px; }
+  .btn-ghost:hover { border-color: var(--line-hot); color: var(--text); }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel); }
+  .seg button { border: none; background: transparent; color: var(--muted); font-size: 12.5px; padding: 7px 14px; }
+  .seg button.on { background: var(--signal-dim); color: var(--signal); font-weight: 600; }
+  select { appearance: none; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2);
+           font-size: 13px; padding: 9px 11px; color: var(--text); outline: none; width: 100%;
+           background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23697386' fill='none' stroke-width='1.5'/%3E%3C/svg%3E");
+           background-repeat: no-repeat; background-position: right 11px center; }
+  select:focus { border-color: var(--signal); }
+  textarea { border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); padding: 11px 13px;
+             font: inherit; font-size: 13.5px; outline: none; resize: none; width: 100%; color: var(--text); line-height: 1.7; }
+  textarea:focus { border-color: var(--signal); }
+  .flabel { font-family: var(--mono); font-size: 10px; letter-spacing: .1em; color: var(--muted); }
+
+  /* ===== 通用：大弹框左缘类型色条 ===== */
+  .big { background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
+         box-shadow: 0 24px 70px rgba(26,31,54,.22); position: relative; overflow: hidden; display: flex; flex-direction: column; }
+  .big::before { content: ""; position: absolute; left: 0; top: 18px; bottom: 18px; width: 3px;
+                 border-radius: 0 3px 3px 0; background: var(--bar, var(--signal)); transition: background .2s; }
+  .big-head { display: flex; align-items: center; gap: 10px; padding: 16px 20px; border-bottom: 1px solid var(--line); }
+  .big-title { font-size: 15px; font-weight: 600; }
+  .big-head .x-btn { margin-left: auto; }
+  .big-foot { padding: 13px 20px; border-top: 1px solid var(--line); background: var(--panel-2);
+              display: flex; align-items: center; gap: 12px; }
+  .big-foot .btn-ghost { margin-right: auto; }
+
+  /* ===== 方案一 · 左右分栏（编辑 | 实时预览） ===== */
+  .m1 { width: 760px; height: 600px; }
+  .m1-main { flex: 1; display: grid; grid-template-columns: 1fr 1fr; min-height: 0; }
+  .m1-edit { padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; border-right: 1px solid var(--line); }
+  .m1-row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .m1-edit textarea { flex: 1; min-height: 220px; font-family: var(--mono); font-size: 12.5px; }
+  .m1-preview { padding: 16px 20px; overflow-y: auto; }
+  .m1-preview-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .m1-preview-head::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+  .md-body { font-size: 13px; line-height: 1.75; }
+  .md-body h1 { font-size: 18px; margin: 4px 0 10px; }
+  .md-body h2 { font-size: 14.5px; margin: 16px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+  .md-body p { margin: 8px 0; }
+  .md-body ul { margin: 8px 0; padding-left: 20px; }
+  .md-body li { margin: 4px 0; }
+  .md-body code { background: var(--deep); border-radius: 4px; padding: 1px 5px; font-family: var(--mono); font-size: 12px; }
+  .md-body strong { color: var(--text); }
+
+  /* ===== 方案二 · 上编辑 / 下预览（更高单栏） ===== */
+  .m2 { width: 720px; height: 660px; }
+  .m2-meta { padding: 14px 20px; display: flex; gap: 10px; flex-wrap: wrap; border-bottom: 1px solid var(--line); }
+  .m2-meta .f { flex: 1; min-width: 130px; }
+  .m2-meta .flabel { display: block; margin-bottom: 5px; }
+  .m2-main { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 14px 20px 0; }
+  .m2-split { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; min-height: 140px; }
+  .m2-split textarea { height: 100%; font-family: var(--mono); font-size: 12.5px; }
+  .m2-split .pv { border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; overflow-y: auto; background: var(--panel-2); }
+  .m2-split .pv-head { font-family: var(--mono); font-size: 10px; letter-spacing: .1em; color: var(--muted); margin-bottom: 6px; }
+</style>
+</head>
+<body>
+  <h1>新建记忆 · 大弹框改版（实时预览）</h1>
+  <p class="sub">弹框显著放大，编辑与 Markdown 渲染同屏，导入 .md 后右侧/下方即时可读（不再因 160 字阈值隐藏预览）。</p>
+  <div class="row">
+
+    <!-- ================= 方案一：左右分栏 ================= -->
+    <div class="frame">
+      <div class="v-head"><span class="v-tag">方案一</span><span class="v-name">左右分栏 — 编辑 | 实时预览（760×600）</span></div>
+      <div class="bg-page">
+        <div class="bg-toolbar">
+          <div class="bg-seg"><button class="on">全部</button><button>全局约定</button><button>我的</button></div>
+          <button class="bg-new">＋ 新建记忆</button>
+        </div>
+        <div class="bg-grid">
+          <div class="bg-card k-preference"><span class="tag">偏好 · 我的所有任务</span><p class="quote">回复保持简洁，先结论后细节。</p></div>
+          <div class="bg-card k-lesson"><span class="tag">教训 · 指定任务</span><p class="quote">改动打包配置前先在测试环境验证。</p></div>
+        </div>
+      </div>
+      <div class="overlay-dim">
+        <div class="big m1" id="m1">
+          <div class="big-head">
+            <span class="big-title">新建记忆</span>
+            <button class="x-btn">×</button>
+          </div>
+          <div class="m1-main">
+            <div class="m1-edit">
+              <div class="m1-row2">
+                <div><span class="flabel">作用域</span><select id="m1-scope"><option>我的</option><option>全局约定</option></select></div>
+                <div><span class="flabel">类型</span><select id="m1-kind"><option value="fact" selected>事实</option><option value="preference">偏好</option><option value="lesson">教训</option><option value="episode">经历</option></select></div>
+              </div>
+              <div>
+                <span class="flabel">生效范围</span>
+                <div class="seg" id="m1-seg" style="margin-top:6px">
+                  <button class="on">我的所有任务</button><button>指定任务</button><button>指定 Agent</button>
+                </div>
+              </div>
+              <textarea id="m1-text"># 媒体生成模型选型
+
+MPS 后端对 **图片** 模型支持成熟，可直接调用。
+
+## 不可行项
+- ❌ LTX-Video（MLX）
+  要求 32GB 统一内存以上，16GB 不够。
+
+## 结论
+优先走 MPS 图片链路。</textarea>
+            </div>
+            <div class="m1-preview">
+              <div class="m1-preview-head"><span class="flabel">实时预览</span></div>
+              <div class="md-body" id="m1-pv"></div>
+            </div>
+          </div>
+          <div class="big-foot">
+            <button class="btn-ghost">导入 Markdown</button>
+            <span class="flabel" id="m1-meta">事实 · 我的所有任务</span>
+            <button class="btn-primary">写入记忆</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 方案二：上编辑下预览 ================= -->
+    <div class="frame">
+      <div class="v-head"><span class="v-tag">方案二</span><span class="v-name">上编辑 / 下预览（720×660）</span></div>
+      <div class="bg-page">
+        <div class="bg-toolbar">
+          <div class="bg-seg"><button class="on">全部</button><button>全局约定</button><button>我的</button></div>
+          <button class="bg-new">＋ 新建记忆</button>
+        </div>
+        <div class="bg-grid">
+          <div class="bg-card k-preference"><span class="tag">偏好 · 我的所有任务</span><p class="quote">回复保持简洁，先结论后细节。</p></div>
+          <div class="bg-card k-lesson"><span class="tag">教训 · 指定任务</span><p class="quote">改动打包配置前先在测试环境验证。</p></div>
+        </div>
+      </div>
+      <div class="overlay-dim">
+        <div class="big m2" id="m2">
+          <div class="big-head">
+            <span class="big-title">新建记忆</span>
+            <button class="x-btn">×</button>
+          </div>
+          <div class="m2-meta">
+            <div class="f"><span class="flabel">作用域</span><select id="m2-scope"><option>我的</option><option>全局约定</option></select></div>
+            <div class="f"><span class="flabel">类型</span><select id="m2-kind"><option value="fact" selected>事实</option><option value="preference">偏好</option><option value="lesson">教训</option><option value="episode">经历</option></select></div>
+            <div class="f"><span class="flabel">生效范围</span>
+              <div class="seg" id="m2-seg" style="margin-top:5px"><button class="on">所有任务</button><button>指定任务</button><button>指定 Agent</button></div>
+            </div>
+          </div>
+          <div class="m2-main">
+            <div class="m2-split">
+              <textarea id="m2-text"># 媒体生成模型选型
+
+MPS 后端对 **图片** 模型支持成熟，可直接调用。
+
+## 不可行项
+- ❌ LTX-Video（MLX）
+  要求 32GB 统一内存以上，16GB 不够。
+
+## 结论
+优先走 MPS 图片链路。</textarea>
+              <div class="pv"><div class="pv-head">实时预览</div><div class="md-body" id="m2-pv"></div></div>
+            </div>
+          </div>
+          <div class="big-foot">
+            <button class="btn-ghost">导入 Markdown</button>
+            <span class="flabel" id="m2-meta">事实 · 我的所有任务</span>
+            <button class="btn-primary">写入记忆</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+<script>
+  const KIND_BAR = { preference: "var(--signal)", lesson: "var(--copper)", episode: "var(--amber)", fact: "var(--muted)" };
+  function escapeHtml(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+  // 极简 md → html（仅做 demo 渲染：标题/二级/列表/加粗/段落），真实实现由项目 MarkdownPreview(react-markdown) 承担
+  function renderMd(t){
+    const lines = t.split("\n"); let html=""; let inUl=false;
+    const closeUl=()=>{if(inUl){html+="</ul>";inUl=false;}};
+    for(let raw of lines){ let l=raw;
+      if(/^#{1}\s/.test(l)){closeUl();html+=`<h1>${inline(l.replace(/^#\s/,""))}</h1>`;}
+      else if(/^#{2}\s/.test(l)){closeUl();html+=`<h2>${inline(l.replace(/^##\s/,""))}</h2>`;}
+      else if(/^[-*]\s/.test(l)){ if(!inUl){html+="<ul>";inUl=true;} html+=`<li>${inline(l.replace(/^[-*]\s/,""))}</li>`;}
+      else if(l.trim()===""){closeUl();}
+      else {closeUl();html+=`<p>${inline(l)}</p>`;}
+    } closeUl(); return html;
+  }
+  function inline(s){return escapeHtml(s).replace(/\*\*([^*]+)\*\*/g,"<strong>$1</strong>");}
+
+  function wire(id){
+    const bar = document.getElementById(id==="m1"?"m1":"m2");
+    const kind = document.getElementById(id+"-kind");
+    const scope = document.getElementById(id+"-scope");
+    const seg = document.getElementById(id+"-seg");
+    const text = document.getElementById(id+"-text");
+    const pv = document.getElementById(id+"-pv");
+    const meta = document.getElementById(id+"-meta");
+    function sync(){
+      bar.style.setProperty("--bar", KIND_BAR[kind.value]);
+      pv.innerHTML = renderMd(text.value);
+      const isUser = scope.value==="我的";
+      const tgt = isUser ? seg.querySelector(".on").textContent.trim() : "全员所有任务";
+      meta.textContent = `${kind.options[kind.selectedIndex].text} · ${isUser?"我的 · ":""}${tgt}`;
+    }
+    kind.onchange=sync; scope.onchange=sync; text.oninput=sync;
+    seg.querySelectorAll("button").forEach(b=>b.onclick=()=>{seg.querySelectorAll("button").forEach(x=>x.classList.remove("on"));b.classList.add("on");sync();});
+    sync();
+  }
+  wire("m1"); wire("m2");
+</script>
+</body>
+</html>

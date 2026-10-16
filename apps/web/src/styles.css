@@ -1857,9 +1857,112 @@ textarea {
   border-radius: var(--radius);
 }
 
+/* 卡片 footer 内的圆形删除钮 */
+.mission-del.round {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  font-size: 11px;
+  line-height: 1;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .mission-del:hover {
   color: var(--danger);
   border-color: rgba(255, 107, 107, 0.5);
+}
+
+/* 任务卡片 footer：协作者头像堆叠（方案三，Figma/Notion 协作范式） */
+.mission[role="button"] {
+  cursor: pointer;
+}
+.mission-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 0.15rem;
+}
+.foot-x {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.avstack {
+  display: flex;
+  align-items: center;
+}
+.avatar {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  font-size: 9px;
+  color: #fff;
+  border: 2px solid var(--panel);
+  margin-left: -6px;
+}
+.avatar:first-child {
+  margin-left: 0;
+}
+.av-a { background: #3b5bdb; }
+.av-b { background: #0e9f6e; }
+.av-c { background: #b7791f; }
+[data-theme="ink"] .av-a { background: #7b96f0; }
+[data-theme="ink"] .av-b { background: #3fd68f; }
+.av-more {
+  background: var(--panel-2);
+  color: var(--muted);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.av-empty {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  opacity: 0.7;
+}
+.add-dot {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px dashed var(--line-hot);
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.add-dot:hover {
+  border-color: var(--signal);
+  color: var(--signal);
+}
+
+/* 任务列表页共享管理弹窗 */
+.share-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 14, 12, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 80;
+  animation: room-drawer-in 0.18s ease;
+}
+
+.share-modal {
+  width: min(420px, calc(100vw - 2rem));
+  max-height: min(560px, calc(100vh - 4rem));
+  overflow-y: auto;
+  padding: 1rem;
 }
 
 .room-layout {
@@ -1928,6 +2031,59 @@ textarea {
     opacity: 1;
     transform: none;
   }
+}
+
+/* 任务共享面板：成员列表 + 搜索添加 */
+.share-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0.5rem 0;
+}
+.share-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--line, rgba(128, 128, 128, 0.25));
+  border-radius: 8px;
+}
+.share-name {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  min-width: 0;
+  font-size: 0.82rem;
+}
+.share-name code {
+  font-size: 0.7rem;
+  opacity: 0.65;
+}
+.share-tag {
+  font-size: 0.68rem;
+  font-style: normal;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid var(--line, rgba(128, 128, 128, 0.35));
+  opacity: 0.8;
+}
+.share-search {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed var(--line, rgba(128, 128, 128, 0.3));
+}
+.share-search-input {
+  width: 100%;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--line, rgba(128, 128, 128, 0.35));
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font-size: 0.82rem;
 }
 .panel-label.row-between {
   display: flex;
@@ -3012,6 +3168,317 @@ textarea {
 .mem-card p {
   margin: 0.45rem 0;
   line-height: 1.45;
+}
+
+/* ===== 记忆库看板（方案三）：类型色条 + 衬线引语 + 弹窗写入 ===== */
+.mem-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+.mem-seg {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.mem-seg button {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.75rem;
+  padding: 0.3rem 0.75rem;
+}
+.mem-seg button.on {
+  background: var(--signal-dim);
+  color: var(--signal);
+}
+.mem-chip {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.06em;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 99px;
+  padding: 0.15rem 0.6rem;
+}
+.mem-chip.on {
+  color: var(--signal);
+  border-color: var(--signal);
+}
+.mem-search {
+  margin-left: auto;
+  width: 200px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 0.3rem 0.6rem;
+  font-size: 0.78rem;
+  outline: none;
+}
+.mem-search:focus {
+  border-color: var(--signal);
+}
+.memory-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  align-content: start;
+}
+.memory-card {
+  position: relative;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.85rem 1rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+.memory-card:hover {
+  border-color: var(--line-hot);
+}
+.memory-card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.75rem;
+  bottom: 0.75rem;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+}
+.memory-card.k-preference::before {
+  background: var(--signal);
+}
+.memory-card.k-lesson::before {
+  background: var(--copper);
+}
+.memory-card.k-episode::before {
+  background: var(--amber, #b7791f);
+}
+[data-theme="ink"] .memory-card.k-episode::before {
+  background: #d9a441;
+}
+.memory-card.k-fact::before {
+  background: var(--muted);
+}
+.mem-card-top {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+.kind-tag {
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+.mem-card-scope {
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  color: var(--muted);
+  opacity: 0.75;
+}
+.memory-quote {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 0.85rem;
+  line-height: 1.75;
+  flex: 1;
+  text-wrap: pretty;
+}
+.mem-card-meta {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  color: var(--muted);
+}
+.mem-del {
+  opacity: 0;
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  transition: opacity 0.15s ease;
+}
+.memory-card:hover .mem-del {
+  opacity: 1;
+}
+.mem-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 14, 12, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 80;
+}
+/* ===== 新建记忆弹框（方案一：左右分栏大弹框） ===== */
+.mem-modal {
+  width: min(1100px, calc(100vw - 3rem));
+  height: min(860px, calc(100vh - 3rem));
+  max-height: none;
+  overflow: hidden;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.mem-modal .panel-label {
+  padding: 1rem 1.25rem;
+}
+.mem-modal-main {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  min-height: 0;
+}
+/* 左：编辑区 */
+.mem-edit {
+  padding: 1rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  overflow-y: auto;
+  border-right: 1px solid var(--line);
+}
+.mem-modal label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+.mem-content-label {
+  flex: 1;
+  min-height: 0;
+}
+.mem-edit textarea {
+  flex: 1;
+  min-height: 180px;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  line-height: 1.7;
+  resize: none;
+}
+.mem-modal textarea {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  padding: 0.45rem 0.6rem;
+  font: inherit;
+  font-size: 0.8rem;
+  resize: vertical;
+  outline: none;
+}
+.mem-modal textarea:focus {
+  border-color: var(--signal);
+}
+.mem-modal-row2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.65rem;
+}
+/* 右：实时预览 */
+.mem-preview-pane {
+  padding: 1rem 1.25rem;
+  overflow-y: auto;
+}
+.mem-preview-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.6rem;
+}
+.flabel {
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+.mem-preview-head::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+.mem-preview-empty {
+  font-size: 0.75rem;
+  color: var(--muted);
+  line-height: 1.6;
+  margin: 0;
+}
+/* 底栏 */
+.mem-modal-foot {
+  padding: 0.8rem 1.25rem;
+  border-top: 1px solid var(--line);
+  background: var(--panel-2);
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+.mem-modal-foot .btn-ghost {
+  margin-right: auto;
+}
+.mem-foot-meta {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.mem-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 1.4rem;
+  transform: translateX(-50%);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  font-size: 0.72rem;
+  color: var(--muted);
+  padding: 0.35rem 1rem;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+  z-index: 90;
+}
+.mem-toast u {
+  color: var(--signal);
+  cursor: pointer;
+  margin-left: 0.4rem;
+}
+
+/* md 导入行 + 导入预览 + 记忆详情正文 */
+.mem-import-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.mem-preview {
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 0.5rem 0.7rem;
+  font-size: 0.75rem;
+  background: var(--panel-2);
+}
+.mem-detail-body {
+  max-height: 40vh;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.6rem 0.8rem;
+  font-size: 0.8rem;
+  background: var(--panel-2);
+}
+.mem-detail-label {
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: 0.35rem;
 }
 
 .main-nav {

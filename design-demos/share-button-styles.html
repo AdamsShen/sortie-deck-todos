@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="paper">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>共享按钮 · 样式变体 — Sortie Deck</title>
+<style>
+/* ===== 真实主题 token（摘自 apps/web/src/styles.css） ===== */
+:root, [data-theme="paper"] {
+  --void: #f6f9fc; --deep: #edf1f7; --panel: #ffffff; --panel-2: #f8fafd;
+  --line: #e3e8ee; --line-hot: #cbd2dc; --text: #1a1f36; --muted: #697386;
+  --signal: #0e9f6e; --signal-dim: #dff2e9; --copper: #3b5bdb; --danger: #c9503a;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --font: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+  --radius: 10px;
+}
+[data-theme="ink"] {
+  --void: #171a21; --deep: #1c2029; --panel: #20242d; --panel-2: #262b35;
+  --line: #32363f; --line-hot: #454a55; --text: #ece9e1; --muted: #8b8a80;
+  --signal: #3fd68f; --signal-dim: #24422f; --copper: #7b96f0; --danger: #e57760;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 40px 48px 64px;
+  font-family: var(--font); color: var(--text); background: var(--void);
+  transition: background-color .3s ease, color .3s ease;
+}
+
+/* ===== 页头 ===== */
+.topbar { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
+h1 { font-size: 17px; margin: 0; letter-spacing: .02em; }
+.sub { font-family: var(--mono); font-size: 11px; color: var(--muted); margin: 4px 0 28px; }
+.theme-toggle {
+  font-family: var(--mono); font-size: 11px; color: var(--muted);
+  border: 1px solid var(--line); background: var(--panel); border-radius: 99px;
+  padding: 4px 12px; cursor: pointer;
+}
+
+/* ===== 变体区块 ===== */
+.variant { margin-bottom: 36px; }
+.v-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+.v-tag {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .1em;
+  color: var(--signal); border: 1px solid var(--signal-dim);
+  border-radius: 99px; padding: 1px 8px;
+}
+[data-theme="ink"] .v-tag { color: var(--signal); border-color: color-mix(in srgb, var(--signal) 35%, transparent); }
+.v-name { font-size: 13px; font-weight: 600; }
+.v-note { font-size: 12px; color: var(--muted); margin: 0 0 12px; line-height: 1.6; }
+.cards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; max-width: 980px; }
+.state-label { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-bottom: 6px; }
+
+/* ===== 任务卡（复刻 .mission / .mission-top / .st） ===== */
+.mission-wrap { position: relative; display: grid; grid-template-columns: 1fr auto; gap: .25rem; align-items: stretch; }
+.mission {
+  text-align: left; padding: .8rem; background: var(--panel);
+  border: 1px solid var(--line); border-radius: var(--radius);
+  display: flex; flex-direction: column; gap: .35rem; width: 100%;
+  font: inherit; color: inherit; cursor: pointer;
+  transition: border-color .15s ease, background-color .15s ease;
+}
+.mission:hover { border-color: var(--line-hot); }
+.mission.active { border-color: var(--signal); background: linear-gradient(160deg, color-mix(in srgb, var(--signal) 8%, transparent), var(--panel)); }
+.mission-top { display: flex; justify-content: space-between; gap: .5rem; align-items: center; }
+.mission-id, .mission-stage { font-family: var(--mono); font-size: .65rem; color: var(--muted); }
+.mission strong { font-size: .82rem; font-weight: 600; }
+.st {
+  font-family: var(--mono); font-size: .6rem; letter-spacing: .08em;
+  border: 1px solid var(--line); padding: .15rem .4rem; color: var(--muted);
+  background: color-mix(in srgb, var(--muted) 10%, transparent);
+  border-color: transparent; border-radius: 99px; white-space: nowrap;
+}
+.st.pending { background: color-mix(in srgb, var(--copper) 14%, transparent); color: var(--copper); }
+
+/* 删除钮（现状列） */
+.mission-del {
+  border: 1px solid var(--line); background: var(--panel); color: var(--muted);
+  width: 28px; border-radius: var(--radius); font-size: 13px; cursor: pointer;
+}
+.mission-del:hover { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 50%, transparent); }
+.mission-side { display: flex; flex-direction: column; gap: .25rem; }
+
+/* ===== 方案一 · 顶行徽章 ===== */
+.st.share-plain { background: transparent; border-color: var(--line); color: var(--muted); }
+.st.share-plain em { font-style: normal; margin-left: .3em; color: var(--text); }
+.st.share-plain.zero { opacity: .55; }
+.st.share-plain:hover { border-color: var(--signal); color: var(--signal); }
+
+/* ===== 方案二 · meta 行内联 chip ===== */
+.meta-row { display: flex; align-items: center; gap: .45em; font-family: var(--mono); font-size: .65rem; color: var(--muted); flex-wrap: wrap; }
+.meta-share {
+  display: inline-flex; align-items: center; gap: .35em;
+  font: inherit; color: var(--muted);
+  border: none; background: transparent; padding: 0; cursor: pointer;
+  border-bottom: 1px dashed var(--line-hot); line-height: 1.4;
+}
+.meta-share em { font-style: normal; color: var(--text); }
+.meta-share:hover { color: var(--signal); border-bottom-color: var(--signal); }
+.meta-share:hover em { color: var(--signal); }
+.meta-share.zero em { color: var(--muted); opacity: .6; }
+
+/* ===== 方案三 · 协作者头像堆叠 ===== */
+.mission-foot { display: flex; align-items: center; justify-content: space-between; margin-top: .15rem; }
+.avstack { display: flex; align-items: center; }
+.avatar {
+  width: 20px; height: 20px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-family: var(--mono); font-size: 9px; color: #fff;
+  border: 2px solid var(--panel); margin-left: -6px;
+}
+.avatar:first-child { margin-left: 0; }
+.av-a { background: #3b5bdb; } .av-b { background: #0e9f6e; } .av-c { background: #b7791f; }
+.av-more { background: var(--panel-2); color: var(--muted); border: 2px solid var(--panel); box-shadow: inset 0 0 0 1px var(--line); }
+.av-empty {
+  font-family: var(--mono); font-size: 10px; color: var(--muted); opacity: .7;
+}
+.add-dot {
+  width: 20px; height: 20px; border-radius: 50%; margin-left: 6px;
+  border: 1px dashed var(--line-hot); background: transparent; color: var(--muted);
+  font-size: 11px; line-height: 1; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.add-dot:hover { border-color: var(--signal); color: var(--signal); }
+.foot-x { display: flex; align-items: center; gap: 6px; }
+
+/* ===== 方案四 · hover 浮现工具组 ===== */
+.mission.hoverable { position: relative; }
+.hover-tools {
+  position: absolute; top: 8px; right: 8px; display: flex; gap: 4px;
+  opacity: 0; transform: translateY(-2px);
+  transition: opacity .15s ease, transform .15s ease;
+}
+.mission:hover .hover-tools, .mission.force-hover .hover-tools { opacity: 1; transform: none; }
+.tool-btn {
+  width: 22px; height: 22px; border-radius: 50%;
+  border: 1px solid var(--line); background: var(--panel);
+  color: var(--muted); font-size: 11px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-family: var(--mono); font-style: normal;
+}
+.tool-btn:hover { border-color: var(--signal); color: var(--signal); }
+.tool-btn.del:hover { border-color: var(--danger); color: var(--danger); }
+.badge-count {
+  position: absolute; top: -4px; right: -4px; min-width: 13px; height: 13px;
+  border-radius: 99px; background: var(--signal); color: #fff;
+  font-family: var(--mono); font-size: 8px; line-height: 13px; text-align: center; padding: 0 3px;
+}
+
+/* ===== 现状对照（反例隔离） ===== */
+.compare { border: 1px dashed var(--line-hot); border-radius: var(--radius); padding: 14px; max-width: 980px; }
+.compare-tag { font-family: var(--mono); font-size: 10px; color: var(--danger); letter-spacing: .1em; margin-bottom: 10px; }
+.compare .cards { grid-template-columns: 1fr; }
+
+/* ===== 现状共享钮（对照用） ===== */
+.mission-share {
+  border: 1px solid var(--line); background: var(--panel); color: var(--muted);
+  border-radius: var(--radius); font-family: var(--mono); font-size: .6rem;
+  padding: .15rem .4rem; display: flex; align-items: center; justify-content: center;
+  gap: .25rem; white-space: nowrap; cursor: pointer;
+}
+.mission-share em { font-style: normal; color: var(--signal); }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>共享入口 · 四个样式方向</h1>
+  <button class="theme-toggle" onclick="toggleTheme()">切换 paper / ink</button>
+</div>
+<p class="sub">真实任务卡上下文 · 全部使用 Sortie Deck 主题变量 · hover 可交互</p>
+
+<!-- 方案一 -->
+<section class="variant">
+  <div class="v-head"><span class="v-tag">方案一</span><span class="v-name">顶行徽章 — 与状态胶囊同语言</span></div>
+  <p class="v-note">最贴现有 system：「共享 N」做成与「待执行」同级的 mono 胶囊，放进卡片顶行右侧。0 人时半透明弱化，卡片右列只剩 ×，视觉零噪音。改动最小、最不会出错。</p>
+  <div class="cards">
+    <div>
+      <div class="state-label">未共享</div>
+      <div class="mission-wrap">
+        <div class="mission active">
+          <div class="mission-top">
+            <span class="mission-id">ini_1708d51…</span>
+            <span style="display:flex;gap:6px;">
+              <span class="st share-plain zero">共享<em>0</em></span>
+              <span class="st pending">待执行</span>
+            </span>
+          </div>
+          <strong>继续</strong>
+          <span class="mission-stage">ga_verify · 12 人在小队</span>
+        </div>
+        <button class="mission-del">×</button>
+      </div>
+    </div>
+    <div>
+      <div class="state-label">已共享 2 人</div>
+      <div class="mission-wrap">
+        <div class="mission">
+          <div class="mission-top">
+            <span class="mission-id">ini_98a72d…</span>
+            <span style="display:flex;gap:6px;">
+              <span class="st share-plain">共享<em>2</em></span>
+              <span class="st pending">待执行</span>
+            </span>
+          </div>
+          <strong>客户通知中心 V2</strong>
+          <span class="mission-stage">eng_tech_design · 12 人在小队</span>
+        </div>
+        <button class="mission-del">×</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 方案二 -->
+<section class="variant">
+  <div class="v-head"><span class="v-tag">方案二</span><span class="v-name">meta 行内联 — 信息归位</span></div>
+  <p class="v-note">共享人数本来就是卡的元信息，把它并入底部 meta 行（虚线下划线示意可点），右侧只留 ×。卡片右上完全干净，信息密度最高的一版。</p>
+  <div class="cards">
+    <div>
+      <div class="state-label">未共享</div>
+      <div class="mission-wrap">
+        <div class="mission active">
+          <div class="mission-top">
+            <span class="mission-id">ini_1708d51…</span>
+            <span class="st pending">待执行</span>
+          </div>
+          <strong>继续</strong>
+          <span class="meta-row">ga_verify · 12 人在小队 · <button class="meta-share zero">共享 <em>0</em></button></span>
+        </div>
+        <button class="mission-del">×</button>
+      </div>
+    </div>
+    <div>
+      <div class="state-label">已共享 2 人</div>
+      <div class="mission-wrap">
+        <div class="mission">
+          <div class="mission-top">
+            <span class="mission-id">ini_98a72d…</span>
+            <span class="st pending">待执行</span>
+          </div>
+          <strong>客户通知中心 V2</strong>
+          <span class="meta-row">eng_tech_design · 12 人在小队 · <button class="meta-share">共享 <em>2</em></button></span>
+        </div>
+        <button class="mission-del">×</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 方案三 -->
+<section class="variant">
+  <div class="v-head"><span class="v-tag">方案三</span><span class="v-name">协作者头像堆叠 — Figma / Notion 范式</span></div>
+  <p class="v-note">卡片底部加一条 footer：左侧被共享账号首字母头像堆叠（谁在协作一眼可见），右侧「＋」虚线圆钮添加。协作语义最直观的一版，novel 但模式被广泛认知。</p>
+  <div class="cards">
+    <div>
+      <div class="state-label">未共享</div>
+      <div class="mission-wrap">
+        <div class="mission active">
+          <div class="mission-top">
+            <span class="mission-id">ini_1708d51…</span>
+            <span class="st pending">待执行</span>
+          </div>
+          <strong>继续</strong>
+          <span class="mission-stage">ga_verify · 12 人在小队</span>
+          <div class="mission-foot">
+            <span class="avstack"><span class="av-empty">尚未共享</span></span>
+            <span class="foot-x">
+              <button class="add-dot" title="共享任务">＋</button>
+              <button class="mission-del" style="width:20px;height:20px;border-radius:50%;font-size:11px;">×</button>
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="state-label">已共享 3 人</div>
+      <div class="mission-wrap">
+        <div class="mission">
+          <div class="mission-top">
+            <span class="mission-id">ini_98a72d…</span>
+            <span class="st pending">待执行</span>
+          </div>
+          <strong>客户通知中心 V2</strong>
+          <span class="mission-stage">eng_tech_design · 12 人在小队</span>
+          <div class="mission-foot">
+            <span class="avstack">
+              <span class="avatar av-a" title="operator">O</span>
+              <span class="avatar av-b" title="qa_lead">Q</span>
+              <span class="avatar av-c" title="dev_web">D</span>
+              <span class="avatar av-more">+1</span>
+            </span>
+            <span class="foot-x">
+              <button class="add-dot" title="共享任务">＋</button>
+              <button class="mission-del" style="width:20px;height:20px;border-radius:50%;font-size:11px;">×</button>
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 方案四 -->
+<section class="variant">
+  <div class="v-head"><span class="v-tag">方案四</span><span class="v-name">hover 浮现工具组 — 平时零噪音</span></div>
+  <p class="v-note">默认卡片干净，hover 时右上角浮现圆形工具组（共享 / 删除）；有共享成员时共享钮带绿色计数角标。右图第一张卡已用 force-hover 固定展示浮现态。</p>
+  <div class="cards">
+    <div>
+      <div class="state-label">未共享（hover 态已固定展示）</div>
+      <div class="mission-wrap">
+        <div class="mission hoverable force-hover">
+          <span class="hover-tools">
+            <button class="tool-btn" title="共享任务">＋</button>
+            <button class="tool-btn del" title="删除">×</button>
+          </span>
+          <div class="mission-top">
+            <span class="mission-id">ini_1708d51…</span>
+            <span class="st pending">待执行</span>
+          </div>
+          <strong>继续</strong>
+          <span class="mission-stage">ga_verify · 12 人在小队</span>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="state-label">已共享 2 人（默认态）</div>
+      <div class="mission-wrap">
+        <div class="mission hoverable">
+          <span class="hover-tools">
+            <button class="tool-btn" title="共享任务" style="position:relative;">＋<span class="badge-count">2</span></button>
+            <button class="tool-btn del" title="删除">×</button>
+          </span>
+          <div class="mission-top">
+            <span class="mission-id">ini_98a72d…</span>
+            <span class="st pending">待执行</span>
+          </div>
+          <strong>客户通知中心 V2</strong>
+          <span class="mission-stage">eng_tech_design · 12 人在小队</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 现状对照 -->
+<section class="compare">
+  <div class="compare-tag">现状对照 · 不要这样做</div>
+  <div class="cards">
+    <div class="mission-wrap">
+      <div class="mission">
+        <div class="mission-top">
+          <span class="mission-id">ini_1708d51…</span>
+          <span class="st pending">待执行</span>
+        </div>
+        <strong>继续</strong>
+        <span class="mission-stage">ga_verify · 12 人在小队</span>
+      </div>
+      <div class="mission-side">
+        <button class="mission-share">共享<em>0</em></button>
+        <button class="mission-del">×</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+function toggleTheme() {
+  const el = document.documentElement;
+  el.dataset.theme = el.dataset.theme === "paper" ? "ink" : "paper";
+}
+// 支持 #ink 直接以暗色打开（截图/分享用）
+if (location.hash === "#ink") document.documentElement.dataset.theme = "ink";
+</script>
+</body>
+</html>

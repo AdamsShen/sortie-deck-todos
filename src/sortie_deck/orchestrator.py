@@ -101,11 +101,24 @@ def mission_memory_brief(*, initiative_id: str, stage: str, user_id: str | None 
     """
     if _memory_store is None:
         return ""
+    # user 域记忆跟随任务创建者：stage 执行链路没有"当前操作账号"，用 created_by 兜底
+    query = None
+    if not user_id:
+        try:
+            ini = get_orchestrator().get(initiative_id)
+            user_id = (getattr(ini, "created_by", None) or "") or None
+        except Exception:  # noqa: BLE001 — memory must never break a stage run
+            user_id = None
     try:
+        # 检索打分用任务 brief+title：stage 注入也保持相关性排序
+        if query is None:
+            ini = get_orchestrator().get(initiative_id)
+            query = f"{ini.title}\n{ini.brief}"
         return _memory_store.context_block(
             user_id=user_id,
             mission_id=initiative_id,
             stage=stage,
+            query=query,
         )
     except Exception:  # noqa: BLE001 — memory must never break a stage run
         return ""
@@ -899,11 +912,18 @@ class Orchestrator:
         mem_brief = ""
         if _memory_store is not None:
             agent_ids = list((req.role_agents or {}).values())
-            mem_brief = _memory_store.context_block(
+            # Plan-time 检索绑定：按 brief+title 相关性选 top-K，仅注入简介行；
+            # 绑定 ids 落 meta 供任务详情页「记忆」面板展示
+            mem_entries = _memory_store.context_candidates(
+                user_id=ini.created_by,  # 创建者的 user 域个人偏好随任务注入
                 mission_id=ini.id,
                 agent_ids=agent_ids,
+                query=f"{req.title}\n{req.brief}",
                 limit=8,
             )
+            mem_brief = _memory_store.render_block(mem_entries)
+            if mem_entries:
+                ini.meta["memory_ids"] = [e.id for e in mem_entries]
             if mem_brief:
                 ini.meta["memory_brief"] = mem_brief
         toolkit_lines = []
@@ -1177,6 +1197,20 @@ class Orchestrator:
             self._bind_mission_context_files(ini)
         ini.status = InitiativeStatus.RUNNING
         self.store.upsert(ini)
+        # 记忆包落盘：索引 + 单条全文写入任务目录（Agent 执行时按需读取）
+        if _memory_store is not None:
+            try:
+                from sortie_deck.mission_memory import write_memory_pack
+
+                agent_ids = [r.id for r in ini.roles]
+                write_memory_pack(
+                    _memory_store,
+                    initiative_id=ini.id,
+                    user_id=ini.created_by,
+                    agent_ids=agent_ids,
+                )
+            except Exception:  # noqa: BLE001 — memory must never block start
+                logger.info("任务记忆包写入失败（忽略）: %s", ini.id)
         await self._post_room(
             ini.id,
             text=(
@@ -1459,11 +1493,13 @@ class Orchestrator:
             )
         else:
             # Agent discussion reply (mention-aware)
-            await self._maybe_agent_discuss(ini, text, author_name)
+            await self._maybe_agent_discuss(ini, text, author_name, author_id=author_id)
 
         return msg, updated or self.get(initiative_id)
 
-    async def _maybe_agent_discuss(self, ini: Initiative, text: str, author_name: str) -> None:
+    async def _maybe_agent_discuss(
+        self, ini: Initiative, text: str, author_name: str, author_id: str | None = None
+    ) -> None:
         """Lightweight room discussion — only roles opted into discussing reply."""
         mention = re.search(
             r"@(product|design|eng_ios|eng_android|eng_web|eng_backend|eng_agent|eng|qa|deploy|all)\b",
@@ -1496,7 +1532,7 @@ class Orchestrator:
             return
 
         for role in responders[:2]:
-            reply = await self._discussion_reply(ini, role, text, author_name)
+            reply = await self._discussion_reply(ini, role, text, author_name, author_id=author_id)
             await self._post_room(
                 ini.id,
                 text=reply,
@@ -1508,7 +1544,8 @@ class Orchestrator:
             )
 
     async def _discussion_reply(
-        self, ini: Initiative, role: RoleAgent, text: str, author_name: str
+        self, ini: Initiative, role: RoleAgent, text: str, author_name: str,
+        author_id: str | None = None,
     ) -> str:
         from sortie_deck.room_llm import (
             craft_discussion_reply_llm,
@@ -1519,7 +1556,11 @@ class Orchestrator:
             memory_block = ""
             if _memory_store is not None:
                 try:
-                    memory_block = _memory_store.context_block(mission_id=ini.id)
+                    # 发言者本人未登录态缺失时退回任务创建者，保证 user 域记忆有归属
+                    memory_block = _memory_store.context_block(
+                        mission_id=ini.id,
+                        user_id=author_id or ini.created_by,
+                    )
                 except Exception:
                     memory_block = ""
             llm_reply = await craft_discussion_reply_llm(
