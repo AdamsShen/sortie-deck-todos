@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   approveForgeDraft,
+  api,
   listForgeDrafts,
   proposeForgeDraft,
   rejectForgeDraft,
   updateForgeDraft,
 } from "../api";
 import { t } from "../i18n";
+import { SparkleIcon } from "./ChatComposer";
 import type { ForgeDraft, Lang } from "../types";
 
 type Props = {
@@ -28,6 +30,12 @@ export function ForgeReview({ token, lang }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  // 能力输入框「增强提示词」：优化中 spinner；成功覆盖后保留原文供撤销
+  const [enhancing, setEnhancing] = useState(false);
+  const [enhancePrev, setEnhancePrev] = useState<string | null>(null);
+  // 草稿人设 persona 增强：记录当前优化的草稿 id 与原文（撤销用）
+  const [enhancingPersonaId, setEnhancingPersonaId] = useState("");
+  const [personaPrev, setPersonaPrev] = useState<{ id: string; text: string } | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -65,6 +73,70 @@ export function ForgeReview({ token, lang }: Props) {
     } finally {
       setBusy(false);
     }
+  }
+
+  // 能力描述「增强提示词」：LLM 把关键词扩写为清晰能力描述，覆盖输入框，可撤销
+  async function enhanceCapability() {
+    if (enhancing || !capability.trim()) return;
+    const original = capability;
+    setEnhancing(true);
+    try {
+      const d = await api<{ text: string }>("/api/prompts/enhance", {
+        token,
+        method: "POST",
+        body: JSON.stringify({ scene: "forge", text: original }),
+      });
+      if (d.text && d.text !== original) {
+        setEnhancePrev(original);
+        setCapability(d.text);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setEnhancing(false);
+    }
+  }
+
+  function undoEnhance() {
+    if (enhancePrev === null) return;
+    setCapability(enhancePrev);
+    setEnhancePrev(null);
+  }
+
+  // 草稿人设「增强提示词」：LLM 把人设改写为专业系统提示，覆盖编辑框，可撤销
+  async function enhancePersona(draftId: string, text: string) {
+    if (enhancingPersonaId || !text.trim()) return;
+    setEnhancingPersonaId(draftId);
+    try {
+      const d = await api<{ text: string }>("/api/prompts/enhance", {
+        token,
+        method: "POST",
+        body: JSON.stringify({ scene: "persona", text }),
+      });
+      if (d.text && d.text !== text) {
+        setPersonaPrev({ id: draftId, text });
+        setEditing((prev) => ({
+          ...prev,
+          [draftId]: { ...(prev[draftId] ?? draftForm(drafts.find((x) => x.id === draftId)!)), persona: d.text },
+        }));
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setEnhancingPersonaId("");
+    }
+  }
+
+  function undoPersona() {
+    if (!personaPrev) return;
+    const draft = drafts.find((x) => x.id === personaPrev.id);
+    if (draft) {
+      setEditing((prev) => ({
+        ...prev,
+        [personaPrev.id]: { ...draftForm(draft), persona: personaPrev.text },
+      }));
+    }
+    setPersonaPrev(null);
   }
 
   async function save(draft: ForgeDraft) {
@@ -122,16 +194,48 @@ export function ForgeReview({ token, lang }: Props) {
             {pending.length} · {t(lang, "pendingReview")}
           </span>
         </div>
-        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+        <div style={{ display: "flex", gap: 8, marginTop: 8, position: "relative" }}>
           <input
             value={capability}
             placeholder="育儿顾问 / stocks research …"
-            onChange={(e) => setCapability(e.target.value)}
+            onChange={(e) => {
+              setCapability(e.target.value);
+              if (enhancePrev !== null) setEnhancePrev(null);
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter") void propose();
             }}
             style={{ flex: 1 }}
           />
+          {/* 增强中浮层：与聊天输入框一致的效果 */}
+          {enhancing ? (
+            <span className="composer-enhance-toast" role="status">
+              <span className="mini-spinner" aria-hidden />
+              {t(lang, "enhanceLoading")}
+            </span>
+          ) : null}
+          {enhancePrev !== null && !enhancing ? (
+            <button
+              className="btn ghost composer-enhance-btn composer-enhance-icon"
+              type="button"
+              onClick={undoEnhance}
+              title={t(lang, "enhanceUndo")}
+              aria-label={t(lang, "enhanceUndo")}
+            >
+              ↺
+            </button>
+          ) : (
+            <button
+              className="btn ghost composer-enhance-btn composer-enhance-icon"
+              type="button"
+              disabled={enhancing || !capability.trim()}
+              onClick={() => void enhanceCapability()}
+              title={t(lang, "enhancePrompt")}
+              aria-label={t(lang, "enhancePrompt")}
+            >
+              {enhancing ? <span className="mini-spinner" aria-hidden /> : <SparkleIcon />}
+            </button>
+          )}
           <button className="btn" type="button" disabled={busy || !capability.trim()} onClick={() => void propose()}>
             {t(lang, "agents")}
           </button>
@@ -166,14 +270,46 @@ export function ForgeReview({ token, lang }: Props) {
                 setEditing({ ...editing, [draft.id]: { ...form, summary: e.target.value } })
               }
             />
-            <textarea
-              value={form.persona}
-              rows={4}
-              style={{ width: "100%", marginTop: 6 }}
-              onChange={(e) =>
-                setEditing({ ...editing, [draft.id]: { ...form, persona: e.target.value } })
-              }
-            />
+            {/* 人设编辑框：右下角浮动增强按钮，增强中显示浮层 */}
+            <div style={{ position: "relative", marginTop: 6 }}>
+              {enhancingPersonaId === draft.id ? (
+                <span className="composer-enhance-toast" role="status">
+                  <span className="mini-spinner" aria-hidden />
+                  {t(lang, "enhanceLoading")}
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  className="btn ghost composer-enhance-btn composer-enhance-icon composer-enhance-corner"
+                  disabled={!form.persona.trim()}
+                  onClick={() => void enhancePersona(draft.id, form.persona)}
+                  title={t(lang, "enhancePrompt")}
+                  aria-label={t(lang, "enhancePrompt")}
+                >
+                  <SparkleIcon />
+                </button>
+              )}
+              {personaPrev?.id === draft.id && enhancingPersonaId !== draft.id && (
+                <button
+                  type="button"
+                  className="btn ghost tiny composer-enhance-btn composer-enhance-corner"
+                  style={{ bottom: "2.8rem" }}
+                  onClick={undoPersona}
+                  title={t(lang, "enhanceUndo")}
+                  aria-label={t(lang, "enhanceUndo")}
+                >
+                  ↺ {t(lang, "enhanceUndo")}
+                </button>
+              )}
+              <textarea
+                value={form.persona}
+                rows={4}
+                style={{ width: "100%" }}
+                onChange={(e) =>
+                  setEditing({ ...editing, [draft.id]: { ...form, persona: e.target.value } })
+                }
+              />
+            </div>
 
             <div className="tiny" style={{ marginTop: 8 }}>
               <div>

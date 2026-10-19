@@ -341,6 +341,26 @@ export function MissionBriefingChat({
     void send(payload?.text ?? input);
   }
 
+  // 「增强提示词」：把输入与最近几轮会话交给 LLM 做规划向优化，失败时 toast 并返回 null（不覆盖）
+  async function enhanceInput(text: string): Promise<string | null> {
+    const ctx = (session?.messages || [])
+      .slice(-6)
+      .map((m) => `${m.role}: ${m.text.slice(0, 200)}`)
+      .join("\n")
+      .slice(0, 4000);
+    try {
+      const d = await api<{ text: string }>("/api/prompts/enhance", {
+        token,
+        method: "POST",
+        body: JSON.stringify({ scene: "briefing", text, context: ctx }),
+      });
+      return d.text;
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+      return null;
+    }
+  }
+
   const waterfall = (session?.events || []).filter((e) =>
     ["waterfall", "tool", "confirm", "done", "plan"].includes(e.kind),
   );
@@ -482,6 +502,10 @@ export function MissionBriefingChat({
         onStop={stop}
         disabled={locked || !session || session?.status === "done"}
         mentions={[]}
+        onEnhance={enhanceInput}
+        enhanceLabel={lang === "zh" ? "增强提示词" : "Enhance prompt"}
+        enhanceUndoLabel={lang === "zh" ? "撤销优化" : "Undo"}
+        enhanceLoadingLabel={lang === "zh" ? "增强中…" : "Enhancing…"}
         commands={[
           { id: "confirm", label: labels.confirm, hint: "confirm plan" },
           { id: "reject", label: labels.reject, hint: "reject plan" },

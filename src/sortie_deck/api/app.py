@@ -57,6 +57,7 @@ from sortie_deck.models import (
 )
 from sortie_deck.orchestrator import Orchestrator, bind_catalogs, get_orchestrator
 from sortie_deck.pipeline import list_tracks, stage_catalog
+from sortie_deck.prompt_enhance import EnhancePromptRequest
 from sortie_deck.roles import RoleSpec, get_role_registry, normalize_role_key
 from sortie_deck.settings import settings
 from sortie_deck.toolkit import (
@@ -487,6 +488,31 @@ async def list_memory(
         m.model_dump(mode="json")
         for m in get_memory().list(scope=scope, scope_id=scope_id, q=q, user_id=user.id)
     ]
+
+
+@app.post("/api/prompts/enhance")
+async def enhance_prompt(
+    req: EnhancePromptRequest, user: PublicUser = Depends(require_user)
+) -> dict[str, str]:
+    """按场景用 LLM 优化用户输入框中的提示词，前端「增强提示词」按钮专用。"""
+    from sortie_deck.prompt_enhance import enhance_prompt as _enhance
+
+    try:
+        enhanced = await _enhance(req)
+    except RuntimeError as exc:
+        if str(exc) == "LLM_NOT_CONFIGURED":
+            raise HTTPException(409, "LLM 未配置，无法优化提示词") from None
+        logger.warning(
+            "提示词优化失败: scene=%s len=%d err=%s: %s", req.scene, len(req.text), type(exc).__name__, exc
+        )
+        raise HTTPException(502, "提示词优化失败，请稍后重试") from None
+    except Exception as exc:  # noqa: BLE001 — LLM 网络等异常统一转 502
+        # err 里带上异常类型：httpx.ReadTimeout 等异常 message 为空，只有类型可定位
+        logger.warning(
+            "提示词优化失败: scene=%s len=%d err=%s: %s", req.scene, len(req.text), type(exc).__name__, exc
+        )
+        raise HTTPException(502, "提示词优化失败，请稍后重试") from None
+    return {"text": enhanced}
 
 
 @app.post("/api/memory")

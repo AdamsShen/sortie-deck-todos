@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type
 import { api, listHarnesses, listMissionShares, listSubRooms, updateInitiativeHarness } from "./api";
 import { OperatorChip } from "./components/OperatorChip";
 import { PipelineEditor } from "./components/PipelineEditor";
-import { ChatComposer, type MentionOption } from "./components/ChatComposer";
+import { ChatComposer, SparkleIcon, type MentionOption } from "./components/ChatComposer";
 import { MarkdownPreview, looksLikeMarkdown } from "./components/MarkdownPreview";
 import { NewTaskPage } from "./components/NewTaskPage";
 import { RoleAvatar, AVATAR_PRESET_OPTIONS } from "./components/RoleAvatar";
@@ -207,6 +207,12 @@ export default function App() {
     content: "",
     tags: "",
   });
+  // 记忆表单「增强提示词」：优化中 spinner；成功覆盖后保留原文供撤销
+  const [memEnhancing, setMemEnhancing] = useState(false);
+  const [memEnhancePrev, setMemEnhancePrev] = useState<string | null>(null);
+  // 发布角色 persona「增强提示词」：同上，作用于 agentForm.persona
+  const [agentPersonaBusy, setAgentPersonaBusy] = useState(false);
+  const [agentPersonaPrev, setAgentPersonaPrev] = useState<string | null>(null);
   const [agentList, setAgentList] = useState<PublishedAgent[]>([]);
   const [agentEditing, setAgentEditing] = useState(false);
   const [agentSelectedId, setAgentSelectedId] = useState<string | null>(null);
@@ -871,6 +877,31 @@ export default function App() {
     setView("home");
   }
 
+  // 「增强提示词」通用调用：按场景让 LLM 优化文本，失败时 toast 并返回 null（不覆盖输入框）
+  async function enhancePromptText(scene: string, text: string, context = ""): Promise<string | null> {
+    try {
+      const d = await api<{ text: string }>("/api/prompts/enhance", {
+        token,
+        method: "POST",
+        body: JSON.stringify({ scene, text, context }),
+      });
+      return d.text;
+    } catch (err) {
+      setError(errMsg(err));
+      return null;
+    }
+  }
+
+  // 房间输入框增强：带最近 8 条聊天作上下文，让优化贴合当前讨论
+  async function enhanceRoomInput(text: string): Promise<string | null> {
+    const ctx = messages
+      .slice(-8)
+      .map((m) => `${m.actor_name}: ${m.text.slice(0, 200)}`)
+      .join("\n")
+      .slice(0, 4000);
+    return enhancePromptText("room", text, ctx);
+  }
+
   async function sendChat(e?: FormEvent | KeyboardEvent) {
     e?.preventDefault();
     if (!selectedId || !chatInput.trim()) return;
@@ -1315,6 +1346,38 @@ export default function App() {
       setError(errMsg(err));
     } finally {
       setBusy(false);
+    }
+  }
+
+  // 记忆内容「增强提示词」：LLM 精炼为可复用陈述，覆盖表单内容，保留原文可撤销
+  async function enhanceMemoryContent() {
+    if (memEnhancing || !memForm.content.trim()) return;
+    const original = memForm.content;
+    setMemEnhancing(true);
+    try {
+      const next = await enhancePromptText("memory", original);
+      if (next && next !== original) {
+        setMemEnhancePrev(original);
+        setMemForm({ ...memForm, content: next });
+      }
+    } finally {
+      setMemEnhancing(false);
+    }
+  }
+
+  // 角色 persona「增强提示词」：LLM 把人设改写为专业系统提示，覆盖输入框，可撤销
+  async function enhanceAgentPersona() {
+    if (agentPersonaBusy || !agentForm.persona.trim()) return;
+    const original = agentForm.persona;
+    setAgentPersonaBusy(true);
+    try {
+      const next = await enhancePromptText("persona", original);
+      if (next && next !== original) {
+        setAgentPersonaPrev(original);
+        setAgentForm({ ...agentForm, persona: next });
+      }
+    } finally {
+      setAgentPersonaBusy(false);
     }
   }
 
@@ -2463,6 +2526,10 @@ export default function App() {
                 disabled={busy}
                 mentions={mentionOptions}
                 commands={commandOptions}
+                onEnhance={enhanceRoomInput}
+                enhanceLabel={tr("enhancePrompt")}
+                enhanceUndoLabel={tr("enhanceUndo")}
+                enhanceLoadingLabel={tr("enhanceLoading")}
               />
             </section>
             {(crewOpen || lootOpen || briefOpen || sharesOpen || memPanelOpen) && (
@@ -3082,13 +3149,55 @@ export default function App() {
                       </>
                     )}
                     <label className="mem-content-label">
-                      <span>{tr("memContent")}</span>
+                      <span className="mem-content-head">
+                        {tr("memContent")}
+                        <span className="mem-content-tools">
+                          {memEnhancePrev !== null && !memEnhancing && (
+                            <button
+                              type="button"
+                              className="btn ghost tiny composer-enhance-btn composer-enhance-icon"
+                              onClick={() => {
+                                setMemForm({ ...memForm, content: memEnhancePrev });
+                                setMemEnhancePrev(null);
+                              }}
+                              title={tr("enhanceUndo")}
+                              aria-label={tr("enhanceUndo")}
+                            >
+                              ↺
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className="btn ghost tiny composer-enhance-btn composer-enhance-icon"
+                            disabled={memEnhancing || !memForm.content.trim()}
+                            onClick={() => void enhanceMemoryContent()}
+                            title={tr("enhancePrompt")}
+                            aria-label={tr("enhancePrompt")}
+                          >
+                            {memEnhancing ? (
+                              <span className="mini-spinner" aria-hidden />
+                            ) : (
+                              <SparkleIcon />
+                            )}
+                          </button>
+                        </span>
+                      </span>
                       <textarea
                         value={memForm.content}
-                        onChange={(e) => setMemForm({ ...memForm, content: e.target.value })}
+                        onChange={(e) => {
+                          setMemForm({ ...memForm, content: e.target.value });
+                          if (memEnhancePrev !== null) setMemEnhancePrev(null);
+                        }}
                         required
                         autoFocus
                       />
+                      {/* 增强中浮层：与聊天输入框一致的效果 */}
+                      {memEnhancing ? (
+                        <span className="composer-enhance-toast" role="status">
+                          <span className="mini-spinner" aria-hidden />
+                          {tr("enhanceLoading")}
+                        </span>
+                      ) : null}
                     </label>
                   </div>
                   {/* 右栏：Markdown 实时渲染，导入文档后立即可读 */}
@@ -3354,12 +3463,50 @@ export default function App() {
                 </label>
                 <label>
                   <span>{tr("agentPersona")}</span>
-                  <textarea
-                    className="kb-body"
-                    value={agentForm.persona}
-                    onChange={(e) => setAgentForm({ ...agentForm, persona: e.target.value })}
-                    required
-                  />
+                  {/* persona 编辑框：右下角浮动增强按钮，增强中显示浮层 */}
+                  <span style={{ position: "relative", display: "block" }}>
+                    {agentPersonaBusy ? (
+                      <span className="composer-enhance-toast" role="status">
+                        <span className="mini-spinner" aria-hidden />
+                        {tr("enhanceLoading")}
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn ghost composer-enhance-btn composer-enhance-icon composer-enhance-corner"
+                        disabled={!agentForm.persona.trim()}
+                        onClick={() => void enhanceAgentPersona()}
+                        title={tr("enhancePrompt")}
+                        aria-label={tr("enhancePrompt")}
+                      >
+                        <SparkleIcon />
+                      </button>
+                    )}
+                    {agentPersonaPrev !== null && !agentPersonaBusy && (
+                      <button
+                        type="button"
+                        className="btn ghost tiny composer-enhance-btn composer-enhance-corner"
+                        style={{ bottom: "2.8rem" }}
+                        onClick={() => {
+                          setAgentForm({ ...agentForm, persona: agentPersonaPrev });
+                          setAgentPersonaPrev(null);
+                        }}
+                        title={tr("enhanceUndo")}
+                        aria-label={tr("enhanceUndo")}
+                      >
+                        ↺ {tr("enhanceUndo")}
+                      </button>
+                    )}
+                    <textarea
+                      className="kb-body"
+                      value={agentForm.persona}
+                      onChange={(e) => {
+                        setAgentForm({ ...agentForm, persona: e.target.value });
+                        if (agentPersonaPrev !== null) setAgentPersonaPrev(null);
+                      }}
+                      required
+                    />
+                  </span>
                 </label>
                 <div className="loadout-block">
                   <span className="loadout-label">{tr("agentToolkits")}</span>

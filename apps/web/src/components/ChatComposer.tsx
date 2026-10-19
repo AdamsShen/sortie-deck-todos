@@ -54,6 +54,12 @@ type Props = {
   stopping?: boolean;
   stopLabel?: string;
   onStop?: () => void;
+  /** 「增强提示词」：传入则渲染 ✨ 按钮，父组件调 LLM 优化并返回新文本（null 表示失败/放弃） */
+  onEnhance?: (text: string) => Promise<string | null>;
+  enhanceLabel?: string;
+  enhanceUndoLabel?: string;
+  /** 优化进行中浮层文案（如「增强中…」） */
+  enhanceLoadingLabel?: string;
 };
 
 type Trigger = {
@@ -146,6 +152,31 @@ function formatSize(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/** ✨ 线条风 sparkle 图标（增强提示词按钮）：四角星 + 右上加号 + 左下圆点 */
+export function SparkleIcon() {
+  return (
+    <svg
+      className="sparkle-icon"
+      width="15"
+      height="15"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      {/* 大四角星（凹边） */}
+      <path d="M10.5 4c.7 3.9 2.5 5.7 6.4 6.4-3.9.7-5.7 2.5-6.4 6.4-.7-3.9-2.5-5.7-6.4-6.4 3.9-.7 5.7-2.5 6.4-6.4z" />
+      {/* 右上加号 */}
+      <path d="M18.2 3.2v4.4M16 5.4h4.4" />
+      {/* 左下小点 */}
+      <path d="M5 18.6h.01" />
+    </svg>
+  );
+}
+
 export function ChatComposer({
   value,
   onChange,
@@ -164,6 +195,10 @@ export function ChatComposer({
   stopping = false,
   stopLabel = "停止",
   onStop,
+  onEnhance,
+  enhanceLabel = "增强提示词",
+  enhanceUndoLabel = "撤销优化",
+  enhanceLoadingLabel = "增强中…",
 }: Props) {
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -173,6 +208,9 @@ export function ChatComposer({
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [dragging, setDragging] = useState(false);
   const [attachError, setAttachError] = useState<string | null>(null);
+  // 增强提示词：优化中 spinner；成功覆盖后保留原文供一键撤销
+  const [enhancing, setEnhancing] = useState(false);
+  const [enhancePrev, setEnhancePrev] = useState<string | null>(null);
 
   const trigger = useMemo(() => activeTrigger(value, caret), [value, caret]);
   const filtered = useMemo(() => {
@@ -235,6 +273,28 @@ export function ChatComposer({
 
   function removeAttachment(id: string) {
     setAttachments((prev) => prev.filter((a) => a.id !== id));
+  }
+
+  // 点击「增强提示词」：父组件调 LLM 优化，返回的文本直接覆盖输入框
+  async function doEnhance() {
+    if (!onEnhance || disabled || enhancing || !value.trim()) return;
+    const original = value;
+    setEnhancing(true);
+    try {
+      const next = await onEnhance(original);
+      if (next && next !== original) {
+        setEnhancePrev(original);
+        onChange(next);
+      }
+    } finally {
+      setEnhancing(false);
+    }
+  }
+
+  function undoEnhance() {
+    if (enhancePrev === null) return;
+    onChange(enhancePrev);
+    setEnhancePrev(null);
   }
 
   function submit(e?: FormEvent | KeyboardEvent) {
@@ -393,6 +453,13 @@ export function ChatComposer({
           onKeyDown={onKeyDown}
           onPaste={onPaste}
         />
+        {/* 增强中浮层：覆盖在输入框右下角，提示 LLM 优化进行中 */}
+        {enhancing ? (
+          <span className="composer-enhance-toast" role="status">
+            <span className="mini-spinner" aria-hidden />
+            {enhanceLoadingLabel}
+          </span>
+        ) : null}
         {dragging ? (
           <div className="composer-drop-mask" aria-hidden>
             放下以添加附件
@@ -423,6 +490,31 @@ export function ChatComposer({
               {attachLabel}
             </button>
           </>
+        ) : null}
+        {onEnhance ? (
+          enhancePrev !== null && !enhancing ? (
+            // 优化成功后短暂提供撤销，恢复覆盖前的原文
+            <button
+              type="button"
+              className="btn ghost composer-enhance-btn composer-enhance-icon"
+              onClick={undoEnhance}
+              title={enhanceUndoLabel}
+              aria-label={enhanceUndoLabel}
+            >
+              ↺
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn ghost composer-enhance-btn composer-enhance-icon"
+              disabled={disabled || !value.trim() || enhancing}
+              onClick={() => void doEnhance()}
+              title={enhanceLabel}
+              aria-label={enhanceLabel}
+            >
+              {enhancing ? <span className="mini-spinner" aria-hidden /> : <SparkleIcon />}
+            </button>
+          )
         ) : null}
         {stopping && onStop ? (
           <button className="btn primary composer-stop" type="button" onClick={onStop}>

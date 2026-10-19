@@ -3405,6 +3405,80 @@ textarea {
   opacity: 0.65;
   font-style: italic;
 }
+/* 「增强提示词」按钮：纯图标（title 提供悬停文案），优化中 spinner */
+.composer-enhance-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35em;
+  white-space: nowrap;
+}
+/* 纯图标态：固定正方形小钮（em 基准在 tiny 按钮里会缩得太小） */
+.composer-enhance-icon {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+.composer-enhance-btn .sparkle-icon {
+  width: 16px;
+  height: 16px;
+  color: inherit;
+  opacity: 0.8;
+}
+/* 多行编辑框（persona 等）内的浮动增强按钮：固定在容器右下角 */
+.composer-enhance-corner {
+  position: absolute;
+  right: 0.5rem;
+  bottom: 0.5rem;
+  z-index: 5;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+/* 增强中浮层：白色气泡覆盖在输入框右下角（聊天 composer / Forge / 记忆表单共用） */
+.composer-enhance-toast {
+  position: absolute;
+  right: 0.7rem;
+  bottom: 0.7rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  background: var(--panel, #fff);
+  border: 1px solid var(--line, #ddd);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+  padding: 0.32rem 0.75rem;
+  font-size: 0.78rem;
+  z-index: 6;
+  pointer-events: none;
+  animation: composer-toast-in 0.18s ease-out;
+}
+@keyframes composer-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+/* 记忆表单 textarea 容器：为浮层提供定位上下文 */
+.mem-content-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.mem-content-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
 .mem-summary-pending .mini-spinner {
   width: 0.7em;
   height: 0.7em;
@@ -3462,6 +3536,7 @@ textarea {
 .mem-content-label {
   flex: 1;
   min-height: 0;
+  position: relative; /* 增强中浮层的定位上下文 */
 }
 .mem-edit textarea {
   flex: 1;

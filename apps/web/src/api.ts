@@ -32,7 +32,22 @@ export async function api<T = unknown>(path: string, { token, ...options }: ApiO
   if (res.status === 401) {
     throw new ApiError("unauthorized", 401);
   }
-  if (!res.ok) throw new ApiError((await res.text()) || res.statusText, res.status);
+  if (!res.ok) {
+    const raw = await res.text();
+    let msg = raw || res.statusText;
+    // FastAPI 错误体形如 {"detail":"..."}，解析为友好文案；校验错误 detail 为数组
+    try {
+      const parsed = JSON.parse(raw) as { detail?: unknown };
+      if (typeof parsed?.detail === "string") {
+        msg = parsed.detail;
+      } else if (Array.isArray(parsed?.detail) && typeof parsed.detail[0]?.msg === "string") {
+        msg = parsed.detail[0].msg;
+      }
+    } catch {
+      /* 非 JSON 响应保留原文 */
+    }
+    throw new ApiError(msg, res.status);
+  }
   return res.json() as Promise<T>;
 }
 
