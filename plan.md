@@ -1,32 +1,29 @@
 # 计划文档（plan.md）
 
 > 用途：功能实现前的技术方案先落地此文件，经确认后执行。每次新计划覆盖本文档，历史计划归档到 `docs/plans/`。
-> 背景说明：`plan_create` 平台工具内部调用报错（错误码 11133），无法生成计划 UI，因此改为「直接写本地 plan.md + 文本确认」的等价流程。
 
----
+# local 模式 Office 文档解析（纯 Python 库，不接 MinerU）
 
-## 最近计划：「增强提示词」按钮（已实施完成 ✅）
+## 需求背景
 
-**需求**：在项目所有用户输入自然语言的位置增加「增强提示词」按钮（✨ 图标），点击后按场景用大模型优化输入框内容并覆盖，含 loading 浮层与撤销。
+知识库 local 模式当前仅支持 md/txt/csv（直接 decode）与 pdf（pypdf），docx/ppt/xlsx 在 `app.py:639-644` 直接 400。用户决定**不接 MinerU**，用纯 Python 库本地解析 Office 文档。
 
-**业内调研**（web_search）：
-- Shape of AI「Prompt enhancer」模式：按钮位于输入框附近，发送前把粗糙意图改写为清晰受约束的 prompt
-- ChatGPT Rewrite 按钮模式：按钮紧邻 Send、结果落回输入框、支持撤销
-- 共性：按钮紧邻发送键、场景化 system prompt、覆盖输入框、loading 态、可撤销
+## 方案
 
-**设计**：
-1. 后端统一接口 `POST /api/prompts/enhance`（scene 参数区分场景），实现在 `src/sortie_deck/prompt_enhance.py`
-2. 场景 system prompt 注册表：`briefing`（规划需求结构化）/ `room`（口语澄清、保留 @提及）/ `rewrite`（可执行修改指令、保留 /命令）/ `forge`（能力扩写）/ `memory`（精炼陈述）/ `persona`（专业系统提示）
-3. 前端 `ChatComposer` 增加插槽 + 独立按钮三处复用，Forge/记忆表单单独接线
+1. **依赖**：`python-docx`（docx）、`python-pptx`（pptx）、`openpyxl`（xlsx），加入 `pyproject.toml`；
+2. **新模块** `src/sortie_deck/doc_extract.py`（已创建）：
+   - `extract_docx`：按文档体顺序遍历段落与表格，标题样式映射 `#` Markdown、列表加 `-`、表格转 Markdown 表；
+   - `extract_pptx`：逐页「## Slide N」+ 文本框 + 表格 + 演讲者备注；
+   - `extract_xlsx`：逐工作表「## 工作表：名」+ TSV 行（上限 500 行 × 50 列，防超大文件撑爆正文）；
+   - `extract_office_text(ext, raw)` 统一入口；损坏/加密文件抛 ValueError（路由转 400 中文提示）；
+3. **路由接线**：`app.py` 导入端点 local 分支增加 office 处理（docx/pptx/xlsx → `extract_office_text`，提取为空报 400）；
+4. **取舍点（已向用户说明）**：旧版二进制 .doc/.ppt/.xls 无纯 Python 可靠解析库，保持 400 并提示「另存为 docx/pptx/xlsx 或配置 WeKnora」；
+5. **测试**：`tests/test_doc_extract.py` 用三个库在内存生成真实文档 → 解析断言 + 损坏文件报错；全量回归 + 重启后端。
 
-**覆盖的 7 处输入点**：规划官对话、房间聊天（含 /rewrite）、Forge 能力框、记忆新建、Forge 草稿人设、发布角色人设
+## 状态
 
-**状态**：已实施并验证（typecheck 通过、各场景真实调用通过）
-
----
-
-## 附：过程中的修复记录
-
-- LLM 超时：deepseek 思考链偶发超 30s → `LlmClient(timeout=60)`，失败日志带异常类型
-- 前端错误提示：`api.ts` 解析 FastAPI `{"detail":"..."}` 为友好文案
-- 按钮样式：纯 ✨ 图标（28px 固定尺寸，线条风 sparkle）、「增强中…」白色浮层、↺ 撤销
+- [x] 方案确认（用户指示直接用 Python 库解析）
+- [x] doc_extract.py 模块（docx/pptx/xlsx 三解析器 + 统一入口，表格 XML 需包 Table 代理的坑已踩过并修复）
+- [x] 依赖安装（python-docx / python-pptx / openpyxl，pyproject 已声明）+ 路由接线（app.py local 分支 office 处理，旧版 .doc/.ppt/.xls 保持 400 并提示转换）
+- [x] 测试：tests/test_doc_extract.py 5 个用例全过（真实文档内存生成 → 抽取断言 + 损坏文件报错）；全量回归 355 passed / 2 failed——失败项为另一会话并行改动（WeKnora graphrag，auth.py/weknora.py/test_weknora_gateway.py）在 WeKnora 服务 502 下的环境性失败，与本计划无关
+- [x] 后端已重启验证（端口 8787）

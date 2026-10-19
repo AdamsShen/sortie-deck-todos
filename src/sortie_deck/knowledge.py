@@ -19,6 +19,8 @@ class KnowledgeDoc(BaseModel):
     category: Literal["playbook", "runbook", "lore", "reference"] = "playbook"
     author_id: str = ""
     author_name: str = ""
+    # 所属知识库 id；空串表示存量文档，归属默认全局库（见 KnowledgeBaseStore.ensure_default）
+    base_id: str = ""
     # Enterprise KB mirror (WeKnora) — Sortie Deck catalogs; retrieval is remote
     backend: Literal["local", "weknora"] = "local"
     remote_id: str | None = None
@@ -29,12 +31,43 @@ class KnowledgeDoc(BaseModel):
     updated_at: str = Field(default_factory=lambda: utc_now().isoformat())
 
 
+# 知识库（库实体）可见域：global 全员共享（仅 admin 可建/写）、user 个人、task 挂靠任务（initiative）
+KnowledgeBaseScope = Literal["global", "user", "task"]
+
+
+class KnowledgeBaseModel(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("kbs_"))
+    name: str
+    description: str = ""
+    scope: KnowledgeBaseScope = "user"
+    # global→"global"；user→创建者用户 id；task→关联 initiative id
+    scope_id: str = ""
+    created_by: str = ""
+    creator_name: str = ""
+    created_at: str = Field(default_factory=lambda: utc_now().isoformat())
+    updated_at: str = Field(default_factory=lambda: utc_now().isoformat())
+
+
+class CreateKnowledgeBaseRequest(BaseModel):
+    name: str
+    description: str = ""
+    scope: KnowledgeBaseScope = "user"
+    # scope=task 时必填：关联任务（initiative）id，后端校验访问权限
+    task_id: str = ""
+
+
+class UpdateKnowledgeBaseRequest(BaseModel):
+    name: str | None = None
+    description: str | None = None
+
+
 class CreateKnowledgeRequest(BaseModel):
     title: str
     summary: str = ""
     body: str = ""
     tags: list[str] = Field(default_factory=list)
     category: Literal["playbook", "runbook", "lore", "reference"] = "playbook"
+    base_id: str = ""
 
 
 class UpdateKnowledgeRequest(BaseModel):
@@ -43,6 +76,7 @@ class UpdateKnowledgeRequest(BaseModel):
     body: str | None = None
     tags: list[str] | None = None
     category: Literal["playbook", "runbook", "lore", "reference"] | None = None
+    base_id: str | None = None
 
 
 _SEED: list[dict] = [
@@ -160,9 +194,11 @@ class KnowledgeStore:
             encoding="utf-8",
         )
 
-    def list(self, q: str | None = None) -> list[KnowledgeDoc]:
+    def list(self, q: str | None = None, base_id: str | None = None) -> list[KnowledgeDoc]:
         with self._lock:
             docs = self._read()
+        if base_id is not None:
+            docs = [d for d in docs if d.base_id == base_id]
         if not q:
             return sorted(docs, key=lambda d: d.updated_at, reverse=True)
         needle = q.lower()
@@ -189,6 +225,7 @@ class KnowledgeStore:
             body=req.body,
             tags=[t.strip() for t in req.tags if t.strip()],
             category=req.category,
+            base_id=req.base_id,
             author_id=author_id,
             author_name=author_name,
         )
@@ -226,3 +263,102 @@ class KnowledgeStore:
             if len(next_docs) == len(docs):
                 raise KeyError(doc_id)
             self._write(next_docs)
+
+
+_DEFAULT_BASE_NAME = "平台操作手册"
+
+
+class KnowledgeBaseStore:
+    """知识库（库实体）存储：JSON 全量重写，与 KnowledgeStore 同风格。
+
+    scope 约定：global→scope_id="global"；user→scope_id=创建者用户 id；task→scope_id=关联 initiative id。
+    首次启动种子一个全局库，承接存量 base_id 为空的文档。
+    """
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()
+        self.ensure_default()
+
+    def _read(self) -> list[KnowledgeBaseModel]:
+        raw = json.loads(self.path.read_text(encoding="utf-8"))
+        return [KnowledgeBaseModel.model_validate(x) for x in raw]
+
+    def _write(self, bases: list[KnowledgeBaseModel]) -> None:
+        self.path.write_text(
+            json.dumps([b.model_dump(mode="json") for b in bases], ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def ensure_default(self) -> KnowledgeBaseModel:
+        """保证至少存在一个全局库；返回该默认库（幂等）。"""
+        with self._lock:
+            bases = self._read() if self.path.exists() else []
+            for b in bases:
+                if b.scope == "global":
+                    return b
+            default = KnowledgeBaseModel(
+                name=_DEFAULT_BASE_NAME,
+                description="Sortie Deck 全流程操作与最佳实践",
+                scope="global",
+                scope_id="global",
+                creator_name="system",
+            )
+            bases.append(default)
+            self._write(bases)
+            return default
+
+    def list(self) -> list[KnowledgeBaseModel]:
+        with self._lock:
+            bases = self._read()
+        return sorted(bases, key=lambda b: b.created_at)
+
+    def get(self, base_id: str) -> KnowledgeBaseModel:
+        for b in self.list():
+            if b.id == base_id:
+                return b
+        raise KeyError(base_id)
+
+    def create(self, req: CreateKnowledgeBaseRequest, *, user_id: str, user_name: str) -> KnowledgeBaseModel:
+        scope_id = "global" if req.scope == "global" else (req.task_id if req.scope == "task" else user_id)
+        base = KnowledgeBaseModel(
+            name=req.name.strip(),
+            description=req.description.strip(),
+            scope=req.scope,
+            scope_id=scope_id,
+            created_by=user_id,
+            creator_name=user_name,
+        )
+        with self._lock:
+            bases = self._read()
+            bases.append(base)
+            self._write(bases)
+        return base
+
+    def update(self, base_id: str, req: UpdateKnowledgeBaseRequest) -> KnowledgeBaseModel:
+        with self._lock:
+            bases = self._read()
+            for i, b in enumerate(bases):
+                if b.id != base_id:
+                    continue
+                data = b.model_dump()
+                patch = req.model_dump(exclude_unset=True)
+                if patch.get("name"):
+                    patch["name"] = patch["name"].strip()
+                if patch.get("description") is not None:
+                    patch["description"] = patch["description"].strip()
+                data.update(patch)
+                data["updated_at"] = utc_now().isoformat()
+                bases[i] = KnowledgeBaseModel.model_validate(data)
+                self._write(bases)
+                return bases[i]
+        raise KeyError(base_id)
+
+    def delete(self, base_id: str) -> None:
+        with self._lock:
+            bases = self._read()
+            next_bases = [b for b in bases if b.id != base_id]
+            if len(next_bases) == len(bases):
+                raise KeyError(base_id)
+            self._write(next_bases)

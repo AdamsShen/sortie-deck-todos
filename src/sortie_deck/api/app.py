@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
+import tempfile
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,10 +27,16 @@ from sortie_deck.auth import (
     CreateUserRequest,
     LoginRequest,
     PublicUser,
+    RegisterRequest,
 )
+from sortie_deck.doc_extract import extract_office_text
 from sortie_deck.knowledge import (
+    CreateKnowledgeBaseRequest,
     CreateKnowledgeRequest,
+    KnowledgeBaseModel,
+    KnowledgeBaseStore,
     KnowledgeStore,
+    UpdateKnowledgeBaseRequest,
     UpdateKnowledgeRequest,
 )
 from sortie_deck.knowledge_gateway import (
@@ -72,6 +80,7 @@ _auth: AuthStore | None = None
 logger = logging.getLogger(__name__)
 _knowledge: KnowledgeStore | None = None
 _knowledge_gw: KnowledgeGateway | None = None
+_kb_bases: KnowledgeBaseStore | None = None
 _memory: MemoryStore | None = None
 _agents: AgentCatalog | None = None
 _toolkit: ToolkitStore | None = None
@@ -144,6 +153,46 @@ def get_knowledge_gateway() -> KnowledgeGateway:
     if _knowledge_gw is None:
         _knowledge_gw = gateway_from_settings(settings, get_knowledge())
     return _knowledge_gw
+
+
+def get_knowledge_bases() -> KnowledgeBaseStore:
+    global _kb_bases
+    if _kb_bases is None:
+        _kb_bases = KnowledgeBaseStore(settings.knowledge_bases_db)
+    return _kb_bases
+
+
+def _visible_base_ids(user: PublicUser) -> set[str] | None:
+    """当前用户可见的知识库 id 集合；admin 返回 None 表示不过滤（全可见）。
+
+    可见性规则：global 全员；user 仅所有者本人；task 按任务可见性
+    （创建者 / 被共享用户，复用 _visible_initiatives 的口径）。
+    """
+    if user.role == "admin":
+        return None
+    visible_tasks = {i.id for i in _visible_initiatives(orch().list_initiatives(), user)}
+    out: set[str] = set()
+    for b in get_knowledge_bases().list():
+        if b.scope == "global" or (b.scope == "user" and b.scope_id == user.id):
+            out.add(b.id)
+        elif b.scope == "task" and b.scope_id in visible_tasks:
+            out.add(b.id)
+    return out
+
+
+def _ensure_base_write(user: PublicUser, base: KnowledgeBaseModel) -> None:
+    """知识库写权限（建库后续的编辑/导入/删除）：global 仅 admin；user 仅本人；task 校验任务访问。"""
+    if user.role == "admin":
+        return
+    if base.scope == "global":
+        raise HTTPException(403, "全局共享知识库仅管理员可操作")
+    if base.scope == "user" and base.scope_id != user.id:
+        raise HTTPException(403, "仅知识库所有者可操作")
+    if base.scope == "task":
+        # 任务知识库：能访问该任务（创建者/被共享）即可导入
+        ini = orch().get(base.scope_id)
+        if ini is not None:
+            _ensure_mission_access(ini, user)
 
 
 def get_memory() -> MemoryStore:
@@ -290,8 +339,26 @@ async def login(req: LoginRequest) -> dict[str, Any]:
     try:
         payload = get_auth().login(req.username, req.password)
         return payload.model_dump()
-    except PermissionError:
+    except PermissionError as exc:
+        # 密码正确但账号待审核/已被拒绝时返回 403 与具体原因，其余为 401 凭据错误
+        msg = str(exc)
+        if msg == "account pending":
+            raise HTTPException(403, "account pending approval") from None
+        if msg == "account rejected":
+            raise HTTPException(403, "account rejected") from None
         raise HTTPException(401, "invalid username or password") from None
+
+
+@app.post("/api/auth/register")
+async def register(req: RegisterRequest) -> dict[str, Any]:
+    """自助注册：创建待审核账号，管理员通过后才能登录；用户名重复返回 400。"""
+    if not req.username.strip() or not req.password:
+        raise HTTPException(400, "username and password required")
+    try:
+        user = get_auth().register(req)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"status": "pending", "user": user.model_dump()}
 
 
 @app.post("/api/auth/logout")
@@ -300,6 +367,18 @@ async def logout(authorization: str | None = Header(default=None)) -> dict[str, 
     if token:
         get_auth().logout(token)
     return {"status": "ok"}
+
+
+@app.delete("/api/auth/account")
+async def delete_own_account(user: PublicUser = Depends(require_user)) -> dict[str, str]:
+    """账号注销：用户永久删除自己的账号（清除登录 token）；名下任务与共享关系保留。"""
+    try:
+        get_auth().delete_self(user.id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except KeyError:
+        raise HTTPException(404, "user not found") from None
+    return {"status": "deleted"}
 
 
 @app.get("/api/auth/me")
@@ -320,6 +399,31 @@ async def admin_create_user(
         return get_auth().create_user(req).model_dump()
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+class AdminUpdateUserRequest(BaseModel):
+    # 可选字段：只传哪个就改哪个；status 用于审核（active=通过 / rejected=拒绝）
+    role: Literal["admin", "member"] | None = None
+    status: Literal["active", "rejected"] | None = None
+
+
+@app.patch("/api/admin/users/{user_id}")
+async def admin_update_user(
+    user_id: str,
+    req: AdminUpdateUserRequest,
+    _admin: PublicUser = Depends(require_admin),
+) -> dict[str, Any]:
+    """管理员修改用户角色 / 审核状态（二选一或同时传）。"""
+    try:
+        if req.role is not None:
+            get_auth().update_role(user_id, req.role)
+        if req.status is not None:
+            get_auth().set_status(user_id, req.status)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except KeyError:
+        raise HTTPException(404, "user not found") from None
+    return get_auth().get_by_id(user_id).model_dump(mode="json", include={"id", "username", "display_name", "role", "status"})
 
 
 @app.delete("/api/admin/users/{user_id}")
@@ -376,9 +480,212 @@ async def dashboard(user: PublicUser = Depends(require_user)) -> dict[str, Any]:
 @app.get("/api/knowledge")
 async def list_knowledge(
     q: str | None = Query(default=None),
-    _user: PublicUser = Depends(require_user),
+    base_id: str | None = Query(default=None),
+    user: PublicUser = Depends(require_user),
 ) -> list[dict[str, Any]]:
-    return [d.model_dump(mode="json") for d in get_knowledge_gateway().list_catalog(q)]
+    """文档目录：始终按所属库的可见性过滤（他人 user/task 库的文档不下发）。"""
+    docs = get_knowledge_gateway().list_catalog(q)
+    default_base = get_knowledge_bases().ensure_default()
+    bases = {b.id: b for b in get_knowledge_bases().list()}
+    visible = _visible_base_ids(user)
+    out: list[dict[str, Any]] = []
+    for d in docs:
+        bid = d.base_id or default_base.id
+        base = bases.get(bid)
+        if base is None:
+            continue
+        if visible is not None and bid not in visible:
+            continue
+        if base_id and bid != base_id:
+            continue
+        out.append(d.model_dump(mode="json"))
+    return out
+
+
+@app.get("/api/knowledge/bases")
+async def list_knowledge_bases(user: PublicUser = Depends(require_user)) -> list[dict[str, Any]]:
+    """知识库列表（按用户可见性过滤），附每个库的文档数。"""
+    bstore = get_knowledge_bases()
+    default_base = bstore.ensure_default()
+    visible = _visible_base_ids(user)
+    counts: dict[str, int] = {}
+    for d in get_knowledge().list():
+        key = d.base_id or default_base.id
+        counts[key] = counts.get(key, 0) + 1
+    return [
+        {**b.model_dump(mode="json"), "doc_count": counts.get(b.id, 0)}
+        for b in bstore.list()
+        if visible is None or b.id in visible
+    ]
+
+
+@app.post("/api/knowledge/bases")
+async def create_knowledge_base(
+    req: CreateKnowledgeBaseRequest, user: PublicUser = Depends(require_user)
+) -> dict[str, Any]:
+    """创建知识库：global 仅 admin；task 必须关联任务且校验任务访问权限。"""
+    if not req.name.strip():
+        raise HTTPException(400, "知识库名称不能为空")
+    if req.scope == "global" and user.role != "admin":
+        raise HTTPException(403, "全局共享知识库仅管理员可创建")
+    if req.scope == "task":
+        if not req.task_id:
+            raise HTTPException(400, "任务知识库必须关联任务")
+        ini = orch().get(req.task_id)
+        if ini is None:
+            raise HTTPException(404, "任务不存在")
+        _ensure_mission_access(ini, user)
+    base = get_knowledge_bases().create(req, user_id=user.id, user_name=user.display_name)
+    return {**base.model_dump(mode="json"), "doc_count": 0}
+
+
+@app.patch("/api/knowledge/bases/{base_id}")
+async def update_knowledge_base(
+    base_id: str, req: UpdateKnowledgeBaseRequest, user: PublicUser = Depends(require_user)
+) -> dict[str, Any]:
+    try:
+        base = get_knowledge_bases().get(base_id)
+    except KeyError:
+        raise HTTPException(404, "knowledge base not found") from None
+    _ensure_base_write(user, base)
+    return get_knowledge_bases().update(base_id, req).model_dump(mode="json")
+
+
+@app.delete("/api/knowledge/bases/{base_id}")
+async def delete_knowledge_base(
+    base_id: str, user: PublicUser = Depends(require_user)
+) -> dict[str, str]:
+    try:
+        base = get_knowledge_bases().get(base_id)
+    except KeyError:
+        raise HTTPException(404, "knowledge base not found") from None
+    _ensure_base_write(user, base)
+    remaining = [d for d in get_knowledge().list() if d.base_id == base_id]
+    if remaining:
+        raise HTTPException(400, f"库内还有 {len(remaining)} 篇文档，请先清空后再删除")
+    get_knowledge_bases().delete(base_id)
+    return {"status": "deleted"}
+
+
+_IMPORT_ALLOWED_EXTS = {
+    ".md", ".markdown", ".txt", ".csv",
+    ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".pdf",
+}
+_IMPORT_TEXT_EXTS = {".md", ".markdown", ".txt", ".csv"}
+# local 模式可用纯 Python 库解析的 OOXML 格式（旧版二进制 .doc/.ppt/.xls 不支持）
+_IMPORT_OFFICE_EXTS = {".docx", ".pptx", ".xlsx"}
+_IMPORT_MAX_BYTES = 50 * 1024 * 1024
+
+
+def _extract_pdf_text(raw: bytes) -> str:
+    """local 后端的 PDF 文本抽取（pypdf 可选依赖）；扫描件/空文档返回空串由调用方报错。"""
+    try:
+        from pypdf import PdfReader
+    except ImportError as exc:
+        raise HTTPException(
+            400, "服务端缺少 pypdf，无法解析 PDF：请在后端环境执行 pip install pypdf，或配置 WeKnora"
+        ) from exc
+    try:
+        reader = PdfReader(io.BytesIO(raw))
+        pages = [(page.extract_text() or "") for page in reader.pages]
+    except Exception as exc:  # noqa: BLE001 — 加密/损坏的 PDF 转为用户可读的 400
+        logger.warning("PDF 解析失败: %s", exc)
+        raise HTTPException(400, f"PDF 解析失败（文件可能损坏或已加密）：{exc}") from exc
+    return "\n\n".join(p for p in pages if p.strip()).strip()
+
+
+@app.post("/api/knowledge/bases/{base_id}/import")
+async def import_knowledge_file(
+    base_id: str,
+    file: UploadFile = File(...),
+    user: PublicUser = Depends(require_user),
+) -> dict[str, Any]:
+    """multipart 文件导入知识库：weknora 模式转交企业库解析；local 模式仅收文本格式。"""
+    try:
+        base = get_knowledge_bases().get(base_id)
+    except KeyError:
+        raise HTTPException(404, "knowledge base not found") from None
+    _ensure_base_write(user, base)
+
+    filename = file.filename or "import.md"
+    ext = Path(filename).suffix.lower()
+    if ext not in _IMPORT_ALLOWED_EXTS:
+        raise HTTPException(400, f"不支持的文件格式：{ext or '（无扩展名）'}")
+    raw = await file.read()
+    if len(raw) > _IMPORT_MAX_BYTES:
+        raise HTTPException(400, "文件超过 50MB 上限")
+
+    title = Path(filename).stem.strip() or filename
+    # 任务知识库的文档自动补 ini:<id> 标签，保证检索时任务命名空间 boost 继续生效
+    tags: list[str] = [f"ini:{base.scope_id}"] if base.scope == "task" else []
+
+    gw = get_knowledge_gateway()
+    if ext in _IMPORT_TEXT_EXTS or (ext == ".pdf" and not gw.uses_weknora):
+        if ext == ".pdf":
+            body = _extract_pdf_text(raw)
+            if not body:
+                raise HTTPException(
+                    400, "未能从 PDF 中提取到文本（可能是纯扫描件）：扫描版 PDF 请配置 WeKnora（OCR）解析"
+                )
+        else:
+            body = raw.decode("utf-8", errors="replace")
+        doc = get_knowledge().create(
+            CreateKnowledgeRequest(
+                title=title, summary="", body=body, tags=tags,
+                category="reference", base_id=base.id,
+            ),
+            author_id=user.id,
+            author_name=user.display_name,
+        )
+        return doc.model_dump(mode="json")
+
+    # local 模式 Office 解析：docx/pptx/xlsx 用纯 Python 库抽取正文（doc_extract.py）
+    if ext in _IMPORT_OFFICE_EXTS and not gw.uses_weknora:
+        try:
+            body = extract_office_text(ext, raw)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        if not body:
+            raise HTTPException(400, f"未能从 {ext} 文件中提取到文本内容（可能是纯图片/空白文档）")
+        doc = get_knowledge().create(
+            CreateKnowledgeRequest(
+                title=title, summary="", body=body, tags=tags,
+                category="reference", base_id=base.id,
+            ),
+            author_id=user.id,
+            author_name=user.display_name,
+        )
+        return doc.model_dump(mode="json")
+
+    if not gw.uses_weknora:
+        raise HTTPException(
+            400,
+            "当前知识库后端为 local，不支持旧版二进制 .doc/.ppt/.xls 格式："
+            "请另存为 docx/pptx/xlsx 后重新导入，或配置 WeKnora（TDT_KB_BACKEND=weknora）解析",
+        )
+    tmp = tempfile.NamedTemporaryFile(suffix=ext, delete=False)
+    try:
+        tmp.write(raw)
+        tmp.close()
+        doc = gw.import_doc(
+            ImportKnowledgeRequest(
+                title=title,
+                file_path=tmp.name,
+                folder_path=f"bases/{base.id}",
+                tags=tags,
+                category="reference",
+                base_id=base.id,
+            ),
+            author_id=user.id,
+            author_name=user.display_name,
+        )
+    except (WeKnoraError, ValueError) as exc:
+        logger.warning("知识库文件导入失败 base=%s file=%s: %s", base_id, filename, exc)
+        raise HTTPException(400, str(exc)) from exc
+    finally:
+        with suppress(OSError):
+            Path(tmp.name).unlink(missing_ok=True)
+    return doc.model_dump(mode="json")
 
 
 @app.get("/api/knowledge/status")
@@ -444,6 +751,18 @@ async def get_knowledge_doc(doc_id: str, _user: PublicUser = Depends(require_use
 async def create_knowledge(
     req: CreateKnowledgeRequest, user: PublicUser = Depends(require_user)
 ) -> dict[str, Any]:
+    """手动建文档：校验目标库写权限；任务库自动补 ini:<id> 标签（检索命名空间）。"""
+    default_base = get_knowledge_bases().ensure_default()
+    try:
+        base = get_knowledge_bases().get(req.base_id or default_base.id)
+    except KeyError:
+        raise HTTPException(404, "knowledge base not found") from None
+    _ensure_base_write(user, base)
+    tags = list(req.tags)
+    task_tag = f"ini:{base.scope_id}"
+    if base.scope == "task" and task_tag not in tags:
+        tags.append(task_tag)
+    req = req.model_copy(update={"base_id": base.id, "tags": tags})
     try:
         doc = get_knowledge_gateway().create_local(
             req, author_id=user.id, author_name=user.display_name

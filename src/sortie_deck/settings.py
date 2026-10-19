@@ -226,6 +226,10 @@ class Settings(BaseSettings):
         return self.data_dir / "knowledge.json"
 
     @property
+    def knowledge_bases_db(self) -> Path:
+        return self.data_dir / "knowledge_bases.json"
+
+    @property
     def memory_db(self) -> Path:
         return self.data_dir / "memory.json"
 

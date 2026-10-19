@@ -45,6 +45,8 @@ class ImportKnowledgeRequest(BaseModel):
     folder_path: str = ""
     tags: list[str] = Field(default_factory=list)
     category: Literal["playbook", "runbook", "lore", "reference"] = "reference"
+    # 归属知识库（库实体）id；空串表示默认全局库
+    base_id: str = ""
 
 
 class KnowledgeGateway:
@@ -125,6 +127,7 @@ class KnowledgeGateway:
                 body="",  # body lives in WeKnora
                 tags=[t.strip() for t in req.tags if t.strip()],
                 category=req.category,
+                base_id=req.base_id,
                 author_id=author_id,
                 author_name=author_name,
                 backend="weknora",
@@ -166,6 +169,7 @@ class KnowledgeGateway:
                     body=req.body or req.url or "",
                     tags=req.tags,
                     category=req.category,
+                    base_id=req.base_id,
                 ),
                 author_id=author_id,
                 author_name=author_name,
@@ -205,6 +209,7 @@ class KnowledgeGateway:
             author_id=author_id,
             author_name=author_name,
             title_override=req.title,
+            base_id=req.base_id,
         )
 
     def sync_catalog(self, *, author_name: str = "WeKnora") -> dict[str, Any]:
@@ -484,6 +489,7 @@ class KnowledgeGateway:
         author_id: str,
         author_name: str,
         title_override: str | None,
+        base_id: str = "",
     ) -> KnowledgeDoc:
         doc = KnowledgeDoc(
             id=new_id("kb_"),
@@ -492,6 +498,7 @@ class KnowledgeGateway:
             body="",
             tags=[t.strip() for t in tags if t.strip()],
             category=category,  # type: ignore[arg-type]
+            base_id=base_id,
             author_id=author_id,
             author_name=author_name,
             backend="weknora",
