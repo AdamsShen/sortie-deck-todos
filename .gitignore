@@ -15,6 +15,8 @@ data/
 node_modules/
 apps/web/dist/
 apps/web/.vite/
+# TypeScript 增量构建产物
+*.tsbuildinfo
 .coverage
 htmlcov/
 site/
