@@ -1,0 +1,32 @@
+# 计划文档（plan.md）
+
+> 用途：功能实现前的技术方案先落地此文件，经确认后执行。每次新计划覆盖本文档，历史计划归档到 `docs/plans/`。
+> 背景说明：`plan_create` 平台工具内部调用报错（错误码 11133），无法生成计划 UI，因此改为「直接写本地 plan.md + 文本确认」的等价流程。
+
+---
+
+## 最近计划：「增强提示词」按钮（已实施完成 ✅）
+
+**需求**：在项目所有用户输入自然语言的位置增加「增强提示词」按钮（✨ 图标），点击后按场景用大模型优化输入框内容并覆盖，含 loading 浮层与撤销。
+
+**业内调研**（web_search）：
+- Shape of AI「Prompt enhancer」模式：按钮位于输入框附近，发送前把粗糙意图改写为清晰受约束的 prompt
+- ChatGPT Rewrite 按钮模式：按钮紧邻 Send、结果落回输入框、支持撤销
+- 共性：按钮紧邻发送键、场景化 system prompt、覆盖输入框、loading 态、可撤销
+
+**设计**：
+1. 后端统一接口 `POST /api/prompts/enhance`（scene 参数区分场景），实现在 `src/sortie_deck/prompt_enhance.py`
+2. 场景 system prompt 注册表：`briefing`（规划需求结构化）/ `room`（口语澄清、保留 @提及）/ `rewrite`（可执行修改指令、保留 /命令）/ `forge`（能力扩写）/ `memory`（精炼陈述）/ `persona`（专业系统提示）
+3. 前端 `ChatComposer` 增加插槽 + 独立按钮三处复用，Forge/记忆表单单独接线
+
+**覆盖的 7 处输入点**：规划官对话、房间聊天（含 /rewrite）、Forge 能力框、记忆新建、Forge 草稿人设、发布角色人设
+
+**状态**：已实施并验证（typecheck 通过、各场景真实调用通过）
+
+---
+
+## 附：过程中的修复记录
+
+- LLM 超时：deepseek 思考链偶发超 30s → `LlmClient(timeout=60)`，失败日志带异常类型
+- 前端错误提示：`api.ts` 解析 FastAPI `{"detail":"..."}` 为友好文案
+- 按钮样式：纯 ✨ 图标（28px 固定尺寸，线条风 sparkle）、「增强中…」白色浮层、↺ 撤销
