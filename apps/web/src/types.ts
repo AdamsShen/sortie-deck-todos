@@ -16,6 +16,9 @@ export type View =
 
 export type UserRole = "admin" | "member";
 
+/** 账号状态：注册后为 pending，管理员审核通过为 active，拒绝为 rejected */
+export type UserStatus = "pending" | "active" | "rejected";
+
 export type InitiativeStatus =
   | "draft"
   | "running"
@@ -79,6 +82,22 @@ export interface PipelineProposal {
 }
 
 export type KnowledgeCategory = "playbook" | "runbook" | "lore" | "reference";
+
+export type KnowledgeBaseScope = "global" | "user" | "task";
+
+export interface KnowledgeBaseInfo {
+  id: string;
+  name: string;
+  description: string;
+  scope: KnowledgeBaseScope;
+  /** global→"global"；user→所有者用户 id；task→关联任务（initiative）id */
+  scope_id: string;
+  created_by?: string;
+  creator_name?: string;
+  created_at?: string;
+  updated_at?: string;
+  doc_count?: number;
+}
 
 export type MemoryScope = "workspace" | "user" | "mission" | "agent";
 
@@ -150,6 +169,7 @@ export interface PublicUser {
   username: string;
   display_name: string;
   role: UserRole;
+  status: UserStatus;
 }
 
 export interface LoginResponse {
@@ -333,6 +353,8 @@ export interface KnowledgeDoc {
   body: string;
   tags: string[];
   category: KnowledgeCategory;
+  /** 所属知识库 id；空串表示存量文档（归属默认全局库） */
+  base_id?: string;
   author_id?: string;
   author_name?: string;
   created_at?: string;

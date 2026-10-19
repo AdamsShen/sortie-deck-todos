@@ -6,10 +6,15 @@ import type {
   HarnessesResponse,
   HumanDecisionRecord,
   Initiative,
+  KnowledgeBaseInfo,
+  KnowledgeBaseScope,
+  KnowledgeDoc,
   MissionShare,
   PublicUser,
   RoleSpec,
   SubRoomRecord,
+  UserStatus,
+  UserRole,
 } from "./types";
 
 const API = "";
@@ -25,9 +30,16 @@ function authHeaders(token?: string, extra: HeadersInit = {}): HeadersInit {
 type ApiOptions = RequestInit & { token?: string };
 
 export async function api<T = unknown>(path: string, { token, ...options }: ApiOptions = {}): Promise<T> {
+  // FormData（multipart 上传）时浏览器需自动设置含 boundary 的 Content-Type，跳过默认 JSON 头
+  const isForm = typeof FormData !== "undefined" && options.body instanceof FormData;
   const res = await fetch(`${API}${path}`, {
     ...options,
-    headers: authHeaders(token, options.headers),
+    headers: isForm
+      ? {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...((options.headers as Record<string, string>) || {}),
+        }
+      : authHeaders(token, options.headers),
   });
   if (res.status === 401) {
     throw new ApiError("unauthorized", 401);
@@ -49,6 +61,35 @@ export async function api<T = unknown>(path: string, { token, ...options }: ApiO
     throw new ApiError(msg, res.status);
   }
   return res.json() as Promise<T>;
+}
+
+// --- auth / account -------------------------------------------------------
+
+/** 自助注册：创建待审核账号，管理员通过后才能登录；用户名重复抛 ApiError(400) */
+export async function registerUser(body: {
+  username: string;
+  password: string;
+  display_name: string;
+}): Promise<{ status: UserStatus; user: PublicUser }> {
+  return api("/api/auth/register", { method: "POST", body: JSON.stringify(body) });
+}
+
+/** 管理员修改用户角色 / 审核状态（只传需要变更的字段） */
+export async function adminUpdateUser(
+  token: string,
+  userId: string,
+  patch: { role?: UserRole; status?: UserStatus },
+): Promise<PublicUser> {
+  return api<PublicUser>(`/api/admin/users/${encodeURIComponent(userId)}`, {
+    token,
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+/** 账号注销：永久删除自己账号并清除登录 token（名下任务保留） */
+export async function deleteOwnAccount(token: string): Promise<void> {
+  await api("/api/auth/account", { token, method: "DELETE" });
 }
 
 // --- mission shares -------------------------------------------------------
@@ -227,4 +268,40 @@ export async function answerDecision(
 
 export async function sweepDecisions(token: string): Promise<{ expired: HumanDecisionRecord[] }> {
   return api<{ expired: HumanDecisionRecord[] }>("/api/decisions/sweep", { token, method: "POST" });
+}
+
+// --- knowledge bases ---------------------------------------------------------
+
+export async function listKnowledgeBases(token: string): Promise<KnowledgeBaseInfo[]> {
+  return api<KnowledgeBaseInfo[]>("/api/knowledge/bases", { token });
+}
+
+export async function createKnowledgeBase(
+  token: string,
+  body: { name: string; description: string; scope: KnowledgeBaseScope; task_id?: string },
+): Promise<KnowledgeBaseInfo> {
+  return api<KnowledgeBaseInfo>("/api/knowledge/bases", {
+    token,
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function deleteKnowledgeBase(token: string, baseId: string): Promise<void> {
+  await api(`/api/knowledge/bases/${encodeURIComponent(baseId)}`, { token, method: "DELETE" });
+}
+
+/** multipart 文件导入知识库（api() 对 FormData 自动跳过 JSON Content-Type） */
+export async function importKnowledgeFile(
+  token: string,
+  baseId: string,
+  file: File,
+): Promise<KnowledgeDoc> {
+  const fd = new FormData();
+  fd.append("file", file);
+  return api<KnowledgeDoc>(`/api/knowledge/bases/${encodeURIComponent(baseId)}/import`, {
+    token,
+    method: "POST",
+    body: fd,
+  });
 }

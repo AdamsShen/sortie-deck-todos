@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>知识库改版 · 三版设计稿对比</title>
+<style>
+  :root{--void:#f6f9fc;--panel:#fff;--line:#e3e8ee;--text:#1a1f36;--muted:#697386;--signal:#0e9f6e;
+    --serif:"Songti SC","Noto Serif SC",Georgia,serif;--font:-apple-system,"PingFang SC",system-ui,sans-serif;--mono:ui-monospace,"SF Mono",Menlo,monospace;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--void);color:var(--text);font-family:var(--font);padding:48px 32px 80px;text-wrap:pretty}
+  .wrap{max-width:1280px;margin:0 auto}
+  h1{font-family:var(--serif);font-size:30px;font-weight:700;margin:0 0 6px}
+  .sub{color:var(--muted);font-size:13.5px;margin:0 0 36px}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;display:flex;flex-direction:column;transition:box-shadow .15s,border-color .15s}
+  .card:hover{border-color:#cbd2dc;box-shadow:0 8px 28px rgba(26,31,54,.08)}
+  .thumb{display:block;width:100%;aspect-ratio:1440/2400;object-fit:cover;object-position:top;border-bottom:1px solid var(--line)}
+  .body{padding:16px 18px 18px;display:flex;flex-direction:column;gap:8px;flex:1}
+  .tag{font-family:var(--mono);font-size:10px;letter-spacing:.1em;color:var(--signal);border:1px solid #dff2e9;background:#dff2e9;border-radius:99px;padding:2px 9px;align-self:flex-start}
+  h2{font-family:var(--serif);font-size:18px;margin:0}
+  p{margin:0;font-size:12.5px;color:var(--muted);line-height:1.7}
+  .links{margin-top:auto;padding-top:10px;display:flex;gap:12px}
+  .links a{font-size:12.5px;color:var(--signal);text-decoration:none;border-bottom:1px solid rgba(14,159,110,.35)}
+  .links a:hover{border-bottom-color:var(--signal)}
+  .note{margin-top:28px;font-family:var(--mono);font-size:11px;color:var(--muted);letter-spacing:.05em}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>知识库改版 · 三版设计稿</h1>
+  <p class="sub">仿「记忆」页编辑部风 · 每版含 4 画板：知识库列表页（分类即可见范围：全局共享 / 我的 / 任务知识库）· 新建知识库弹窗（内置导入区，创建即导入）· 文件导入弹窗（docx/ppt/csv/xlsx/md/txt…+ 解析状态）· 库详情。列表页可交互（tab 过滤、真实打开弹窗），选定版本后再落地实现。</p>
+  <div class="grid">
+    <a class="card" href="kb-redesign-v1-candy.html">
+      <img class="thumb" src="kb-v1-full.png" alt="V1 糖果凸起风">
+      <div class="body">
+        <span class="tag">V1 · 秒数轮盘</span>
+        <h2>糖果色凸起立体按钮</h2>
+        <p>轮盘抽中 4 号风格。大圆角 + 硬底凸起 3D 按钮（按压回弹）+ 糖果 accent；信息骨架沿用记忆页。✅ 已按反馈修订：删「可见范围」（分类即可见范围）、新建弹窗内置导入区（创建并导入一步完成）。三版中最活泼。</p>
+        <div class="links"><span>打开 V1 设计稿 →</span></div>
+      </div>
+    </a>
+    <a class="card" href="kb-redesign-v2-benchmark.html">
+      <img class="thumb" src="kb-v2-full.png" alt="V2 标杆迁移">
+      <div class="body">
+        <span class="tag">V2 · 现实参照</span>
+        <h2>Dify 信息架构 × Linear 语言</h2>
+        <p>迁移 Dify Knowledge 的卡片网格 / 文件清单 / 处理状态体系与 Linear 的克制中性色、1px 精密边框、状态即颜色语义。四态 badge（排队/解析中/完成/失败）+ 文件类型徽标，三版中最理性专业。</p>
+        <div class="links"><span>打开 V2 设计稿 →</span></div>
+      </div>
+    </a>
+    <a class="card" href="kb-redesign-v3-hara.html">
+      <img class="thumb" src="kb-v3-full.png" alt="V3 白盒空寂">
+      <div class="body">
+        <span class="tag">V3 · 最佳设计师</span>
+        <h2>原研哉白盒 · 出版物隐喻</h2>
+        <p>近全白底、内容即色彩；库是书脊、文件清单是目录页、解析是付印流程。衬线 display + 发丝线 + 单一墨绿 accent。与记忆页同源但更安静高级，三版中最有仪式感。</p>
+        <div class="links"><span>打开 V3 设计稿 →</span></div>
+      </div>
+    </a>
+  </div>
+  <p class="note">SORTIE DECK · KNOWLEDGE BASE REDESIGN · 2026-10-19 · huashu-design 三套逻辑并行</p>
+</div>
+</body>
+</html>

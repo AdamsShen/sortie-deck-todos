@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="paper">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>知识库改版 · v2 标杆迁移（Dify IA × Linear 语言）— Sortie Deck</title>
+<style>
+/* =====================================================================
+   Sortie Deck · 知识库改版 v2「现实参照 · 标杆迁移」
+   标杆：Dify Knowledge（信息架构：卡片网格 / 文件清单 / 处理状态）
+        Linear（界面语言：克制中性色 / 1px 精密边框 / 状态即颜色语义 / 紧凑行高）
+   视觉基调：全部取自 apps/web/src/styles.css 纸主题 token（与「记忆」页同源）
+   ===================================================================== */
+:root, [data-theme="paper"] {
+  --void: #f6f9fc; --deep: #edf1f7; --panel: #ffffff; --panel-2: #f8fafd;
+  --line: #e3e8ee; --line-hot: #cbd2dc; --text: #1a1f36; --muted: #697386;
+  --signal: #0e9f6e; --signal-dim: #dff2e9; --copper: #3b5bdb; --ice: #6e8be8;
+  --danger: #c9503a; --amber: #b7791f;
+  --grid-a: rgba(26, 31, 54, 0.025); --grid-b: rgba(26, 31, 54, 0.02);
+  --serif: "Songti SC", "Noto Serif SC", "Source Han Serif SC", Georgia, serif;
+  --font: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --radius: 10px;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 40px 32px 80px;
+  font-family: var(--font); font-size: 14px; line-height: 1.6;
+  color: var(--text); background: var(--void);
+  /* 极淡坐标纸纹理，opacity 远低于 0.08 上限 */
+  background-image:
+    repeating-linear-gradient(0deg, var(--grid-a) 0 1px, transparent 1px 28px),
+    repeating-linear-gradient(90deg, var(--grid-b) 0 1px, transparent 1px 28px);
+  text-wrap: pretty;
+}
+input, textarea, select, button { font: inherit; color: inherit; }
+button { cursor: pointer; }
+
+/* ── 文档页头（非画板内容） ─────────────────────── */
+.doc-head { max-width: 1440px; margin: 0 auto 34px; }
+.doc-tag { font-family: var(--mono); font-size: 10px; letter-spacing: .12em; color: var(--signal); border: 1px solid var(--signal-dim); border-radius: 99px; padding: 2px 10px; }
+.doc-head h1 { font-family: var(--serif); font-size: 22px; font-weight: 600; margin: 10px 0 4px; letter-spacing: .01em; }
+.doc-head p { margin: 0; font-size: 12.5px; color: var(--muted); max-width: 860px; }
+.doc-head a { color: var(--copper); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--copper) 35%, transparent); }
+.doc-head a:hover { border-bottom-color: var(--copper); }
+
+/* ── 画板容器 ─────────────────────── */
+.board { max-width: 1440px; margin: 0 auto 52px; }
+.board-label { font-family: var(--mono); font-size: 11px; font-style: italic; letter-spacing: .08em; color: var(--muted); margin-bottom: 8px; }
+.board-label b { color: var(--text); font-weight: 600; }
+.frame { position: relative; width: 100%; border: 1px solid var(--line-hot); border-radius: 14px; overflow: hidden; background: var(--panel); box-shadow: 0 1px 2px rgba(26, 31, 54, .04), 0 12px 32px rgba(26, 31, 54, .06); }
+
+/* ── 应用顶栏（与现有产品一致） ─────────────────────── */
+.mocktop { display: flex; align-items: center; gap: 16px; padding: 11px 20px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 13px; }
+.mark { width: 20px; height: 20px; border-radius: 6px; background: var(--signal); display: grid; place-items: center; color: #fff; font: 700 9px var(--font); }
+.mocknav { display: flex; gap: 2px; font-size: 12px; color: var(--muted); }
+.mocknav span { padding: 3px 10px; border-radius: 6px; }
+.mocknav span.on { color: var(--signal); background: var(--signal-dim); }
+.mocktop .right { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
+/* ── 画板 1 · 列表页 ─────────────────────── */
+.page { padding: 26px 32px 30px; }
+.pg-head { display: flex; align-items: flex-end; gap: 16px; margin-bottom: 18px; }
+.pg-title { font-family: var(--serif); font-size: 26px; font-weight: 700; margin: 0; letter-spacing: .02em; }
+.pg-sub { margin: 4px 0 0; font-size: 12.5px; color: var(--muted); }
+.pg-actions { margin-left: auto; display: flex; gap: 8px; flex: none; }
+.btn { border: 1px solid var(--line); background: var(--panel); color: var(--muted); border-radius: 8px; font-size: 12.5px; padding: 7px 14px; transition: border-color .15s, color .15s; }
+.btn:hover { border-color: var(--line-hot); color: var(--text); }
+.btn-primary { border: none; background: var(--signal); color: #fff; border-radius: 8px; font-size: 12.5px; padding: 8px 16px; font-weight: 600; }
+.btn-primary:hover { filter: brightness(1.05); }
+.btn-primary:active { filter: brightness(.95); }
+
+/* 工具行：分段控件（沿用记忆页 .mem-seg DNA）+ 搜索 */
+.kb-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel); }
+.seg button { border: none; background: transparent; color: var(--muted); font-size: 12px; padding: 6px 13px; border-right: 1px solid var(--line); transition: background .12s, color .12s; }
+.seg button:last-child { border-right: none; }
+.seg button:hover { color: var(--text); }
+.seg button.on { background: var(--signal-dim); color: var(--signal); font-weight: 600; }
+.seg .cnt { font-family: var(--mono); font-size: 10px; opacity: .8; margin-left: 4px; }
+.kb-search { margin-left: auto; position: relative; width: 240px; }
+.kb-search input { width: 100%; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 6px 34px 6px 10px; font-size: 12.5px; outline: none; transition: border-color .15s; }
+.kb-search input:focus { border-color: var(--signal); }
+.kb-search kbd { position: absolute; right: 7px; top: 50%; transform: translateY(-50%); font-family: var(--mono); font-size: 10px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; background: var(--panel-2); }
+
+/* 卡片网格（3 列，继承 .memory-card 的色条 DNA） */
+.kb-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; align-content: start; }
+.kb-card { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px 12px 18px; display: flex; flex-direction: column; gap: 7px; cursor: pointer; transition: border-color .15s, box-shadow .15s; }
+.kb-card:hover { border-color: var(--line-hot); box-shadow: 0 2px 10px rgba(26, 31, 54, .06); }
+.kb-card::before { content: ""; position: absolute; left: 0; top: 12px; bottom: 12px; width: 3px; border-radius: 0 3px 3px 0; }
+.kb-card.c-global::before { background: var(--copper); }
+.kb-card.c-mine::before { background: var(--signal); }
+.kb-card.c-req::before { background: var(--amber); }
+.kb-card-top { display: flex; align-items: center; gap: 8px; }
+.kb-card-name { font-family: var(--serif); font-size: 16px; font-weight: 700; margin: 0; letter-spacing: .01em; }
+.g-badge { font-family: var(--mono); font-size: 9px; letter-spacing: .1em; color: var(--copper); border: 1px solid color-mix(in srgb, var(--copper) 35%, transparent); background: color-mix(in srgb, var(--copper) 7%, transparent); border-radius: 99px; padding: 1px 7px; margin-left: auto; flex: none; }
+.kb-card-desc { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; text-wrap: pretty; }
+.kb-card-meta { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: auto; padding-top: 4px; border-top: 1px dashed var(--line); }
+.kb-card-meta code { font-family: var(--mono); font-size: 10.5px; color: var(--copper); }
+.kb-card-meta .sep { opacity: .5; margin: 0 2px; }
+.kb-empty { display: none; font-family: var(--mono); font-size: 12px; color: var(--muted); text-align: center; padding: 40px 0; }
+.kb-grid.none .kb-empty { display: block; }
+
+/* ── 弹窗（遮罩 + 居中，沿用 .mem-overlay DNA） ─────────────────────── */
+.overlay { position: absolute; inset: 0; background: rgba(10, 14, 12, 0.45); display: none; align-items: center; justify-content: center; z-index: 80; }
+.overlay.show { display: flex; }
+.overlay.fixed { position: fixed; }
+.modal { width: 800px; max-width: calc(100% - 48px); max-height: calc(100% - 48px); overflow: auto; background: var(--panel); border: 1px solid var(--line-hot); border-radius: 12px; box-shadow: 0 24px 64px rgba(10, 14, 12, .22); display: flex; flex-direction: column; animation: modal-in .16s ease-out; }
+@keyframes modal-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.modal-head { display: flex; align-items: baseline; gap: 10px; padding: 16px 22px 13px; border-bottom: 1px solid var(--line); }
+.modal-head h2 { font-family: var(--serif); font-size: 17px; font-weight: 700; margin: 0; letter-spacing: .02em; }
+.modal-head .sub { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.modal-x { margin-left: auto; border: none; background: transparent; color: var(--muted); font-size: 15px; line-height: 1; padding: 2px 6px; border-radius: 6px; align-self: center; }
+.modal-x:hover { background: var(--deep); color: var(--text); }
+.modal-body { padding: 18px 22px; display: flex; flex-direction: column; gap: 15px; }
+.modal-foot { display: flex; align-items: center; gap: 8px; padding: 13px 22px; border-top: 1px solid var(--line); background: var(--panel-2); border-radius: 0 0 12px 12px; }
+.modal-foot .hint { font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-right: auto; }
+
+/* 表单控件 */
+.field-label { display: block; font-family: var(--mono); font-size: 10px; letter-spacing: .1em; color: var(--muted); margin: 0 0 6px; }
+.field-label .req { color: var(--danger); }
+.text-input, .text-area, .select { width: 100%; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 8px 11px; font-size: 13px; outline: none; transition: border-color .15s; }
+.text-input:focus, .text-area:focus, .select:focus { border-color: var(--signal); box-shadow: 0 0 0 3px color-mix(in srgb, var(--signal) 12%, transparent); }
+.text-area { resize: vertical; min-height: 64px; line-height: 1.7; text-wrap: pretty; }
+.select { appearance: none; background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 16px) 55%, calc(100% - 11px) 55%; background-size: 5px 5px; background-repeat: no-repeat; }
+.seg-note { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-left: 6px; letter-spacing: .04em; }
+.field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.field { transition: opacity .15s; }
+.field.dim { opacity: .4; pointer-events: none; }
+/* 可见范围 pill */
+.pill-group { display: flex; gap: 8px; }
+.pill { border: 1px solid var(--line); background: var(--panel); color: var(--muted); border-radius: 99px; font-size: 12px; padding: 5px 14px; }
+.pill.on { color: var(--signal); border-color: var(--signal); background: var(--signal-dim); font-weight: 600; }
+
+/* ── 文件类型徽标（CSS 小徽标，禁 emoji） ─────────────────────── */
+.fb { font-family: var(--mono); font-size: 9px; font-weight: 600; letter-spacing: .08em; border-radius: 4px; padding: 2px 5px; flex: none; }
+.fb-docx { color: var(--copper); background: color-mix(in srgb, var(--copper) 10%, transparent); border: 1px solid color-mix(in srgb, var(--copper) 28%, transparent); }
+.fb-pptx { color: var(--amber); background: color-mix(in srgb, var(--amber) 10%, transparent); border: 1px solid color-mix(in srgb, var(--amber) 28%, transparent); }
+.fb-xlsx { color: var(--signal); background: var(--signal-dim); border: 1px solid color-mix(in srgb, var(--signal) 28%, transparent); }
+.fb-csv  { color: var(--signal); background: transparent; border: 1px dashed color-mix(in srgb, var(--signal) 45%, transparent); }
+.fb-md   { color: var(--ice); background: color-mix(in srgb, var(--ice) 10%, transparent); border: 1px solid color-mix(in srgb, var(--ice) 28%, transparent); }
+.fb-txt  { color: var(--muted); background: var(--deep); border: 1px solid var(--line); }
+.fb-bak  { color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, transparent); border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent); }
+.fb-doc, .fb-ppt, .fb-pdf { color: var(--muted); background: transparent; border: 1px solid var(--line-hot); }
+
+/* ── 解析状态 badge 系统（排队 / 解析中 / 完成 / 失败） ─────────────────────── */
+.st { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; white-space: nowrap; }
+.st .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+.st-queue { color: var(--muted); } .st-queue .dot { background: var(--line-hot); }
+.st-parse { color: var(--copper); font-variant-numeric: tabular-nums; }
+.st-done  { color: var(--signal); font-weight: 600; }
+.st-fail  { color: var(--danger); } .st-fail .dot { background: var(--danger); }
+.st .retry { font-size: 11px; color: var(--danger); border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent); border-radius: 5px; padding: 0 6px; line-height: 16px; background: transparent; }
+.st .retry:hover { background: color-mix(in srgb, var(--danger) 8%, transparent); }
+.spin { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid color-mix(in srgb, var(--copper) 25%, transparent); border-top-color: var(--copper); animation: rot .8s linear infinite; flex: none; }
+@keyframes rot { to { transform: rotate(360deg); } }
+.ck { color: var(--signal); flex: none; }
+/* CSS 进度条 */
+.bar { width: 96px; height: 4px; border-radius: 99px; background: var(--deep); overflow: hidden; }
+.bar i { display: block; height: 100%; border-radius: 99px; background: var(--copper); }
+
+/* ── 导入弹窗内：拖拽区 / chips / 文件行 ─────────────────────── */
+.dropzone { border: 1.5px dashed var(--line-hot); border-radius: var(--radius); background: var(--panel-2); padding: 22px 16px 16px; text-align: center; transition: border-color .15s, background .15s; }
+.dropzone:hover { border-color: var(--signal); background: color-mix(in srgb, var(--signal-dim) 40%, transparent); }
+.dropzone svg { color: var(--muted); }
+.dz-main { font-size: 13px; margin: 8px 0 2px; }
+.dz-sub { font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin: 0 0 12px; }
+.fmt-chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+.fmt-chips span { font-family: var(--mono); font-size: 10px; letter-spacing: .06em; color: var(--muted); border: 1px solid var(--line); background: var(--panel); border-radius: 99px; padding: 2px 9px; }
+.fmt-chips .ok { color: var(--text); border-color: var(--line-hot); }
+.fmt-chips .bad { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); border-style: dashed; }
+.imp-list { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.imp-row { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.imp-row:last-child { border-bottom: none; }
+.imp-row .fb { margin-top: 1px; }
+.imp-main { flex: 1; min-width: 0; }
+.imp-name { font-size: 13px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.imp-size { font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-left: 8px; font-weight: 400; }
+.imp-side { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; flex: none; }
+.imp-row.invalid { background: var(--panel-2); }
+.imp-row.invalid .imp-name, .imp-row.invalid .imp-size { color: var(--muted); }
+.imp-row.invalid .imp-name { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+.imp-err { font-size: 11px; color: var(--danger); }
+
+/* ── 画板 4 · 库详情：面包屑 + 表格化清单 ─────────────────────── */
+.crumb { font-family: var(--mono); font-size: 11px; color: var(--muted); padding-bottom: 14px; border-bottom: 1px solid var(--line); margin-bottom: 18px; }
+.crumb b { color: var(--text); font-weight: 600; }
+.crumb .sep { margin: 0 6px; opacity: .45; }
+.detail-head { display: flex; align-items: flex-end; gap: 14px; margin-bottom: 16px; }
+.detail-head h1 { font-family: var(--serif); font-size: 24px; font-weight: 700; margin: 0 0 4px; letter-spacing: .01em; }
+.detail-meta { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.detail-meta .dot { margin: 0 6px; opacity: .5; }
+.file-table { width: 100%; border-collapse: collapse; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--panel); }
+.file-table thead th { font-family: var(--mono); font-size: 10px; font-weight: 500; letter-spacing: .12em; text-align: left; color: var(--muted); padding: 9px 14px; background: var(--panel-2); border-bottom: 1px solid var(--line); }
+.file-table td { padding: 10px 14px; font-size: 12.5px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.file-table tbody tr:last-child td { border-bottom: none; }
+.file-table tbody tr { transition: background .12s; }
+.file-table tbody tr:hover { background: var(--panel-2); }
+.file-name { font-weight: 550; display: inline-flex; align-items: center; gap: 8px; }
+.file-size, .file-time { font-family: var(--mono); font-size: 11px; color: var(--muted); white-space: nowrap; }
+.table-foot { display: flex; gap: 14px; font-family: var(--mono); font-size: 10.5px; color: var(--muted); padding: 10px 2px 0; }
+.table-foot i { font-style: normal; }
+.table-foot .g { color: var(--signal); } .table-foot .p { color: var(--copper); } .table-foot .f { color: var(--danger); } .table-foot .q { color: var(--muted); }
+
+/* ── 画板 2/3 的静态打开态：底页压暗副本 ─────────────────────── */
+.underlay { pointer-events: none; }
+.underlay .page { opacity: 1; }
+
+@media (max-width: 1200px) { .kb-grid { grid-template-columns: repeat(2, 1fr); } }
+</style>
+</head>
+<body>
+
+<!-- ═════════ 文档页头 ═════════ -->
+<header class="doc-head">
+  <span class="doc-tag">方案 V2 · 现实参照 · 标杆迁移</span>
+  <h1>知识库改版 —— Dify 的信息架构 × Linear 的界面语言</h1>
+  <p>视觉基调仍从「记忆」页 token 出发（纸底、单 accent），迁移两个真实标杆的做法：Dify Knowledge 的卡片网格 / 文件清单 / 处理状态体系，Linear 的克制中性色、1px 精密边框、状态即颜色语义、紧凑行高。参照：
+    <a href="https://docs.dify.ai/en/guides/knowledge-base" target="_blank" rel="noopener">Dify · Knowledge Base 文档</a> ·
+    <a href="https://linear.app" target="_blank" rel="noopener">linear.app</a> ·
+    <a href="https://www.awwwards.com/linear/" target="_blank" rel="noopener">Awwwards · Linear</a>
+  </p>
+</header>
+
+<!-- ═════════ 画板 1 · 知识库列表页（可交互） ═════════ -->
+<section class="board">
+  <div class="board-label"><b>画板 1 · 知识库列表页</b> —— 分类 tab 可点切换过滤卡片；「＋ 新建知识库」「＋ 导入文件」真实打开弹窗（Esc 可关闭）</div>
+  <div class="frame">
+    <div class="mocktop">
+      <div class="brand"><span class="mark">SD</span>Sortie Deck</div>
+      <nav class="mocknav"><span>工作台</span><span>任务</span><span class="on">知识库</span><span>记忆</span><span>角色工场</span><span>工具箱</span><span>小队</span><span>决策中心</span><span>管理</span></nav>
+      <span class="right">1440 × 900</span>
+    </div>
+
+    <div class="page">
+      <div class="pg-head">
+        <div>
+          <h1 class="pg-title">知识库</h1>
+          <p class="pg-sub">产品 / 方案 / 手册——供 Cursor 等辅助工具检索负重</p>
+        </div>
+        <div class="pg-actions">
+          <button class="btn" onclick="openOv('ov-import')">＋ 导入文件</button>
+          <button class="btn-primary" onclick="openOv('ov-new')">＋ 新建知识库</button>
+        </div>
+      </div>
+
+      <div class="kb-toolbar">
+        <div class="seg" id="kbTabs">
+          <button data-f="global">全局共享<span class="cnt">3</span></button>
+          <button data-f="mine">我的知识库<span class="cnt">2</span></button>
+          <button data-f="req">需求知识库<span class="cnt">3</span></button>
+        </div>
+        <div class="kb-search">
+          <input id="kbSearch" type="text" placeholder="搜索知识库…" />
+          <kbd>⌘K</kbd>
+        </div>
+      </div>
+
+      <div class="kb-grid" id="kbGrid">
+        <article class="kb-card c-global" data-cat="global" data-key="平台操作手册 Sortie Deck 全流程操作与最佳实践 admin">
+          <div class="kb-card-top"><h2 class="kb-card-name">平台操作手册</h2><span class="g-badge">全局</span></div>
+          <p class="kb-card-desc">Sortie Deck 全流程操作与最佳实践</p>
+          <div class="kb-card-meta">24 篇<span class="sep">·</span>admin 维护<span class="sep">·</span>更新 2026-10-18</div>
+        </article>
+        <article class="kb-card c-global" data-cat="global" data-key="产品知识库 PRD 设计规范 发布说明 admin">
+          <div class="kb-card-top"><h2 class="kb-card-name">产品知识库</h2><span class="g-badge">全局</span></div>
+          <p class="kb-card-desc">PRD / 设计规范 / 发布说明</p>
+          <div class="kb-card-meta">12 篇<span class="sep">·</span>admin 维护<span class="sep">·</span>更新 2026-10-15</div>
+        </article>
+        <article class="kb-card c-global" data-cat="global" data-key="竞品情报库 竞品功能对比与分析速记 admin">
+          <div class="kb-card-top"><h2 class="kb-card-name">竞品情报库</h2><span class="g-badge">全局</span></div>
+          <p class="kb-card-desc">竞品功能对比与分析速记</p>
+          <div class="kb-card-meta">9 篇<span class="sep">·</span>admin 维护<span class="sep">·</span>更新 2026-10-12</div>
+        </article>
+        <article class="kb-card c-mine" data-cat="mine" data-key="读书笔记·精要 个人阅读摘录与批注">
+          <div class="kb-card-top"><h2 class="kb-card-name">读书笔记·精要</h2></div>
+          <p class="kb-card-desc">个人阅读摘录与批注</p>
+          <div class="kb-card-meta">18 篇<span class="sep">·</span>更新 2026-10-17</div>
+        </article>
+        <article class="kb-card c-mine" data-cat="mine" data-key="会议纪要归档 周会 评审纪要全文">
+          <div class="kb-card-top"><h2 class="kb-card-name">会议纪要归档</h2></div>
+          <p class="kb-card-desc">周会 / 评审纪要全文</p>
+          <div class="kb-card-meta">31 篇<span class="sep">·</span>更新 2026-10-16</div>
+        </article>
+        <article class="kb-card c-req" data-cat="req" data-key="Yuli 用户与新角色打招呼 initiative in_1f979ce1d023">
+          <div class="kb-card-top"><h2 class="kb-card-name">Yuli 用户与新角色打招呼</h2></div>
+          <p class="kb-card-desc">供本需求的 Agent 检索：用户画像、话术、评审记录</p>
+          <div class="kb-card-meta"><code>in_1f979ce1d023</code><span class="sep">·</span>6 篇<span class="sep">·</span>更新 2026-10-19</div>
+        </article>
+        <article class="kb-card c-req" data-cat="req" data-key="Short Chat 打招呼文案 多语言文案素材库">
+          <div class="kb-card-top"><h2 class="kb-card-name">Short Chat 打招呼文案</h2></div>
+          <p class="kb-card-desc">多语言文案素材库</p>
+          <div class="kb-card-meta">12 篇<span class="sep">·</span>更新 2026-10-15</div>
+        </article>
+        <article class="kb-card c-req" data-cat="req" data-key="知识库改版 本需求自身的资料与调研">
+          <div class="kb-card-top"><h2 class="kb-card-name">知识库改版</h2></div>
+          <p class="kb-card-desc">本需求自身的资料与调研</p>
+          <div class="kb-card-meta">4 篇<span class="sep">·</span>更新 2026-10-19</div>
+        </article>
+        <div class="kb-empty" style="grid-column: 1 / -1;">没有匹配「筛选 + 关键词」的知识库</div>
+      </div>
+    </div>
+
+    <!-- 弹窗 A · 新建知识库（默认隐藏，由画板 1 按钮触发） -->
+    <div class="overlay" id="ov-new" role="dialog" aria-modal="true" aria-labelledby="ov-new-title">
+      <div class="modal">
+        <div class="modal-head">
+          <h2 id="ov-new-title">新建知识库</h2>
+          <span class="sub">KNOWLEDGE / CREATE</span>
+          <button class="modal-x" onclick="closeOv(this)" aria-label="关闭">×</button>
+        </div>
+        <div class="modal-body">
+          <div>
+            <label class="field-label" for="f-name">名称 <span class="req">*</span></label>
+            <input class="text-input" id="f-name" type="text" value="Short Chat 打招呼文案" />
+          </div>
+          <div>
+            <label class="field-label" for="f-desc">简介</label>
+            <textarea class="text-area" id="f-desc" placeholder="一句话说明这个库收录什么、供谁检索（可选）"></textarea>
+          </div>
+          <div>
+            <span class="field-label">分类</span>
+            <div class="seg" id="catSeg">
+              <button data-v="global">全局共享<span class="seg-note">仅 Admin 可创建</span></button>
+              <button data-v="mine">我的知识库</button>
+              <button class="on" data-v="req">需求知识库</button>
+            </div>
+          </div>
+          <div class="field" id="reqRow">
+            <label class="field-label" for="f-req">关联需求</label>
+            <select class="select" id="f-req">
+              <option selected>Yuli 用户与新角色打招呼 · initiative in_1f979ce1d023</option>
+              <option>Short Chat 打招呼文案 · initiative in_8c02eab41f77</option>
+              <option>知识库改版 · initiative in_3de55bb90c14</option>
+            </select>
+          </div>
+          <div>
+            <span class="field-label">可见范围</span>
+            <div class="pill-group" id="visPills">
+              <button class="pill on">全员</button>
+              <button class="pill">指定成员</button>
+            </div>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <span class="hint">创建后可直接拖入文件，解析完成即可被 Cursor 检索</span>
+          <button class="btn" onclick="closeOv(this)">取消</button>
+          <button class="btn-primary" onclick="closeOv(this)">创建知识库</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 弹窗 B · 导入文件（默认隐藏，由画板 1 / 画板 4 按钮触发） -->
+    <div class="overlay" id="ov-import" role="dialog" aria-modal="true" aria-labelledby="ov-imp-title">
+      <div class="modal">
+        <div class="modal-head">
+          <h2 id="ov-imp-title">导入文件 · Yuli 用户与新角色打招呼</h2>
+          <span class="sub">IMPORT / 4 SELECTED</span>
+          <button class="modal-x" onclick="closeOv(this)" aria-label="关闭">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="dropzone">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 15V4"/><path d="M8 8l4-4 4 4"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/>
+            </svg>
+            <p class="dz-main">拖拽文件到此处，或点击选择</p>
+            <p class="dz-sub">支持批量 · 单文件 ≤ 20 MB · 解析后自动分块入库</p>
+            <div class="fmt-chips">
+              <span class="ok">docx</span><span class="ok">doc</span><span class="ok">ppt</span><span class="ok">pptx</span><span class="ok">csv</span><span class="ok">xlsx</span><span class="ok">md</span><span class="ok">txt</span><span class="ok">pdf</span>
+            </div>
+          </div>
+
+          <div class="imp-list">
+            <div class="imp-row">
+              <span class="fb fb-xlsx">XLSX</span>
+              <div class="imp-main"><span class="imp-name">用户反馈汇总</span><span class="imp-size">216 KB</span></div>
+              <div class="imp-side">
+                <span class="st st-parse"><span class="spin"></span>解析中 62%</span>
+                <span class="bar"><i style="width:62%"></i></span>
+              </div>
+            </div>
+            <div class="imp-row">
+              <span class="fb fb-md">MD</span>
+              <div class="imp-main"><span class="imp-name">新增话术</span><span class="imp-size">6 KB</span></div>
+              <div class="imp-side"><span class="st st-queue"><span class="dot"></span>排队中</span></div>
+            </div>
+            <div class="imp-row">
+              <span class="fb fb-txt">TXT</span>
+              <div class="imp-main"><span class="imp-name">竞品调研摘录</span><span class="imp-size">12 KB</span></div>
+              <div class="imp-side">
+                <span class="st st-done"><svg class="ck" width="11" height="11" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.4l2.3 2.3 4.7-5.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>已完成</span>
+              </div>
+            </div>
+            <div class="imp-row invalid">
+              <span class="fb fb-bak">BAK</span>
+              <div class="imp-main"><span class="imp-name">历史数据</span><span class="imp-size">4 MB</span></div>
+              <div class="imp-side"><span class="imp-err">不支持的格式</span><span class="st st-queue" style="visibility:hidden"><span class="dot"></span>·</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <span class="hint">已选 4 个 · 2 项待解析 · 1 项已就绪 · 1 项无法导入</span>
+          <button class="btn" onclick="closeOv(this)">继续添加</button>
+          <button class="btn-primary" onclick="closeOv(this)">开始导入 (2)</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════ 画板 2 · 新建知识库弹窗（静态打开态） ═════════ -->
+<section class="board">
+  <div class="board-label"><b>画板 2 · 新建知识库弹窗</b> —— 打开态静态呈现，便于截图评审；分类分段控件可点，「需求知识库」选中时展示「关联需求」</div>
+  <div class="frame">
+    <div class="mocktop">
+      <div class="brand"><span class="mark">SD</span>Sortie Deck</div>
+      <nav class="mocknav"><span>工作台</span><span>任务</span><span class="on">知识库</span><span>记忆</span><span>角色工场</span><span>工具箱</span><span>小队</span><span>决策中心</span><span>管理</span></nav>
+      <span class="right">1440 × 900</span>
+    </div>
+    <!-- 压暗底页副本 -->
+    <div class="underlay">
+      <div class="page">
+        <div class="pg-head">
+          <div><h1 class="pg-title">知识库</h1><p class="pg-sub">产品 / 方案 / 手册——供 Cursor 等辅助工具检索负重</p></div>
+          <div class="pg-actions"><button class="btn" tabindex="-1">＋ 导入文件</button><button class="btn-primary" tabindex="-1">＋ 新建知识库</button></div>
+        </div>
+        <div class="kb-toolbar">
+          <div class="seg"><button>全局共享<span class="cnt">3</span></button><button>我的知识库<span class="cnt">2</span></button><button>需求知识库<span class="cnt">3</span></button></div>
+          <div class="kb-search"><input type="text" placeholder="搜索知识库…" tabindex="-1" /><kbd>⌘K</kbd></div>
+        </div>
+        <div class="kb-grid">
+          <article class="kb-card c-global"><div class="kb-card-top"><h2 class="kb-card-name">平台操作手册</h2><span class="g-badge">全局</span></div><p class="kb-card-desc">Sortie Deck 全流程操作与最佳实践</p><div class="kb-card-meta">24 篇<span class="sep">·</span>admin 维护<span class="sep">·</span>更新 2026-10-18</div></article>
+          <article class="kb-card c-global"><div class="kb-card-top"><h2 class="kb-card-name">产品知识库</h2><span class="g-badge">全局</span></div><p class="kb-card-desc">PRD / 设计规范 / 发布说明</p><div class="kb-card-meta">12 篇<span class="sep">·</span>admin 维护<span class="sep">·</span>更新 2026-10-15</div></article>
+          <article class="kb-card c-mine"><div class="kb-card-top"><h2 class="kb-card-name">读书笔记·精要</h2></div><p class="kb-card-desc">个人阅读摘录与批注</p><div class="kb-card-meta">18 篇<span class="sep">·</span>更新 2026-10-17</div></article>
+        </div>
+      </div>
+    </div>
+
+    <div class="overlay show" role="dialog" aria-modal="true" aria-labelledby="b2-title">
+      <div class="modal">
+        <div class="modal-head">
+          <h2 id="b2-title">新建知识库</h2>
+          <span class="sub">KNOWLEDGE / CREATE</span>
+          <button class="modal-x" onclick="closeOv(this)" aria-label="关闭">×</button>
+        </div>
+        <div class="modal-body">
+          <div>
+            <label class="field-label" for="f2-name">名称 <span class="req">*</span></label>
+            <input class="text-input" id="f2-name" type="text" value="Short Chat 打招呼文案" />
+          </div>
+          <div>
+            <label class="field-label" for="f2-desc">简介</label>
+            <textarea class="text-area" id="f2-desc" placeholder="一句话说明这个库收录什么、供谁检索（可选）"></textarea>
+          </div>
+          <div>
+            <span class="field-label">分类</span>
+            <div class="seg" id="catSeg2">
+              <button data-v="global">全局共享<span class="seg-note">仅 Admin 可创建</span></button>
+              <button data-v="mine">我的知识库</button>
+              <button class="on" data-v="req">需求知识库</button>
+            </div>
+          </div>
+          <div class="field" id="reqRow2">
+            <label class="field-label" for="f2-req">关联需求</label>
+            <select class="select" id="f2-req">
+              <option selected>Yuli 用户与新角色打招呼 · initiative in_1f979ce1d023</option>
+              <option>Short Chat 打招呼文案 · initiative in_8c02eab41f77</option>
+              <option>知识库改版 · initiative in_3de55bb90c14</option>
+            </select>
+          </div>
+          <div>
+            <span class="field-label">可见范围</span>
+            <div class="pill-group" id="visPills2">
+              <button class="pill on">全员</button>
+              <button class="pill">指定成员</button>
+            </div>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <span class="hint">创建后可直接拖入文件，解析完成即可被 Cursor 检索</span>
+          <button class="btn" onclick="closeOv(this)">取消</button>
+          <button class="btn-primary" onclick="closeOv(this)">创建知识库</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════ 画板 3 · 文件导入弹窗（静态打开态） ═════════ -->
+<section class="board">
+  <div class="board-label"><b>画板 3 · 文件导入弹窗</b> —— 打开态静态呈现；四种解析状态（解析中进度条 / 排队 / 完成 SVG 勾 / 不支持格式置灰）</div>
+  <div class="frame">
+    <div class="mocktop">
+      <div class="brand"><span class="mark">SD</span>Sortie Deck</div>
+      <nav class="mocknav"><span>工作台</span><span>任务</span><span class="on">知识库</span><span>记忆</span><span>角色工场</span><span>工具箱</span><span>小队</span><span>决策中心</span><span>管理</span></nav>
+      <span class="right">1440 × 900</span>
+    </div>
+    <div class="underlay">
+      <div class="page">
+        <div class="pg-head">
+          <div><h1 class="pg-title">知识库</h1><p class="pg-sub">产品 / 方案 / 手册——供 Cursor 等辅助工具检索负重</p></div>
+          <div class="pg-actions"><button class="btn" tabindex="-1">＋ 导入文件</button><button class="btn-primary" tabindex="-1">＋ 新建知识库</button></div>
+        </div>
+        <div class="kb-toolbar">
+          <div class="seg"><button>全局共享<span class="cnt">3</span></button><button>我的知识库<span class="cnt">2</span></button><button>需求知识库<span class="cnt">3</span></button></div>
+          <div class="kb-search"><input type="text" placeholder="搜索知识库…" tabindex="-1" /><kbd>⌘K</kbd></div>
+        </div>
+        <div class="kb-grid">
+          <article class="kb-card c-req"><div class="kb-card-top"><h2 class="kb-card-name">Yuli 用户与新角色打招呼</h2></div><p class="kb-card-desc">供本需求的 Agent 检索：用户画像、话术、评审记录</p><div class="kb-card-meta">in_1f979ce1d023<span class="sep">·</span>6 篇<span class="sep">·</span>更新 2026-10-19</div></article>
+          <article class="kb-card c-req"><div class="kb-card-top"><h2 class="kb-card-name">Short Chat 打招呼文案</h2></div><p class="kb-card-desc">多语言文案素材库</p><div class="kb-card-meta">12 篇<span class="sep">·</span>更新 2026-10-15</div></article>
+          <article class="kb-card c-req"><div class="kb-card-top"><h2 class="kb-card-name">知识库改版</h2></div><p class="kb-card-desc">本需求自身的资料与调研</p><div class="kb-card-meta">4 篇<span class="sep">·</span>更新 2026-10-19</div></article>
+        </div>
+      </div>
+    </div>
+
+    <div class="overlay show" role="dialog" aria-modal="true" aria-labelledby="b3-title">
+      <div class="modal">
+        <div class="modal-head">
+          <h2 id="b3-title">导入文件 · Yuli 用户与新角色打招呼</h2>
+          <span class="sub">IMPORT / 4 SELECTED</span>
+          <button class="modal-x" onclick="closeOv(this)" aria-label="关闭">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="dropzone">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 15V4"/><path d="M8 8l4-4 4 4"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/>
+            </svg>
+            <p class="dz-main">拖拽文件到此处，或点击选择</p>
+            <p class="dz-sub">支持批量 · 单文件 ≤ 20 MB · 解析后自动分块入库</p>
+            <div class="fmt-chips">
+              <span class="ok">docx</span><span class="ok">doc</span><span class="ok">ppt</span><span class="ok">pptx</span><span class="ok">csv</span><span class="ok">xlsx</span><span class="ok">md</span><span class="ok">txt</span><span class="ok">pdf</span>
+            </div>
+          </div>
+          <div class="imp-list">
+            <div class="imp-row">
+              <span class="fb fb-xlsx">XLSX</span>
+              <div class="imp-main"><span class="imp-name">用户反馈汇总</span><span class="imp-size">216 KB</span></div>
+              <div class="imp-side">
+                <span class="st st-parse"><span class="spin"></span>解析中 62%</span>
+                <span class="bar"><i style="width:62%"></i></span>
+              </div>
+            </div>
+            <div class="imp-row">
+              <span class="fb fb-md">MD</span>
+              <div class="imp-main"><span class="imp-name">新增话术</span><span class="imp-size">6 KB</span></div>
+              <div class="imp-side"><span class="st st-queue"><span class="dot"></span>排队中</span></div>
+            </div>
+            <div class="imp-row">
+              <span class="fb fb-txt">TXT</span>
+              <div class="imp-main"><span class="imp-name">竞品调研摘录</span><span class="imp-size">12 KB</span></div>
+              <div class="imp-side">
+                <span class="st st-done"><svg class="ck" width="11" height="11" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.4l2.3 2.3 4.7-5.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>已完成</span>
+              </div>
+            </div>
+            <div class="imp-row invalid">
+              <span class="fb fb-bak">BAK</span>
+              <div class="imp-main"><span class="imp-name">历史数据</span><span class="imp-size">4 MB</span></div>
+              <div class="imp-side"><span class="imp-err">不支持的格式</span><span class="st st-queue" style="visibility:hidden"><span class="dot"></span>·</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <span class="hint">已选 4 个 · 2 项待解析 · 1 项已就绪 · 1 项无法导入</span>
+          <button class="btn" onclick="closeOv(this)">继续添加</button>
+          <button class="btn-primary" onclick="closeOv(this)">开始导入 (2)</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════ 画板 4 · 库详情态 ═════════ -->
+<section class="board">
+  <div class="board-label"><b>画板 4 · 库详情态（Yuli 用户与新角色打招呼）</b> —— 表格化清单 + 四态 badge；「＋ 导入文件」可点，跳回画板 1 打开导入弹窗</div>
+  <div class="frame">
+    <div class="mocktop">
+      <div class="brand"><span class="mark">SD</span>Sortie Deck</div>
+      <nav class="mocknav"><span>工作台</span><span>任务</span><span class="on">知识库</span><span>记忆</span><span>角色工场</span><span>工具箱</span><span>小队</span><span>决策中心</span><span>管理</span></nav>
+      <span class="right">1440 × 900</span>
+    </div>
+    <div class="page">
+      <div class="crumb">知识库<span class="sep">/</span>需求知识库<span class="sep">/</span><b>Yuli 用户与新角色打招呼</b></div>
+
+      <div class="detail-head">
+        <div>
+          <h1>Yuli 用户与新角色打招呼</h1>
+          <div class="detail-meta">6 个文件<span class="dot">·</span>最近更新 2026-10-19<span class="dot">·</span>initiative <code style="font-family:var(--mono);color:var(--copper)">in_1f979ce1d023</code></div>
+        </div>
+        <div class="pg-actions">
+          <button class="btn" onclick="jumpImport()">＋ 导入文件</button>
+          <button class="btn">编辑库</button>
+        </div>
+      </div>
+
+      <table class="file-table">
+        <thead>
+          <tr><th style="width:44%">文件名</th><th style="width:12%">大小</th><th style="width:24%">状态</th><th style="width:20%">更新时间</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="file-name"><span class="fb fb-docx">DOCX</span>PRD-打招呼文案-v3.docx</span></td>
+            <td class="file-size">84 KB</td>
+            <td><span class="st st-done"><svg class="ck" width="11" height="11" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.4l2.3 2.3 4.7-5.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>解析完成</span></td>
+            <td class="file-time">2026-10-18</td>
+          </tr>
+          <tr>
+            <td><span class="file-name"><span class="fb fb-md">MD</span>qa_handoff.md</span></td>
+            <td class="file-size">6 KB</td>
+            <td><span class="st st-done"><svg class="ck" width="11" height="11" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.4l2.3 2.3 4.7-5.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>解析完成</span></td>
+            <td class="file-time">2026-10-17</td>
+          </tr>
+          <tr>
+            <td><span class="file-name"><span class="fb fb-pptx">PPTX</span>打招呼方案汇报.pptx</span></td>
+            <td class="file-size">3.2 MB</td>
+            <td><span class="st st-parse"><span class="spin"></span>解析中 62%</span></td>
+            <td class="file-time">2026-10-19</td>
+          </tr>
+          <tr>
+            <td><span class="file-name"><span class="fb fb-xlsx">XLSX</span>用户反馈汇总.xlsx</span></td>
+            <td class="file-size">216 KB</td>
+            <td><span class="st st-done"><svg class="ck" width="11" height="11" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.4l2.3 2.3 4.7-5.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>解析完成</span></td>
+            <td class="file-time">2026-10-16</td>
+          </tr>
+          <tr>
+            <td><span class="file-name"><span class="fb fb-csv">CSV</span>埋点数据导出.csv</span></td>
+            <td class="file-size">1.1 MB</td>
+            <td><span class="st st-fail"><span class="dot"></span>解析失败<button class="retry" type="button">重试</button></span></td>
+            <td class="file-time">2026-10-15</td>
+          </tr>
+          <tr>
+            <td><span class="file-name"><span class="fb fb-txt">TXT</span>竞品调研摘录.txt</span></td>
+            <td class="file-size">12 KB</td>
+            <td><span class="st st-queue"><span class="dot"></span>排队中</span></td>
+            <td class="file-time">2026-10-19</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="table-foot">
+        <span>共 6 个文件</span>
+        <i class="g">3 解析完成</i>
+        <i class="p">1 解析中</i>
+        <i class="f">1 解析失败</i>
+        <i class="q">1 排队中</i>
+        <i style="margin-left:auto">解析完成即可被 Cursor 检索</i>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+/* ── 画板 1：分类 tab 过滤 + 搜索 ─────────────────────── */
+(function () {
+  var tabs = document.querySelectorAll('#kbTabs button');
+  var cards = document.querySelectorAll('#kbGrid .kb-card');
+  var grid = document.getElementById('kbGrid');
+  var search = document.getElementById('kbSearch');
+  var activeTab = '';
+
+  function applyFilter() {
+    var kw = (search.value || '').trim().toLowerCase();
+    var visible = 0;
+    cards.forEach(function (card) {
+      var okTab = !activeTab || card.dataset.cat === activeTab;
+      var okKw = !kw || (card.dataset.key || '').toLowerCase().indexOf(kw) !== -1;
+      var show = okTab && okKw;
+      card.style.display = show ? '' : 'none';
+      if (show) visible++;
+    });
+    grid.classList.toggle('none', visible === 0);
+  }
+
+  tabs.forEach(function (tab) {
+    tab.addEventListener('click', function () {
+      if (activeTab === tab.dataset.f) {
+        activeTab = '';
+        tab.classList.remove('on');
+      } else {
+        activeTab = tab.dataset.f;
+        tabs.forEach(function (t) { t.classList.remove('on'); });
+        tab.classList.add('on');
+      }
+      applyFilter();
+    });
+  });
+  search.addEventListener('input', applyFilter);
+})();
+
+/* ── 弹窗开关（画板 1 交互 + 画板 2/3 静态态复用） ─────────────────────── */
+function openOv(id) {
+  var el = document.getElementById(id);
+  if (el) el.classList.add('show');
+}
+function closeOv(btn) {
+  var ov = btn.closest('.overlay');
+  /* 静态画板的弹窗关闭后仍可再次打开，不影响截图初始态 */
+  if (ov && !ov.id) ov.classList.remove('show');
+}
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape') {
+    document.querySelectorAll('.overlay.show').forEach(function (ov) {
+      if (!ov.id || ov.id === 'ov-new' || ov.id === 'ov-import') ov.classList.remove('show');
+    });
+  }
+});
+
+/* ── 新建弹窗：分类切换显隐「关联需求」+ 可见范围 pill ─────────────────────── */
+function wireCatSeg(segId, rowId) {
+  var seg = document.getElementById(segId);
+  var row = document.getElementById(rowId);
+  if (!seg || !row) return;
+  seg.querySelectorAll('button').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      seg.querySelectorAll('button').forEach(function (b) { b.classList.remove('on'); });
+      btn.classList.add('on');
+      row.classList.toggle('dim', btn.dataset.v !== 'req');
+    });
+  });
+}
+wireCatSeg('catSeg', 'reqRow');
+wireCatSeg('catSeg2', 'reqRow2');
+
+['visPills', 'visPills2'].forEach(function (id) {
+  var box = document.getElementById(id);
+  if (!box) return;
+  box.querySelectorAll('.pill').forEach(function (pill) {
+    pill.addEventListener('click', function () {
+      box.querySelectorAll('.pill').forEach(function (p) { p.classList.remove('on'); });
+      pill.classList.add('on');
+    });
+  });
+});
+
+/* ── 画板 4 的「＋ 导入文件」：滚动到画板 1 并打开导入弹窗 ─────────────────────── */
+function jumpImport() {
+  openOv('ov-import');
+  var b1 = document.querySelector('.board');
+  if (b1 && b1.scrollIntoView) b1.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+</script>
+</body>
+</html>

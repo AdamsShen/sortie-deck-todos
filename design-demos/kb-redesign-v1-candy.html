@@ -1,0 +1,983 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>知识库改版 v1 · 糖果色凸起立体按钮 Friendly Geometric Candy</title>
+<!--
+  ============================================================================
+  Sortie Deck · 知识库改版 v1 · 秒数轮盘 4 号风格「糖果色凸起立体按钮」
+  风格锚点 = 项目「记忆」页（styles.css 3173-3470：mem-toolbar 分段控件 /
+  memory-grid 色条卡片 / mem-overlay + mem-modal 弹窗），色彩 token 同源
+  （--void:#f6f9fc / --signal:#0e9f6e / --copper:#3b5bdb / --amber:#b7791f / --danger:#c9503a）
+
+  【字体降级点】超粗圆体标题理想字体为「苹方 Heavy / 圆体」，零外部依赖下
+  使用系统栈降级："PingFang SC"(macOS 直接命中 Heavy 权重) → "Hiragino Sans GB"
+  → "Yuanti SC"(真圆体) → "Source Han Sans SC" → "Microsoft YaHei"(Win 粗黑)
+  → 系统无衬线。全部配 font-weight:900 + letter-spacing 模拟圆体憨厚感。
+  【视觉 DNA】大圆角(16-24px) + 凸起 3D 按钮(box-shadow: 0 4px 0 深一档同色，
+  :active translateY(4px)) + 糖果色 accent(绿/蓝/琥珀，禁紫色渐变) + 白底 + 极淡
+  点阵纹理(opacity≤0.08)。图标一律内联 SVG 线条，全稿零 emoji。
+  ============================================================================
+-->
+<style>
+/* ============ 糖果色 token（与项目纸主题同源） ============ */
+:root{
+  --void:#f6f9fc; --panel:#ffffff; --panel-2:#f8fafd;
+  --line:#e3e8ee; --line-hot:#cbd2dc;
+  --text:#1a1f36; --muted:#697386;
+  /* 糖果三主色（分类映射）+ 辅助糖 */
+  --c-green:#0e9f6e;  --c-green-d:#0a7a54;  --c-green-t:#dff2e9;
+  --c-blue:#3b5bdb;   --c-blue-d:#2c46ad;   --c-blue-t:#e4eafb;
+  --c-amber:#b7791f;  --c-amber-d:#8f5e16;  --c-amber-t:#f6e8d2;
+  --c-pink:#e64980;   --c-pink-d:#c2255c;   --c-pink-t:#fdeaf1;
+  --c-orange:#f76707; --c-orange-d:#d9480f; --c-orange-t:#ffedd9;
+  --c-teal:#0ca678;   --c-teal-d:#087f5b;
+  --danger:#c9503a;   --danger-d:#a03d2b;   --danger-t:#fae3de;
+  --font:-apple-system,"PingFang SC","Helvetica Neue",system-ui,sans-serif;
+  --round:"PingFang SC","Hiragino Sans GB","Yuanti SC","Source Han Sans SC","Microsoft YaHei",sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{
+  background:#edf1f7;
+  background-image:radial-gradient(rgba(26,31,54,.05) 1px,transparent 1px);
+  background-size:22px 22px;
+  font-family:var(--font);color:var(--text);
+  padding:2.5rem 1.5rem 4rem;display:flex;flex-direction:column;gap:2.75rem;align-items:center;
+}
+svg{display:block}
+
+/* ============ 画板框架 ============ */
+.board{width:min(1360px,100%)}
+.board-label{
+  font-family:var(--mono);font-style:italic;font-size:.72rem;letter-spacing:.08em;
+  color:var(--muted);margin:0 0 .7rem .35rem;
+}
+.board-label b{color:var(--text);font-weight:700}
+.frame{
+  position:relative;overflow:hidden;
+  background:var(--void);
+  border:1px solid var(--line);border-radius:24px;
+  box-shadow:0 2px 0 #d7dee8, 0 18px 44px rgba(26,31,54,.07);
+  padding:2rem 2.25rem 2.25rem;min-height:620px;
+}
+/* 极淡纹理：糖点网格，opacity ≤ 0.08 */
+.frame::before{
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background-image:radial-gradient(rgba(59,91,219,.07) 1.2px,transparent 1.2px);
+  background-size:26px 26px;
+}
+.frame>*{position:relative}
+/* 静态打开态画板（2/3）：底下的幽灵列表页 */
+.ghost{opacity:.45;filter:saturate(.35)}
+.ov-static{
+  position:absolute;inset:0;z-index:6;
+  background:rgba(18,24,38,.48);backdrop-filter:blur(2.5px);
+  display:flex;align-items:center;justify-content:center;
+}
+
+/* ============ 凸起 3D 按钮（本风格核心） ============ */
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:.45rem;
+  border:none;cursor:pointer;font-family:var(--round);font-weight:900;
+  font-size:.85rem;letter-spacing:.02em;border-radius:14px;
+  padding:.62rem 1.2rem;line-height:1;white-space:nowrap;
+  transition:transform .08s ease,box-shadow .08s ease,filter .15s ease;
+}
+.btn .ic{width:15px;height:15px;stroke-width:2.6}
+.btn-green{background:var(--c-green);color:#fff;box-shadow:0 4px 0 var(--c-green-d)}
+.btn-green:hover{filter:brightness(1.06)}
+.btn-green:active{transform:translateY(4px);box-shadow:0 0 0 var(--c-green-d)}
+.btn-blue{background:var(--c-blue);color:#fff;box-shadow:0 4px 0 var(--c-blue-d)}
+.btn-blue:hover{filter:brightness(1.06)}
+.btn-blue:active{transform:translateY(4px);box-shadow:0 0 0 var(--c-blue-d)}
+.btn-ghost{
+  background:#fff;color:var(--text);border:1.5px solid var(--line-hot);
+  box-shadow:0 3px 0 #d7dee8;
+}
+.btn-ghost:hover{border-color:var(--c-blue);color:var(--c-blue)}
+.btn-ghost:active{transform:translateY(3px);box-shadow:0 0 0 #d7dee8}
+.btn-sm{font-size:.76rem;padding:.48rem .9rem;border-radius:12px}
+.btn:disabled{opacity:.55;cursor:not-allowed}
+
+/* ============ 标题（超粗圆体降级栈） ============ */
+.h-round{font-family:var(--round);font-weight:900;letter-spacing:.01em;text-wrap:pretty}
+
+/* ============ 画板 1 · 列表页 ============ */
+.page-head{display:flex;align-items:flex-end;gap:1.25rem;margin-bottom:1.35rem}
+.page-title{font-size:2.15rem;line-height:1.15}
+.page-sub{font-size:.82rem;color:var(--muted);margin-top:.4rem;text-wrap:pretty}
+.page-head .btn{margin-left:auto}
+/* 工具行：分段控件（记忆页 .mem-toolbar 骨架 + 糖果皮） */
+.toolbar{display:flex;align-items:center;gap:.6rem;margin-bottom:1.15rem;flex-wrap:wrap}
+.seg{
+  display:inline-flex;gap:4px;background:#fff;border:1.5px solid var(--line);
+  border-radius:14px;padding:4px;box-shadow:0 3px 0 #e6ebf2;
+}
+.seg button{
+  border:none;background:transparent;cursor:pointer;font-family:var(--round);
+  font-weight:700;font-size:.78rem;color:var(--muted);
+  padding:.42rem .95rem;border-radius:10px;display:inline-flex;align-items:center;gap:.4rem;
+  transition:background .15s ease,color .15s ease,box-shadow .1s ease;
+}
+.seg button .n{font-family:var(--mono);font-size:.66rem;font-weight:700;opacity:.8}
+.seg button .dot{width:8px;height:8px;border-radius:99px}
+.seg button.on{color:#fff;box-shadow:0 2px 0 rgba(0,0,0,.18)}
+.seg button.on[data-cat="global"]{background:var(--c-green)}
+.seg button.on[data-cat="mine"]{background:var(--c-blue)}
+.seg button.on[data-cat="req"]{background:var(--c-amber)}
+.search{
+  margin-left:auto;display:flex;align-items:center;gap:.5rem;
+  background:#fff;border:1.5px solid var(--line);border-radius:14px;
+  padding:.5rem .85rem;box-shadow:0 3px 0 #e6ebf2;width:250px;
+}
+.search svg{width:15px;height:15px;color:var(--muted);stroke-width:2.4}
+.search input{border:none;outline:none;background:transparent;font-size:.8rem;width:100%;font-family:var(--font);color:var(--text)}
+.search input::placeholder{color:#a3adbf}
+.search:focus-within{border-color:var(--c-blue)}
+
+/* 卡片网格（3 列，memory-grid 骨架） */
+.kb-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;align-content:start}
+.kb-card{
+  position:relative;background:#fff;border:1.5px solid var(--line);
+  border-radius:18px;padding:1rem 1.1rem .95rem 1.35rem;cursor:pointer;
+  display:flex;flex-direction:column;gap:.45rem;
+  box-shadow:0 3px 0 #e6ebf2;
+  transition:transform .15s ease,box-shadow .15s ease,border-color .15s ease;
+}
+.kb-card:hover{transform:translateY(-4px);border-color:var(--line-hot);box-shadow:0 7px 0 #dfe5ee,0 14px 26px rgba(26,31,54,.08)}
+/* 左侧分类色条（记忆页 ::before 色条基因，加粗为糖果条） */
+.kb-card::before{
+  content:"";position:absolute;left:0;top:.9rem;bottom:.9rem;width:6px;
+  border-radius:0 6px 6px 0;
+}
+.kb-card[data-cat="global"]::before{background:var(--c-green)}
+.kb-card[data-cat="mine"]::before{background:var(--c-blue)}
+.kb-card[data-cat="req"]::before{background:var(--c-amber)}
+.kb-card.hide{display:none}
+.kb-card-top{display:flex;align-items:center;gap:.5rem;padding-right:1.6rem}
+.kb-card-name{font-family:var(--round);font-weight:900;font-size:1rem}
+.kb-badge{
+  font-family:var(--mono);font-size:.58rem;font-weight:700;letter-spacing:.08em;
+  padding:.14rem .5rem;border-radius:99px;flex:none;
+}
+.kb-badge.global{background:var(--c-green-t);color:var(--c-green-d)}
+.kb-badge.mine{background:var(--c-blue-t);color:var(--c-blue-d)}
+.kb-badge.req{background:var(--c-amber-t);color:var(--c-amber-d)}
+.kb-card-desc{font-size:.78rem;line-height:1.6;color:#4a5266;text-wrap:pretty}
+.kb-card-meta{font-family:var(--mono);font-size:.62rem;color:var(--muted);letter-spacing:.02em}
+.kb-card-dock{
+  position:absolute;top:.65rem;right:.7rem;width:26px;height:26px;border-radius:9px;
+  border:none;background:transparent;color:#a3adbf;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .15s ease;
+}
+.kb-card:hover .kb-card-dock{opacity:1}
+.kb-card-dock:hover{background:var(--void);color:var(--text)}
+.kb-card-dock svg{width:14px;height:14px;stroke-width:2.4}
+.kb-empty{
+  grid-column:1/-1;text-align:center;color:var(--muted);font-size:.82rem;
+  padding:3rem 0;font-family:var(--mono);
+}
+
+/* ============ 弹窗（mem-modal 骨架 + 糖果皮） ============ */
+.modal{
+  width:min(800px,calc(100% - 3rem));max-height:calc(100% - 3rem);overflow-y:auto;
+  background:#fff;border-radius:24px;
+  box-shadow:0 6px 0 rgba(18,24,38,.22),0 30px 70px rgba(18,24,38,.35);
+}
+.modal-head{
+  display:flex;align-items:center;gap:.9rem;
+  padding:1.35rem 1.6rem 1.1rem;border-bottom:1.5px dashed var(--line);
+}
+.modal-title{font-size:1.3rem}
+.modal-sub{font-family:var(--mono);font-size:.62rem;color:var(--muted);letter-spacing:.06em;margin-top:.3rem}
+.modal-x{
+  margin-left:auto;width:34px;height:34px;border-radius:11px;border:none;cursor:pointer;
+  background:#fff;border:1.5px solid var(--line);color:var(--muted);
+  display:flex;align-items:center;justify-content:center;box-shadow:0 2.5px 0 #e6ebf2;
+  transition:transform .08s ease,box-shadow .08s ease;
+}
+.modal-x:active{transform:translateY(2.5px);box-shadow:0 0 0 #e6ebf2}
+.modal-x svg{width:15px;height:15px;stroke-width:2.6}
+.modal-body{padding:1.35rem 1.6rem;display:flex;flex-direction:column;gap:1.15rem}
+/* 新建弹窗（创建即导入）：紧凑化导入区 */
+.modal-create{width:min(880px,calc(100% - 3rem))}
+.modal-create .f-textarea{min-height:56px}
+.modal-create .dropzone{padding:1.1rem .9rem;border-radius:14px;gap:.4rem}
+.modal-create .dz-ic{width:38px;height:38px;border-radius:11px}
+.modal-create .dz-ic svg{width:18px;height:18px}
+.modal-create .flist{margin-top:.7rem}
+.modal-create .frow{padding:.5rem .75rem}
+.modal-create .pbar{width:90px;height:6px}
+.modal-foot{
+  display:flex;justify-content:flex-end;gap:.7rem;align-items:center;
+  padding:1.05rem 1.6rem 1.35rem;border-top:1.5px dashed var(--line);
+}
+.f-label{
+  display:block;font-family:var(--mono);font-size:.62rem;font-weight:700;
+  letter-spacing:.1em;color:var(--muted);margin-bottom:.45rem;
+}
+.f-label .req{color:var(--danger)}
+.f-input,.f-textarea,.f-select{
+  width:100%;border:1.5px solid var(--line);border-radius:13px;background:var(--panel-2);
+  padding:.68rem .9rem;font-size:.85rem;font-family:var(--font);color:var(--text);
+  outline:none;transition:border-color .15s ease,box-shadow .15s ease;
+}
+.f-textarea{resize:vertical;min-height:84px;line-height:1.6;text-wrap:pretty}
+.f-input:focus,.f-textarea:focus,.f-select:focus{border-color:var(--c-blue);box-shadow:0 0 0 3px var(--c-blue-t);background:#fff}
+.f-select{appearance:none;cursor:pointer;padding-right:2.2rem;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23697386' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right .8rem center;}
+.f-row{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+/* 弹窗内分类分段控件：三枚糖果选项 */
+.cat-seg{display:grid;grid-template-columns:repeat(3,1fr);gap:.6rem}
+.cat-opt{
+  position:relative;border:1.5px solid var(--line);border-radius:14px;background:#fff;
+  cursor:pointer;padding:.7rem .8rem;text-align:left;
+  font-family:var(--round);font-weight:800;font-size:.82rem;color:var(--muted);
+  display:flex;flex-direction:column;gap:.25rem;
+  transition:transform .08s ease,box-shadow .08s ease,border-color .15s ease;
+}
+.cat-opt .cat-bar{width:26px;height:5px;border-radius:99px;background:var(--line)}
+.cat-opt .cat-note{font-family:var(--mono);font-size:.56rem;font-weight:400;color:#a3adbf;letter-spacing:.04em}
+.cat-opt.on{color:var(--text)}
+.cat-opt.on[data-v="global"]{border-color:var(--c-green);background:var(--c-green-t);box-shadow:0 3px 0 var(--c-green-d)}
+.cat-opt.on[data-v="mine"]{border-color:var(--c-blue);background:var(--c-blue-t);box-shadow:0 3px 0 var(--c-blue-d)}
+.cat-opt.on[data-v="req"]{border-color:var(--c-amber);background:var(--c-amber-t);box-shadow:0 3px 0 var(--c-amber-d)}
+.cat-opt.on .cat-bar{background:currentColor}
+.cat-opt[data-v="global"] .cat-bar{background:var(--c-green)}
+.cat-opt[data-v="mine"] .cat-bar{background:var(--c-blue)}
+.cat-opt[data-v="req"] .cat-bar{background:var(--c-amber)}
+.cat-opt.on .cat-note{color:inherit;opacity:.7}
+/* 关联任务 callout（琥珀糖） */
+.req-callout{
+  border:1.5px solid color-mix(in srgb,var(--c-amber) 35%,transparent);
+  background:var(--c-amber-t);border-radius:14px;padding:.85rem .95rem;
+  display:flex;flex-direction:column;gap:.4rem;
+}
+.req-callout.hidden,.hidden{display:none!important}
+.req-callout .f-select{background-color:#fff;border-color:color-mix(in srgb,var(--c-amber) 30%,transparent)}
+.req-callout .f-label{color:var(--c-amber-d);margin:0}
+/* 可见范围小分段 */
+.vis-seg{display:inline-flex;gap:4px;background:var(--panel-2);border:1.5px solid var(--line);border-radius:13px;padding:4px}
+.vis-seg button{
+  border:none;background:transparent;cursor:pointer;font-family:var(--round);font-weight:800;
+  font-size:.76rem;color:var(--muted);padding:.42rem 1.05rem;border-radius:9px;
+  display:inline-flex;align-items:center;gap:.4rem;
+}
+.vis-seg button svg{width:13px;height:13px;stroke-width:2.4}
+.vis-seg button.on{background:var(--c-blue);color:#fff;box-shadow:0 2px 0 var(--c-blue-d)}
+
+/* ============ 画板 3 · 导入弹窗内部件 ============ */
+.dropzone{
+  border:2.5px dashed var(--line-hot);border-radius:18px;background:var(--panel-2);
+  padding:1.7rem 1rem;display:flex;flex-direction:column;align-items:center;gap:.6rem;
+  cursor:pointer;text-align:center;transition:border-color .15s ease,background .15s ease;
+}
+.dropzone:hover{border-color:var(--c-blue);background:var(--c-blue-t)}
+.dz-ic{
+  width:46px;height:46px;border-radius:14px;background:var(--c-blue);color:#fff;
+  display:flex;align-items:center;justify-content:center;box-shadow:0 4px 0 var(--c-blue-d);
+}
+.dz-ic svg{width:22px;height:22px;stroke-width:2.4}
+.dz-main{font-family:var(--round);font-weight:800;font-size:.88rem}
+.dz-main em{font-style:normal;color:var(--c-blue)}
+.dz-hint{font-family:var(--mono);font-size:.6rem;color:var(--muted);letter-spacing:.05em}
+.fmt-chips{display:flex;flex-wrap:wrap;gap:.4rem;justify-content:center;margin-top:.2rem}
+.fmt-chip{
+  font-family:var(--mono);font-size:.6rem;letter-spacing:.06em;color:var(--muted);
+  border:1px solid var(--line);background:#fff;border-radius:99px;padding:.18rem .6rem;
+}
+/* 已选文件行 */
+.flist{display:flex;flex-direction:column;gap:.5rem}
+.frow{
+  display:grid;grid-template-columns:1.35fr .7fr 1fr auto;align-items:center;gap:.9rem;
+  border:1.5px solid var(--line);border-radius:13px;background:#fff;padding:.6rem .85rem;
+}
+.frow.dim{opacity:.5;filter:grayscale(1)}
+.fname{font-size:.78rem;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fsize{font-family:var(--mono);font-size:.64rem;color:var(--muted)}
+.fstatus{font-size:.72rem;font-weight:700;display:flex;align-items:center;gap:.5rem;justify-content:flex-end}
+.fstatus.parsing{color:var(--c-blue)}
+.fstatus.queued{color:var(--muted);font-weight:600}
+.fstatus.done{color:var(--c-green)}
+.fstatus.fail{color:var(--danger)}
+.frow-remove{
+  width:26px;height:26px;border-radius:8px;border:none;background:transparent;color:#a3adbf;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;
+}
+.frow-remove:hover{background:var(--danger-t);color:var(--danger)}
+.frow-remove svg{width:13px;height:13px;stroke-width:2.6}
+.pbar{
+  width:110px;height:8px;border-radius:99px;background:#edf1f7;overflow:hidden;flex:none;
+  border:1px solid var(--line);
+}
+.pbar>i{display:block;height:100%;border-radius:99px;background:var(--c-blue)}
+.pbar.q>i{width:12%;background:var(--line-hot)}
+.fcheck{width:17px;height:17px;color:var(--c-green);stroke-width:2.8;flex:none}
+.import-count{
+  font-family:var(--mono);font-size:.62rem;font-weight:700;color:var(--c-blue);
+  background:var(--c-blue-t);border-radius:99px;padding:.14rem .55rem;margin-right:auto;
+}
+
+/* ============ 画板 4 · 库详情 ============ */
+.crumbs{display:flex;align-items:center;gap:.45rem;font-family:var(--mono);font-size:.68rem;color:var(--muted);margin-bottom:1rem}
+.crumbs .sep{color:var(--line-hot)}
+.crumbs .here{color:var(--c-amber-d);font-weight:700}
+.detail-head{display:flex;align-items:flex-end;gap:1rem;margin-bottom:1.3rem}
+.detail-title{font-size:1.85rem;display:flex;align-items:center;gap:.7rem}
+.detail-actions{margin-left:auto;display:flex;gap:.7rem}
+.detail-meta{font-family:var(--mono);font-size:.66rem;color:var(--muted);margin-top:.45rem;display:flex;align-items:center;gap:.55rem}
+.detail-meta .dot{width:4px;height:4px;border-radius:99px;background:var(--line-hot)}
+/* 文件清单列表 */
+.doc-list{display:flex;flex-direction:column;gap:.55rem}
+.doc-row{
+  display:grid;grid-template-columns:minmax(0,1.6fr) auto .65fr 1fr .95fr auto;
+  align-items:center;gap:.9rem;
+  background:#fff;border:1.5px solid var(--line);border-radius:15px;
+  padding:.72rem 1rem;box-shadow:0 2.5px 0 #e6ebf2;
+  transition:transform .15s ease,box-shadow .15s ease;
+}
+.doc-row:hover{transform:translateY(-2px);box-shadow:0 5px 0 #dfe5ee}
+.doc-name{font-size:.82rem;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.type-badge{
+  font-family:var(--mono);font-size:.56rem;font-weight:700;letter-spacing:.07em;
+  border-radius:8px;padding:.2rem .5rem;flex:none;text-align:center;
+}
+.tb-docx{background:var(--c-blue-t);color:var(--c-blue-d)}
+.tb-md{background:var(--c-green-t);color:var(--c-green-d)}
+.tb-pptx{background:var(--c-orange-t);color:var(--c-orange-d)}
+.tb-xlsx{background:var(--c-amber-t);color:var(--c-amber-d)}
+.tb-csv{background:var(--c-pink-t);color:var(--c-pink-d)}
+.tb-txt{background:#eef1f6;color:var(--muted)}
+.doc-size{font-family:var(--mono);font-size:.64rem;color:var(--muted)}
+.doc-status{font-size:.7rem;font-weight:700;display:flex;align-items:center;gap:.5rem}
+.doc-status.ok{color:var(--c-green)}
+.doc-status.parsing{color:var(--c-blue)}
+.doc-status.fail{color:var(--danger)}
+.doc-status.queued{color:var(--muted);font-weight:600}
+.retry-btn{
+  font-family:var(--mono);font-size:.58rem;font-weight:700;color:var(--danger);
+  background:var(--danger-t);border:none;border-radius:8px;padding:.2rem .55rem;cursor:pointer;
+  box-shadow:0 2px 0 var(--danger-d);transition:transform .08s ease,box-shadow .08s ease;
+}
+.retry-btn:active{transform:translateY(2px);box-shadow:0 0 0 var(--danger-d)}
+.doc-time{font-family:var(--mono);font-size:.62rem;color:var(--muted);text-align:right}
+.doc-more{
+  width:28px;height:28px;border-radius:9px;border:none;background:transparent;color:#a3adbf;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;
+}
+.doc-more:hover{background:var(--void);color:var(--text)}
+.doc-more svg{width:15px;height:15px;stroke-width:2.6}
+/* 交互版固定遮罩（画板 1 用） */
+.ov-fixed{
+  position:fixed;inset:0;z-index:90;
+  background:rgba(18,24,38,.5);backdrop-filter:blur(3px);
+  display:flex;align-items:center;justify-content:center;padding:1.5rem;
+}
+</style>
+</head>
+<body>
+
+<!-- ======================= 画板 1 · 知识库列表页（可交互） ======================= -->
+<section class="board" id="board1">
+  <p class="board-label">画板 1 · <b>知识库列表页</b> — 可交互：分类 tab 可点、按钮可开弹窗</p>
+  <div class="frame">
+    <div class="page-head">
+      <div>
+        <h1 class="h-round page-title">知识库</h1>
+        <p class="page-sub">产品 / 方案 / 手册——供 Cursor 等辅助工具检索负重</p>
+      </div>
+      <button class="btn btn-green" id="btn-new">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        新建知识库
+      </button>
+    </div>
+
+    <div class="toolbar">
+      <div class="seg" id="cat-seg">
+        <button class="on" data-cat="all"><span class="dot" style="background:linear-gradient(90deg,var(--c-green),var(--c-blue))"></span>全部 <span class="n">8</span></button>
+        <button data-cat="global"><span class="dot" style="background:var(--c-green)"></span>全局共享 <span class="n">3</span></button>
+        <button data-cat="mine"><span class="dot" style="background:var(--c-blue)"></span>我的知识库 <span class="n">2</span></button>
+        <button data-cat="req"><span class="dot" style="background:var(--c-amber)"></span>任务知识库 <span class="n">3</span></button>
+      </div>
+      <label class="search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+        <input type="text" id="kb-search" placeholder="搜索知识库名称或简介…">
+      </label>
+    </div>
+
+    <div class="kb-grid" id="kb-grid">
+      <!-- 全局共享 -->
+      <article class="kb-card" data-cat="global" data-key="平台操作手册 sortie deck 全流程操作与最佳实践">
+        <div class="kb-card-top"><span class="kb-card-name">平台操作手册</span><span class="kb-badge global">全局</span></div>
+        <p class="kb-card-desc">Sortie Deck 全流程操作与最佳实践</p>
+        <p class="kb-card-meta">24 篇 · admin 维护 · 更新 2026-10-18</p>
+        <button class="kb-card-dock" title="更多操作"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></svg></button>
+      </article>
+      <article class="kb-card" data-cat="global" data-key="产品知识库 prd 设计规范 发布说明">
+        <div class="kb-card-top"><span class="kb-card-name">产品知识库</span><span class="kb-badge global">全局</span></div>
+        <p class="kb-card-desc">PRD / 设计规范 / 发布说明</p>
+        <p class="kb-card-meta">12 篇 · admin 维护 · 更新 2026-10-15</p>
+        <button class="kb-card-dock" title="更多操作"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></svg></button>
+      </article>
+      <article class="kb-card" data-cat="global" data-key="竞品情报库 竞品功能对比与分析速记">
+        <div class="kb-card-top"><span class="kb-card-name">竞品情报库</span><span class="kb-badge global">全局</span></div>
+        <p class="kb-card-desc">竞品功能对比与分析速记</p>
+        <p class="kb-card-meta">9 篇 · admin 维护 · 更新 2026-10-12</p>
+        <button class="kb-card-dock" title="更多操作"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></svg></button>
+      </article>
+      <!-- 我的知识库 -->
+      <article class="kb-card" data-cat="mine" data-key="读书笔记·精要 个人阅读摘录与批注">
+        <div class="kb-card-top"><span class="kb-card-name">读书笔记·精要</span></div>
+        <p class="kb-card-desc">个人阅读摘录与批注</p>
+        <p class="kb-card-meta">18 篇 · 更新 2026-10-17</p>
+        <button class="kb-card-dock" title="更多操作"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></svg></button>
+      </article>
+      <article class="kb-card" data-cat="mine" data-key="会议纪要归档 周会 评审纪要全文">
+        <div class="kb-card-top"><span class="kb-card-name">会议纪要归档</span></div>
+        <p class="kb-card-desc">周会/评审纪要全文</p>
+        <p class="kb-card-meta">31 篇 · 更新 2026-10-16</p>
+        <button class="kb-card-dock" title="更多操作"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></svg></button>
+      </article>
+      <!-- 任务知识库 -->
+      <article class="kb-card" data-cat="req" data-key="Yuli 用户与新角色打招呼 任务 in_1f979ce1d023">
+        <div class="kb-card-top"><span class="kb-card-name">Yuli 用户与新角色打招呼</span></div>
+        <p class="kb-card-desc">任务 in_1f979ce1d023</p>
+        <p class="kb-card-meta">6 篇 · 挂靠任务 · 更新 2026-10-19</p>
+        <button class="kb-card-dock" title="更多操作"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></svg></button>
+      </article>
+      <article class="kb-card" data-cat="req" data-key="Short Chat 打招呼文案 多语言文案素材库">
+        <div class="kb-card-top"><span class="kb-card-name">Short Chat 打招呼文案</span></div>
+        <p class="kb-card-desc">多语言文案素材库</p>
+        <p class="kb-card-meta">12 篇 · 挂靠任务 · 更新 2026-10-15</p>
+        <button class="kb-card-dock" title="更多操作"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></svg></button>
+      </article>
+      <article class="kb-card" data-cat="req" data-key="知识库改版 本需求自身的资料与调研">
+        <div class="kb-card-top"><span class="kb-card-name">知识库改版</span></div>
+        <p class="kb-card-desc">本需求自身的资料与调研</p>
+        <p class="kb-card-meta">4 篇 · 挂靠任务 · 更新 2026-10-19</p>
+        <button class="kb-card-dock" title="更多操作"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></svg></button>
+      </article>
+      <p class="kb-empty hidden" id="kb-empty">— 没有匹配的知识库 —</p>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= 画板 2 · 新建知识库弹窗（静态打开态） ======================= -->
+<section class="board" id="board2">
+  <p class="board-label">画板 2 · <b>新建知识库弹窗</b> — 静态打开态（分类即可见范围；弹窗内置导入区，创建即导入）</p>
+  <div class="frame" style="min-height:1060px">
+    <div class="ghost">
+      <div class="page-head">
+        <div><h1 class="h-round page-title">知识库</h1><p class="page-sub">产品 / 方案 / 手册——供 Cursor 等辅助工具检索负重</p></div>
+      </div>
+      <div class="kb-grid">
+        <div class="kb-card" style="height:120px"></div><div class="kb-card" style="height:120px"></div><div class="kb-card" style="height:120px"></div>
+        <div class="kb-card" style="height:120px"></div><div class="kb-card" style="height:120px"></div><div class="kb-card" style="height:120px"></div>
+      </div>
+    </div>
+    <div class="ov-static">
+      <div class="modal modal-create">
+        <div class="modal-head">
+          <div>
+            <h2 class="h-round modal-title">新建知识库</h2>
+            <p class="modal-sub">NEW KNOWLEDGE BASE</p>
+          </div>
+          <button class="modal-x" title="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+        </div>
+        <div class="modal-body">
+          <div>
+            <label class="f-label">名称 <span class="req">*</span></label>
+            <input class="f-input" type="text" value="Short Chat 打招呼文案">
+          </div>
+          <div>
+            <label class="f-label">简介</label>
+            <textarea class="f-textarea" placeholder="一句话说明这个库沉淀什么、供谁检索……">多语言文案素材库</textarea>
+          </div>
+          <div>
+            <label class="f-label">分类</label>
+            <div class="cat-seg" data-role="cat">
+              <button type="button" class="cat-opt" data-v="global">
+                <span class="cat-bar"></span>全局共享
+                <span class="cat-note">仅 Admin 可创建</span>
+              </button>
+              <button type="button" class="cat-opt" data-v="mine">
+                <span class="cat-bar"></span>我的知识库
+                <span class="cat-note">个人可见</span>
+              </button>
+              <button type="button" class="cat-opt on" data-v="req">
+                <span class="cat-bar"></span>任务知识库
+                <span class="cat-note">挂靠任务</span>
+              </button>
+            </div>
+          </div>
+          <div class="req-callout" data-role="req-row">
+            <label class="f-label">关联任务</label>
+            <select class="f-select">
+              <option selected>Yuli 用户与新角色打招呼 · in_1f979ce1d023</option>
+              <option>Short Chat 文案落地 · in_2a04bc77e910</option>
+              <option>知识库改版 · in_3c712f0a5b48</option>
+            </select>
+          </div>
+          <div>
+            <label class="f-label">导入文件（可选，创建后也可在库详情继续导入）</label>
+            <div class="dropzone">
+              <div class="dz-ic">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+              </div>
+              <p class="dz-main">拖拽文件到此处，或<em>点击选择</em></p>
+              <p class="dz-hint">单文件 ≤ 50 MB · 自动切片解析</p>
+              <div class="fmt-chips">
+                <span class="fmt-chip">docx</span><span class="fmt-chip">doc</span><span class="fmt-chip">ppt</span>
+                <span class="fmt-chip">pptx</span><span class="fmt-chip">csv</span><span class="fmt-chip">xlsx</span>
+                <span class="fmt-chip">md</span><span class="fmt-chip">txt</span><span class="fmt-chip">pdf</span>
+              </div>
+            </div>
+            <div class="flist">
+              <div class="frow">
+                <span class="fname">用户反馈汇总.xlsx</span>
+                <span class="fsize">216 KB</span>
+                <span class="fstatus parsing">解析中 62%<span class="pbar"><i style="width:62%"></i></span></span>
+                <button class="frow-remove" title="移除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+              </div>
+              <div class="frow">
+                <span class="fname">新增话术.md</span>
+                <span class="fsize">6 KB</span>
+                <span class="fstatus queued">排队中<span class="pbar q"><i></i></span></span>
+                <button class="frow-remove" title="移除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+              </div>
+              <div class="frow">
+                <span class="fname">竞品调研摘录.txt</span>
+                <span class="fsize">12 KB</span>
+                <span class="fstatus done">已完成
+                  <svg class="fcheck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 12.2l2.4 2.4 4.6-5"/></svg>
+                </span>
+                <button class="frow-remove" title="移除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+              </div>
+              <div class="frow dim">
+                <span class="fname">历史数据.bak</span>
+                <span class="fsize">4 MB</span>
+                <span class="fstatus fail">不支持的格式</span>
+                <button class="frow-remove" title="移除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <span class="import-count">随库导入 2 个 · 1 个格式不支持</span>
+          <button class="btn btn-ghost">取消</button>
+          <button class="btn btn-green">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+            创建并导入 (2)
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= 画板 3 · 文件导入弹窗（静态打开态） ======================= -->
+<section class="board" id="board3">
+  <p class="board-label">画板 3 · <b>文件导入弹窗</b> — 静态打开态（含解析中 / 排队 / 完成 / 不支持四种状态）</p>
+  <div class="frame">
+    <div class="ghost">
+      <div class="page-head">
+        <div><h1 class="h-round page-title">知识库</h1><p class="page-sub">产品 / 方案 / 手册——供 Cursor 等辅助工具检索负重</p></div>
+      </div>
+      <div class="kb-grid">
+        <div class="kb-card" style="height:120px"></div><div class="kb-card" style="height:120px"></div><div class="kb-card" style="height:120px"></div>
+        <div class="kb-card" style="height:120px"></div><div class="kb-card" style="height:120px"></div><div class="kb-card" style="height:120px"></div>
+      </div>
+    </div>
+    <div class="ov-static">
+      <div class="modal">
+        <div class="modal-head">
+          <div>
+            <h2 class="h-round modal-title">导入文件 · Yuli 用户与新角色打招呼</h2>
+            <p class="modal-sub">IMPORT FILES · IN_1F979CE1D023</p>
+          </div>
+          <button class="modal-x" title="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+        </div>
+        <div class="modal-body">
+          <div class="dropzone">
+            <div class="dz-ic">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+            </div>
+            <p class="dz-main">拖拽文件到此处，或<em>点击选择</em></p>
+            <p class="dz-hint">单文件 ≤ 50 MB · 自动切片解析</p>
+            <div class="fmt-chips">
+              <span class="fmt-chip">docx</span><span class="fmt-chip">doc</span><span class="fmt-chip">ppt</span>
+              <span class="fmt-chip">pptx</span><span class="fmt-chip">csv</span><span class="fmt-chip">xlsx</span>
+              <span class="fmt-chip">md</span><span class="fmt-chip">txt</span><span class="fmt-chip">pdf</span>
+            </div>
+          </div>
+          <div class="flist">
+            <div class="frow">
+              <span class="fname">用户反馈汇总.xlsx</span>
+              <span class="fsize">216 KB</span>
+              <span class="fstatus parsing">解析中 62%<span class="pbar"><i style="width:62%"></i></span></span>
+              <button class="frow-remove" title="移除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+            </div>
+            <div class="frow">
+              <span class="fname">新增话术.md</span>
+              <span class="fsize">6 KB</span>
+              <span class="fstatus queued">排队中<span class="pbar q"><i></i></span></span>
+              <button class="frow-remove" title="移除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+            </div>
+            <div class="frow">
+              <span class="fname">竞品调研摘录.txt</span>
+              <span class="fsize">12 KB</span>
+              <span class="fstatus done">已完成
+                <svg class="fcheck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 12.2l2.4 2.4 4.6-5"/></svg>
+              </span>
+              <button class="frow-remove" title="移除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+            </div>
+            <div class="frow dim">
+              <span class="fname">历史数据.bak</span>
+              <span class="fsize">4 MB</span>
+              <span class="fstatus fail">不支持的格式</span>
+              <button class="frow-remove" title="移除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+            </div>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <span class="import-count">2 个文件可导入 · 1 个格式不支持</span>
+          <button class="btn btn-ghost btn-sm">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+            继续添加
+          </button>
+          <button class="btn btn-blue">开始导入 (2)</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= 画板 4 · 库详情态 ======================= -->
+<section class="board" id="board4">
+  <p class="board-label">画板 4 · <b>库详情态</b> — Yuli 用户与新角色打招呼 · 文件清单</p>
+  <div class="frame">
+    <div class="crumbs">
+      <span>知识库</span><span class="sep">/</span>
+      <span>任务知识库</span><span class="sep">/</span>
+      <span class="here">Yuli 用户与新角色打招呼</span>
+    </div>
+    <div class="detail-head">
+      <div>
+        <h1 class="h-round detail-title">
+          Yuli 用户与新角色打招呼
+          <span class="kb-badge req">需求</span>
+        </h1>
+        <p class="detail-meta">
+          <span>6 个文件</span><span class="dot"></span>
+          <span>任务 in_1f979ce1d023</span><span class="dot"></span>
+          <span>最近更新 2026-10-19</span>
+        </p>
+      </div>
+      <div class="detail-actions">
+        <button class="btn btn-blue" id="btn-import">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+          导入文件
+        </button>
+        <button class="btn btn-ghost">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+          编辑库
+        </button>
+      </div>
+    </div>
+
+    <div class="doc-list">
+      <div class="doc-row">
+        <span class="doc-name">PRD-打招呼文案-v3.docx</span>
+        <span class="type-badge tb-docx">DOCX</span>
+        <span class="doc-size">84 KB</span>
+        <span class="doc-status ok">解析完成</span>
+        <span class="doc-time">2026-10-18</span>
+        <button class="doc-more" title="更多操作"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></svg></button>
+      </div>
+      <div class="doc-row">
+        <span class="doc-name">qa_handoff.md</span>
+        <span class="type-badge tb-md">MD</span>
+        <span class="doc-size">6 KB</span>
+        <span class="doc-status ok">解析完成</span>
+        <span class="doc-time">2026-10-17</span>
+        <button class="doc-more" title="更多操作"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></svg></button>
+      </div>
+      <div class="doc-row">
+        <span class="doc-name">打招呼方案汇报.pptx</span>
+        <span class="type-badge tb-pptx">PPTX</span>
+        <span class="doc-size">3.2 MB</span>
+        <span class="doc-status parsing">解析中 62%<span class="pbar"><i style="width:62%"></i></span></span>
+        <span class="doc-time">2026-10-19</span>
+        <button class="doc-more" title="更多操作"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></svg></button>
+      </div>
+      <div class="doc-row">
+        <span class="doc-name">用户反馈汇总.xlsx</span>
+        <span class="type-badge tb-xlsx">XLSX</span>
+        <span class="doc-size">216 KB</span>
+        <span class="doc-status ok">解析完成</span>
+        <span class="doc-time">2026-10-16</span>
+        <button class="doc-more" title="更多操作"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></svg></button>
+      </div>
+      <div class="doc-row">
+        <span class="doc-name">埋点数据导出.csv</span>
+        <span class="type-badge tb-csv">CSV</span>
+        <span class="doc-size">1.1 MB</span>
+        <span class="doc-status fail">解析失败<button class="retry-btn">重试</button></span>
+        <span class="doc-time">2026-10-15</span>
+        <button class="doc-more" title="更多操作"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></svg></button>
+      </div>
+      <div class="doc-row">
+        <span class="doc-name">竞品调研摘录.txt</span>
+        <span class="type-badge tb-txt">TXT</span>
+        <span class="doc-size">12 KB</span>
+        <span class="doc-status queued">排队中<span class="pbar q"><i></i></span></span>
+        <span class="doc-time">2026-10-19</span>
+        <button class="doc-more" title="更多操作"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></svg></button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= 交互版弹窗（画板 1 按钮触发，fixed 覆盖层） ======================= -->
+<div class="ov-fixed hidden" id="ov-new">
+  <div class="modal modal-create">
+    <div class="modal-head">
+      <div>
+        <h2 class="h-round modal-title">新建知识库</h2>
+        <p class="modal-sub">NEW KNOWLEDGE BASE</p>
+      </div>
+      <button class="modal-x" data-close title="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <div>
+        <label class="f-label">名称 <span class="req">*</span></label>
+        <input class="f-input" type="text" placeholder="例如：Short Chat 打招呼文案">
+      </div>
+      <div>
+        <label class="f-label">简介</label>
+        <textarea class="f-textarea" placeholder="一句话说明这个库沉淀什么、供谁检索……"></textarea>
+      </div>
+      <div>
+        <label class="f-label">分类</label>
+        <div class="cat-seg" data-role="cat">
+          <button type="button" class="cat-opt" data-v="global">
+            <span class="cat-bar"></span>全局共享
+            <span class="cat-note">仅 Admin 可创建</span>
+          </button>
+          <button type="button" class="cat-opt" data-v="mine">
+            <span class="cat-bar"></span>我的知识库
+            <span class="cat-note">个人可见</span>
+          </button>
+          <button type="button" class="cat-opt" data-v="req">
+            <span class="cat-bar"></span>任务知识库
+            <span class="cat-note">挂靠任务</span>
+          </button>
+        </div>
+      </div>
+      <div class="req-callout hidden" data-role="req-row">
+        <label class="f-label">关联任务</label>
+        <select class="f-select">
+          <option>Yuli 用户与新角色打招呼 · in_1f979ce1d023</option>
+          <option>Short Chat 文案落地 · in_2a04bc77e910</option>
+          <option>知识库改版 · in_3c712f0a5b48</option>
+        </select>
+      </div>
+      <div>
+        <label class="f-label">导入文件（可选，创建后也可在库详情继续导入）</label>
+        <div class="dropzone">
+          <div class="dz-ic">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+          </div>
+          <p class="dz-main">拖拽文件到此处，或<em>点击选择</em></p>
+          <p class="dz-hint">单文件 ≤ 50 MB · 自动切片解析</p>
+          <div class="fmt-chips">
+            <span class="fmt-chip">docx</span><span class="fmt-chip">doc</span><span class="fmt-chip">ppt</span>
+            <span class="fmt-chip">pptx</span><span class="fmt-chip">csv</span><span class="fmt-chip">xlsx</span>
+            <span class="fmt-chip">md</span><span class="fmt-chip">txt</span><span class="fmt-chip">pdf</span>
+          </div>
+        </div>
+        <div class="flist">
+          <div class="frow">
+            <span class="fname">用户反馈汇总.xlsx</span>
+            <span class="fsize">216 KB</span>
+            <span class="fstatus parsing">解析中 62%<span class="pbar"><i style="width:62%"></i></span></span>
+            <button class="frow-remove" title="移除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+          </div>
+          <div class="frow">
+            <span class="fname">新增话术.md</span>
+            <span class="fsize">6 KB</span>
+            <span class="fstatus queued">排队中<span class="pbar q"><i></i></span></span>
+            <button class="frow-remove" title="移除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+          </div>
+          <div class="frow">
+            <span class="fname">竞品调研摘录.txt</span>
+            <span class="fsize">12 KB</span>
+            <span class="fstatus done">已完成
+              <svg class="fcheck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 12.2l2.4 2.4 4.6-5"/></svg>
+            </span>
+            <button class="frow-remove" title="移除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+          </div>
+          <div class="frow dim">
+            <span class="fname">历史数据.bak</span>
+            <span class="fsize">4 MB</span>
+            <span class="fstatus fail">不支持的格式</span>
+            <button class="frow-remove" title="移除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="import-count">随库导入 2 个 · 1 个格式不支持</span>
+      <button class="btn btn-ghost" data-close>取消</button>
+      <button class="btn btn-green" data-close>创建并导入 (2)</button>
+    </div>
+  </div>
+</div>
+
+<div class="ov-fixed hidden" id="ov-import">
+  <div class="modal">
+    <div class="modal-head">
+      <div>
+        <h2 class="h-round modal-title">导入文件 · Yuli 用户与新角色打招呼</h2>
+        <p class="modal-sub">IMPORT FILES · IN_1F979CE1D023</p>
+      </div>
+      <button class="modal-x" data-close title="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <div class="dropzone">
+        <div class="dz-ic">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+        </div>
+        <p class="dz-main">拖拽文件到此处，或<em>点击选择</em></p>
+        <p class="dz-hint">单文件 ≤ 50 MB · 自动切片解析</p>
+        <div class="fmt-chips">
+          <span class="fmt-chip">docx</span><span class="fmt-chip">doc</span><span class="fmt-chip">ppt</span>
+          <span class="fmt-chip">pptx</span><span class="fmt-chip">csv</span><span class="fmt-chip">xlsx</span>
+          <span class="fmt-chip">md</span><span class="fmt-chip">txt</span><span class="fmt-chip">pdf</span>
+        </div>
+      </div>
+      <div class="flist">
+        <div class="frow">
+          <span class="fname">用户反馈汇总.xlsx</span>
+          <span class="fsize">216 KB</span>
+          <span class="fstatus parsing">解析中 62%<span class="pbar"><i style="width:62%"></i></span></span>
+          <button class="frow-remove" title="移除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+        </div>
+        <div class="frow">
+          <span class="fname">新增话术.md</span>
+          <span class="fsize">6 KB</span>
+          <span class="fstatus queued">排队中<span class="pbar q"><i></i></span></span>
+          <button class="frow-remove" title="移除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+        </div>
+        <div class="frow">
+          <span class="fname">竞品调研摘录.txt</span>
+          <span class="fsize">12 KB</span>
+          <span class="fstatus done">已完成
+            <svg class="fcheck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 12.2l2.4 2.4 4.6-5"/></svg>
+          </span>
+          <button class="frow-remove" title="移除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+        </div>
+        <div class="frow dim">
+          <span class="fname">历史数据.bak</span>
+          <span class="fsize">4 MB</span>
+          <span class="fstatus fail">不支持的格式</span>
+          <button class="frow-remove" title="移除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="import-count">2 个文件可导入 · 1 个格式不支持</span>
+      <button class="btn btn-ghost btn-sm">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        继续添加
+      </button>
+      <button class="btn btn-blue" data-close>开始导入 (2)</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (s, r) { return (r || document).querySelector(s); };
+  var $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
+
+  /* ---- 画板 1：分类 tab 过滤 + 搜索（组合过滤） ---- */
+  var activeCat = "all";
+  var cards = $$("#kb-grid .kb-card");
+  var emptyTip = $("#kb-empty");
+
+  function applyFilter() {
+    var q = ($("#kb-search").value || "").trim().toLowerCase();
+    var visible = 0;
+    cards.forEach(function (card) {
+      var okCat = activeCat === "all" || card.getAttribute("data-cat") === activeCat;
+      var okKey = !q || (card.getAttribute("data-key") || "").toLowerCase().indexOf(q) !== -1;
+      var show = okCat && okKey;
+      card.classList.toggle("hide", !show);
+      if (show) { visible++; }
+    });
+    emptyTip.classList.toggle("hidden", visible !== 0);
+  }
+
+  $$("#cat-seg button").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      $$("#cat-seg button").forEach(function (b) { b.classList.remove("on"); });
+      btn.classList.add("on");
+      activeCat = btn.getAttribute("data-cat");
+      applyFilter();
+    });
+  });
+  $("#kb-search").addEventListener("input", applyFilter);
+
+  /* ---- 弹窗开关（画板 1 按钮真实打开） ---- */
+  function openOv(id) { $(id).classList.remove("hidden"); }
+  function closeOv(ov) { ov.classList.add("hidden"); }
+
+  $("#btn-new").addEventListener("click", function () { openOv("#ov-new"); });
+  $("#btn-import").addEventListener("click", function () { openOv("#ov-import"); });
+  $$(".ov-fixed").forEach(function (ov) {
+    ov.addEventListener("click", function (e) { if (e.target === ov) { closeOv(ov); } });
+    $$("[data-close]", ov).forEach(function (b) {
+      b.addEventListener("click", function () { closeOv(ov); });
+    });
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { $$(".ov-fixed").forEach(closeOv); }
+  });
+
+  /* ---- 弹窗内：分类分段切换 → 关联任务行显隐；可见范围切换 ---- */
+  $$("[data-role='cat']").forEach(function (seg) {
+    var row = null;
+    var scope = seg.closest(".modal");
+    if (scope) { row = $("[data-role='req-row']", scope); }
+    $$("button.cat-opt", seg).forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        $$("button.cat-opt", seg).forEach(function (o) { o.classList.remove("on"); });
+        opt.classList.add("on");
+        if (row) {
+          row.classList.toggle("hidden", opt.getAttribute("data-v") !== "req");
+        }
+      });
+    });
+  });
+  $$(".vis-seg").forEach(function (seg) {
+    $$("button", seg).forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        $$("button", seg).forEach(function (b) { b.classList.remove("on"); });
+        btn.classList.add("on");
+      });
+    });
+  });
+
+  /* ---- 弹窗内：文件行移除（演示态） ---- */
+  $$(".frow-remove").forEach(function (btn) {
+    btn.addEventListener("click", function () { btn.closest(".frow").remove(); });
+  });
+})();
+</script>
+</body>
+</html>

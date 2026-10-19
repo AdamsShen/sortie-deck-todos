@@ -1,5 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { api, listHarnesses, listMissionShares, listSubRooms, updateInitiativeHarness } from "./api";
+import {
+  adminUpdateUser,
+  api,
+  createKnowledgeBase,
+  deleteKnowledgeBase,
+  deleteOwnAccount,
+  importKnowledgeFile,
+  listHarnesses,
+  listKnowledgeBases,
+  listMissionShares,
+  listSubRooms,
+  registerUser,
+  updateInitiativeHarness,
+} from "./api";
 import { OperatorChip } from "./components/OperatorChip";
 import { PipelineEditor } from "./components/PipelineEditor";
 import { ChatComposer, SparkleIcon, type MentionOption } from "./components/ChatComposer";
@@ -30,7 +43,8 @@ import type {
   HarnessInfo,
   Initiative,
   InitiativeStatus,
-  KnowledgeCategory,
+  KnowledgeBaseInfo,
+  KnowledgeBaseScope,
   KnowledgeDoc,
   Lang,
   LoginResponse,
@@ -53,7 +67,7 @@ import type {
   View,
   Visibility,
 } from "./types";
-import { TOOLKIT_CATEGORIES } from "./types";
+import { ApiError, TOOLKIT_CATEGORIES } from "./types";
 
 const CATEGORY_I18N: Record<string, I18nKey> = {
   engineering: "catEngineering",
@@ -64,6 +78,14 @@ const CATEGORY_I18N: Record<string, I18nKey> = {
   browser: "catBrowser",
   office: "catOffice",
 };
+
+// 知识库文件导入：与后端白名单一致的扩展名集合与 accept 串
+const KB_IMPORT_EXTS = new Set([
+  "md", "markdown", "txt", "csv", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "pdf",
+]);
+const KB_IMPORT_ACCEPT = KB_IMPORT_EXTS.size
+  ? Array.from(KB_IMPORT_EXTS).map((x) => `.${x}`).join(",")
+  : "";
 
 const AGENT_SLOTS: AgentSlot[] = [
   "product",
@@ -145,6 +167,10 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [booted, setBooted] = useState(false);
   const [loginForm, setLoginForm] = useState({ username: "admin", password: "admin123" });
+  // 登录页登录/注册模式切换；注册成功后展示「等待审核」提示
+  const [regMode, setRegMode] = useState(false);
+  const [regForm, setRegForm] = useState({ username: "", password: "", display_name: "" });
+  const [regDone, setRegDone] = useState(false);
   const [users, setUsers] = useState<PublicUser[]>([]);
   const [newUser, setNewUser] = useState<{
     username: string;
@@ -159,21 +185,26 @@ export default function App() {
   });
   const [kbDocs, setKbDocs] = useState<KnowledgeDoc[]>([]);
   const [kbQuery, setKbQuery] = useState("");
-  const [kbSelectedId, setKbSelectedId] = useState<string | null>(null);
-  const [kbEditing, setKbEditing] = useState(false);
-  const [kbForm, setKbForm] = useState<{
-    title: string;
-    summary: string;
-    body: string;
-    tags: string;
-    category: KnowledgeCategory;
-  }>({
-    title: "",
-    summary: "",
-    body: "",
-    tags: "",
-    category: "playbook",
-  });
+  // 知识库改版（仿记忆页）：库实体卡片 + 分类筛选 + 新建（内置导入）/ 导入弹窗
+  const [kbBases, setKbBases] = useState<KnowledgeBaseInfo[]>([]);
+  const [kbBaseFilter, setKbBaseFilter] = useState<"all" | KnowledgeBaseScope>("all");
+  const [kbBaseQuery, setKbBaseQuery] = useState("");
+  const [kbBaseId, setKbBaseId] = useState<string | null>(null);
+  const [kbCreateOpen, setKbCreateOpen] = useState(false);
+  const [kbImportOpen, setKbImportOpen] = useState(false);
+  const [kbTasks, setKbTasks] = useState<Initiative[]>([]);
+  const [kbDocDetail, setKbDocDetail] = useState<KnowledgeDoc | null>(null);
+  const kbCreateFileRef = useRef<HTMLInputElement | null>(null);
+  const kbImportFileRef = useRef<HTMLInputElement | null>(null);
+  const [kbBaseForm, setKbBaseForm] = useState<{
+    name: string;
+    description: string;
+    scope: KnowledgeBaseScope;
+    task_id: string;
+  }>({ name: "", description: "", scope: "user", task_id: "" });
+  const [kbPendingFiles, setKbPendingFiles] = useState<
+    { uid: string; file: File; status: "queued" | "uploading" | "done" | "failed"; message?: string }[]
+  >([]);
   const [memories, setMemories] = useState<MemoryEntry[]>([]);
   // 记忆库看板（方案三）：筛选/搜索/弹窗写入/删除撤销
   const [memModalOpen, setMemModalOpen] = useState(false);
@@ -859,6 +890,29 @@ export default function App() {
       setUser(data.user);
       setView("home");
     } catch (err) {
+      // 403：密码正确但账号待审核/已被拒绝，按后端 detail 映射为本地文案
+      if (err instanceof ApiError && err.code === 403) {
+        const msg = err.message || "";
+        if (msg.includes("pending")) setError(tr("accountPending"));
+        else if (msg.includes("rejected")) setError(tr("accountRejected"));
+        else setError(errMsg(err));
+      } else {
+        setError(errMsg(err));
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function doRegister(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await registerUser(regForm);
+      setRegDone(true);
+      setRegForm({ username: "", password: "", display_name: "" });
+    } catch (err) {
       setError(errMsg(err));
     } finally {
       setBusy(false);
@@ -875,6 +929,23 @@ export default function App() {
     setToken("");
     setUser(null);
     setView("home");
+  }
+
+  async function doDeleteAccount() {
+    // 注销不可恢复，二次确认后再调接口；名下任务与共享关系保留
+    if (!confirm(tr("deleteAccountConfirm"))) return;
+    setBusy(true);
+    try {
+      await deleteOwnAccount(token);
+      lsRemove("sortie_token");
+      setToken("");
+      setUser(null);
+      setView("home");
+    } catch (err) {
+      setError(errMsg(err));
+    } finally {
+      setBusy(false);
+    }
   }
 
   // 「增强提示词」通用调用：按场景让 LLM 优化文本，失败时 toast 并返回 null（不覆盖输入框）
@@ -1164,12 +1235,19 @@ export default function App() {
     setUsers(data);
   }
 
+  const refreshKbBases = useCallback(async () => {
+    if (!token) return;
+    setKbBases(await listKnowledgeBases(token));
+  }, [token]);
+
   const refreshKb = useCallback(async () => {
     if (!token) return;
-    const q = kbQuery.trim() ? `?q=${encodeURIComponent(kbQuery.trim())}` : "";
-    const data = await api<KnowledgeDoc[]>(`/api/knowledge${q}`, { token });
-    setKbDocs(data);
-  }, [token, kbQuery]);
+    const params = new URLSearchParams();
+    if (kbQuery.trim()) params.set("q", kbQuery.trim());
+    if (kbBaseId) params.set("base_id", kbBaseId);
+    const qs = params.toString();
+    setKbDocs(await api<KnowledgeDoc[]>(`/api/knowledge${qs ? `?${qs}` : ""}`, { token }));
+  }, [token, kbQuery, kbBaseId]);
 
   useEffect(() => {
     if (view === "admin" && user?.role === "admin") {
@@ -1177,71 +1255,112 @@ export default function App() {
     }
   }, [view, user]);
 
-  // 记忆表单默认 scope 是 workspace；非管理员登录后自动切回 user（workspace 仅管理员可写）
   useEffect(() => {
     if (view === "knowledge" && token) {
-      refreshKb().catch((e) => setError(errMsg(e)));
+      refreshKbBases().catch((e) => setError(errMsg(e)));
     }
-  }, [view, token, refreshKb]);
+  }, [view, token, refreshKbBases]);
 
   useEffect(() => {
-    if (view !== "knowledge" || kbEditing) return;
-    if (kbSelectedId && kbDocs.some((d) => d.id === kbSelectedId)) return;
-    if (kbDocs[0]) setKbSelectedId(kbDocs[0].id);
-  }, [view, kbDocs, kbSelectedId, kbEditing]);
+    if (view !== "knowledge" || !token) return;
+    refreshKb().catch((e) => setError(errMsg(e)));
+  }, [view, token, refreshKb]);
 
-  const kbSelected = useMemo(
-    () => kbDocs.find((d) => d.id === kbSelectedId) || null,
-    [kbDocs, kbSelectedId]
+  const kbBase = useMemo(
+    () => kbBases.find((b) => b.id === kbBaseId) || null,
+    [kbBases, kbBaseId]
   );
 
-  function startNewKbDoc() {
-    setKbEditing(true);
-    setKbSelectedId(null);
-    setKbForm({ title: "", summary: "", body: "", tags: "", category: "playbook" });
-  }
-
-  function startEditKbDoc(doc: KnowledgeDoc) {
-    setKbEditing(true);
-    setKbSelectedId(doc.id);
-    setKbForm({
-      title: doc.title || "",
-      summary: doc.summary || "",
-      body: doc.body || "",
-      tags: (doc.tags || []).join(", "),
-      category: doc.category || "playbook",
+  const kbVisibleBases = useMemo(() => {
+    const q = kbBaseQuery.trim().toLowerCase();
+    return kbBases.filter((b) => {
+      const okScope = kbBaseFilter === "all" || b.scope === kbBaseFilter;
+      const okQ =
+        !q ||
+        b.name.toLowerCase().includes(q) ||
+        (b.description || "").toLowerCase().includes(q);
+      return okScope && okQ;
     });
+  }, [kbBases, kbBaseFilter, kbBaseQuery]);
+
+  const kbScopeCounts = useMemo(
+    () => ({
+      global: kbBases.filter((b) => b.scope === "global").length,
+      user: kbBases.filter((b) => b.scope === "user").length,
+      task: kbBases.filter((b) => b.scope === "task").length,
+    }),
+    [kbBases]
+  );
+
+  /** 新建弹窗打开：重置表单并拉取当前用户可见任务列表供「关联任务」下拉 */
+  async function openKbCreate() {
+    setKbBaseForm({ name: "", description: "", scope: "user", task_id: "" });
+    setKbPendingFiles([]);
+    setKbCreateOpen(true);
+    try {
+      setKbTasks(await api<Initiative[]>("/api/initiatives", { token }));
+    } catch (err) {
+      setError(errMsg(err));
+    }
   }
 
-  async function saveKbDoc(e: FormEvent) {
+  function addKbFiles(list: FileList | null, autoBaseId?: string) {
+    if (!list) return;
+    const next = Array.from(list).map((file) => {
+      const ext = file.name.split(".").pop()?.toLowerCase() || "";
+      const ok = KB_IMPORT_EXTS.has(ext);
+      return {
+        uid: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        file,
+        status: ok ? ("queued" as const) : ("failed" as const),
+        message: ok ? undefined : "不支持的格式",
+      };
+    });
+    setKbPendingFiles((prev) => [...prev, ...next]);
+    // 库详情导入弹窗：选中即自动上传（新建弹窗库尚未创建，仍走「创建并导入」）
+    if (autoBaseId) {
+      void uploadKbItemList(autoBaseId, next.filter((n) => n.status !== "failed"));
+    }
+  }
+
+  /** 按 uid 逐个上传到指定库；状态更新用 uid 匹配，避免闭包里对象引用失效 */
+  async function uploadKbItemList(
+    baseId: string,
+    items: { uid: string; file: File }[]
+  ) {
+    for (const item of items) {
+      setKbPendingFiles((prev) => prev.map((p) => (p.uid === item.uid ? { ...p, status: "uploading" } : p)));
+      try {
+        await importKnowledgeFile(token, baseId, item.file);
+        setKbPendingFiles((prev) => prev.map((p) => (p.uid === item.uid ? { ...p, status: "done" } : p)));
+      } catch (err) {
+        setKbPendingFiles((prev) =>
+          prev.map((p) => (p.uid === item.uid ? { ...p, status: "failed", message: errMsg(err) } : p))
+        );
+      }
+    }
+  }
+
+  const kbImportableCount = kbPendingFiles.filter((p) => p.status !== "failed").length;
+  const kbImportDoneCount = kbPendingFiles.filter((p) => p.status === "done").length;
+  const kbImportFailedCount = kbPendingFiles.filter((p) => p.status === "failed").length;
+
+  async function submitKbCreate(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError("");
-    const payload = {
-      title: kbForm.title,
-      summary: kbForm.summary,
-      body: kbForm.body,
-      tags: kbForm.tags
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean),
-      category: kbForm.category,
-    };
     try {
-      const data = kbSelectedId
-        ? await api<KnowledgeDoc>(`/api/knowledge/${kbSelectedId}`, {
-            token,
-            method: "PATCH",
-            body: JSON.stringify(payload),
-          })
-        : await api<KnowledgeDoc>("/api/knowledge", {
-            token,
-            method: "POST",
-            body: JSON.stringify(payload),
-          });
-      setKbEditing(false);
-      setKbSelectedId(data.id);
-      await refreshKb();
+      const base = await createKnowledgeBase(token, {
+        name: kbBaseForm.name,
+        description: kbBaseForm.description,
+        scope: kbBaseForm.scope,
+        task_id: kbBaseForm.scope === "task" ? kbBaseForm.task_id : "",
+      });
+      await uploadKbItemList(base.id, kbPendingFiles.filter((p) => p.status !== "failed"));
+      setKbCreateOpen(false);
+      setKbPendingFiles([]);
+      setKbBaseId(base.id);
+      await Promise.all([refreshKbBases(), refreshKb()]);
     } catch (err) {
       setError(errMsg(err));
     } finally {
@@ -1249,11 +1368,30 @@ export default function App() {
     }
   }
 
+  async function deleteKbBase(id: string) {
+    if (!confirm("删除该知识库？")) return;
+    try {
+      await deleteKnowledgeBase(token, id);
+      setKbBaseId(null);
+      await Promise.all([refreshKbBases(), refreshKb()]);
+    } catch (err) {
+      setError(errMsg(err));
+    }
+  }
+
+  /** 库管理入口（删除按钮）显隐：admin / user 库所有者 / task 库创建者；后端仍会再校验 */
+  function kbCanManage(base: KnowledgeBaseInfo) {
+    if (user?.role === "admin") return true;
+    if (base.scope === "user") return base.scope_id === user?.id;
+    if (base.scope === "task") return !!base.created_by && base.created_by === user?.id;
+    return false;
+  }
+
   async function deleteKbDoc(id: string) {
     if (!confirm(tr("delete") + "?")) return;
     await api(`/api/knowledge/${id}`, { token, method: "DELETE" });
-    if (kbSelectedId === id) setKbSelectedId(null);
-    await refreshKb();
+    if (kbDocDetail?.id === id) setKbDocDetail(null);
+    await Promise.all([refreshKb(), refreshKbBases()]);
   }
 
   const refreshMemory = useCallback(async () => {
@@ -1807,47 +1945,149 @@ export default function App() {
     await loadAdminUsers();
   }
 
+  // 审核通过/拒绝：pending → active / rejected；拒绝后该用户所有 token 立即失效
+  async function setUserStatus(id: string, status: "active" | "rejected") {
+    setBusy(true);
+    try {
+      await adminUpdateUser(token, id, { status });
+      await loadAdminUsers();
+    } catch (err) {
+      setError(errMsg(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // 管理员改角色：最后一个 admin 降级会被后端拒绝并提示
+  async function setUserRole(id: string, role: UserRole) {
+    setBusy(true);
+    try {
+      await adminUpdateUser(token, id, { role });
+      await loadAdminUsers();
+    } catch (err) {
+      setError(errMsg(err));
+      await loadAdminUsers();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (!token || !user) {
     return (
       <div className={`deck login-deck ${booted ? "booted" : ""}`}>
         {atmosphere}
-        <form className="login-card" onSubmit={doLogin}>
-          <div className="brand-block">
-            <img className="brand-logo" src="/logo.png" alt="Sortie Deck" />
-            <div>
-              <h1 className="brand-title">{tr("product")}</h1>
-              <p className="brand-sub">{tr("tagline")}</p>
+        {regMode ? (
+          <form
+            className="login-card"
+            onSubmit={(e) => {
+              void doRegister(e);
+            }}
+          >
+            <div className="brand-block">
+              <img className="brand-logo" src="/logo.png" alt="Sortie Deck" />
+              <div>
+                <h1 className="brand-title">{tr("product")}</h1>
+                <p className="brand-sub">{tr("register")}</p>
+              </div>
             </div>
-          </div>
-          <label>
-            <span>{tr("username")}</span>
-            <input
-              value={loginForm.username}
-              onChange={(e) => setLoginForm({ ...loginForm, username: e.target.value })}
-              required
-            />
-          </label>
-          <label>
-            <span>{tr("password")}</span>
-            <input
-              type="password"
-              value={loginForm.password}
-              onChange={(e) => setLoginForm({ ...loginForm, password: e.target.value })}
-              required
-            />
-          </label>
-          <button className="btn primary" type="submit" disabled={busy}>
-            {tr("login")}
-          </button>
-          <p className="login-hint">{tr("loginHint")}</p>
-          <div className="theme-panel-actions">
-            <button type="button" className="btn ghost" onClick={() => setLang(lang === "zh" ? "en" : "zh")}>
-              {tr("lang")}
+            {regDone && <div className="alert">{tr("registerPending")}</div>}
+            <label>
+              <span>{tr("username")}</span>
+              <input
+                value={regForm.username}
+                onChange={(e) => setRegForm({ ...regForm, username: e.target.value })}
+                required
+              />
+            </label>
+            <label>
+              <span>{tr("displayName")}</span>
+              <input
+                value={regForm.display_name}
+                onChange={(e) => setRegForm({ ...regForm, display_name: e.target.value })}
+                required
+              />
+            </label>
+            <label>
+              <span>{tr("password")}</span>
+              <input
+                type="password"
+                value={regForm.password}
+                onChange={(e) => setRegForm({ ...regForm, password: e.target.value })}
+                required
+              />
+            </label>
+            <button className="btn primary" type="submit" disabled={busy}>
+              {tr("registerSubmit")}
             </button>
-            {themeControls}
-          </div>
-          {error && <div className="alert">{error}</div>}
-        </form>
+            <button
+              type="button"
+              className="btn ghost"
+              onClick={() => {
+                setRegMode(false);
+                setRegDone(false);
+                setError("");
+              }}
+            >
+              {tr("backToLogin")}
+            </button>
+            <div className="theme-panel-actions">
+              <button type="button" className="btn ghost" onClick={() => setLang(lang === "zh" ? "en" : "zh")}>
+                {tr("lang")}
+              </button>
+              {themeControls}
+            </div>
+            {error && <div className="alert">{error}</div>}
+          </form>
+        ) : (
+          <form className="login-card" onSubmit={doLogin}>
+            <div className="brand-block">
+              <img className="brand-logo" src="/logo.png" alt="Sortie Deck" />
+              <div>
+                <h1 className="brand-title">{tr("product")}</h1>
+                <p className="brand-sub">{tr("tagline")}</p>
+              </div>
+            </div>
+            <label>
+              <span>{tr("username")}</span>
+              <input
+                value={loginForm.username}
+                onChange={(e) => setLoginForm({ ...loginForm, username: e.target.value })}
+                required
+              />
+            </label>
+            <label>
+              <span>{tr("password")}</span>
+              <input
+                type="password"
+                value={loginForm.password}
+                onChange={(e) => setLoginForm({ ...loginForm, password: e.target.value })}
+                required
+              />
+            </label>
+            <button className="btn primary" type="submit" disabled={busy}>
+              {tr("login")}
+            </button>
+            <button
+              type="button"
+              className="btn ghost"
+              onClick={() => {
+                setRegMode(true);
+                setRegDone(false);
+                setError("");
+              }}
+            >
+              {tr("register")}
+            </button>
+            <p className="login-hint">{tr("loginHint")}</p>
+            <div className="theme-panel-actions">
+              <button type="button" className="btn ghost" onClick={() => setLang(lang === "zh" ? "en" : "zh")}>
+                {tr("lang")}
+              </button>
+              {themeControls}
+            </div>
+            {error && <div className="alert">{error}</div>}
+          </form>
+        )}
       </div>
     );
   }
@@ -2000,6 +2240,12 @@ export default function App() {
                 文
               </span>
               <span className="op-chip-txt">{tr("lang")}</span>
+            </button>
+            <button type="button" className="op-chip danger" onClick={doDeleteAccount} aria-label={tr("deleteAccount")} title={tr("deleteAccount")}>
+              <span className="op-chip-ico" aria-hidden>
+                ✕
+              </span>
+              <span className="op-chip-txt">{tr("deleteAccount")}</span>
             </button>
             <button type="button" className="op-chip danger" onClick={doLogout} aria-label={tr("logout")} title={tr("logout")}>
               <span className="op-chip-ico" aria-hidden>
@@ -2827,132 +3073,405 @@ export default function App() {
       )}
 
       {view === "knowledge" && (
-        <div className="deck-body workbench kb-layout">
-          <aside className="sidebar">
-            <div className="panel-label">{tr("codex")}</div>
-            <p className="kb-hint">{tr("codexHint")}</p>
-            <input
-              className="kb-search"
-              placeholder={tr("searchCodex")}
-              value={kbQuery}
-              onChange={(e) => setKbQuery(e.target.value)}
-            />
-            <button className="btn primary" type="button" onClick={startNewKbDoc}>
-              {tr("newDoc")}
-            </button>
-            <div className="list">
-              {kbDocs.map((doc) => (
-                <button
-                  key={doc.id}
-                  type="button"
-                  className={`mission ${doc.id === kbSelectedId && !kbEditing ? "active" : ""}`}
-                  onClick={() => {
-                    setKbEditing(false);
-                    setKbSelectedId(doc.id);
-                  }}
-                >
-                  <div className="mission-top">
-                    <span className="mission-id">{categoryLabel(lang, doc.category)}</span>
-                  </div>
-                  <strong>{doc.title}</strong>
-                  <span className="mission-stage">{doc.summary || (doc.tags || []).join(" · ")}</span>
-                </button>
-              ))}
-              {!kbDocs.length && <div className="empty-queue">{tr("emptyCodex")}</div>}
-            </div>
-          </aside>
+        <>
           <main className="main page-pad">
-            {kbEditing ? (
-              <form className="form kb-form" onSubmit={saveKbDoc}>
-                <h2 className="page-title">{kbSelectedId ? tr("saveDoc") : tr("newDoc")}</h2>
-                <label>
-                  <span>{tr("docTitle")}</span>
-                  <input
-                    value={kbForm.title}
-                    onChange={(e) => setKbForm({ ...kbForm, title: e.target.value })}
-                    required
-                  />
-                </label>
-                <label>
-                  <span>{tr("docSummary")}</span>
-                  <input
-                    value={kbForm.summary}
-                    onChange={(e) => setKbForm({ ...kbForm, summary: e.target.value })}
-                  />
-                </label>
-                <label>
-                  <span>{tr("docCategory")}</span>
-                  <select
-                    value={kbForm.category}
-                    onChange={(e) => setKbForm({ ...kbForm, category: e.target.value as KnowledgeCategory })}
-                  >
-                    <option value="playbook">{tr("catPlaybook")}</option>
-                    <option value="runbook">{tr("catRunbook")}</option>
-                    <option value="lore">{tr("catLore")}</option>
-                    <option value="reference">{tr("catReference")}</option>
-                  </select>
-                </label>
-                <label>
-                  <span>{tr("docTags")}</span>
-                  <input
-                    value={kbForm.tags}
-                    onChange={(e) => setKbForm({ ...kbForm, tags: e.target.value })}
-                  />
-                </label>
-                <label>
-                  <span>{tr("docBody")}</span>
-                  <textarea
-                    className="kb-body"
-                    value={kbForm.body}
-                    onChange={(e) => setKbForm({ ...kbForm, body: e.target.value })}
-                    required
-                  />
-                </label>
-                <div className="kb-actions">
-                  <button className="btn primary" type="submit" disabled={busy}>
-                    {tr("saveDoc")}
+            {!kbBase ? (
+              <>
+                <div className="title-row">
+                  <div>
+                    <h2 className="page-title">知识库</h2>
+                    <p className="kb-page-sub">产品 / 方案 / 手册——供 Cursor 等辅助工具检索负重</p>
+                  </div>
+                  <button className="btn primary kb-btn-candy" type="button" onClick={openKbCreate}>
+                    ＋ 新建知识库
                   </button>
-                  <button
-                    className="btn ghost"
-                    type="button"
-                    onClick={() => {
-                      setKbEditing(false);
-                      if (!kbSelectedId && kbDocs[0]) setKbSelectedId(kbDocs[0].id);
-                    }}
-                  >
+                </div>
+                <div className="kb-toolbar">
+                  <div className="kb-seg">
+                    {(
+                      [
+                        ["all", "全部", kbBases.length],
+                        ["global", "全局共享", kbScopeCounts.global],
+                        ["user", "我的知识库", kbScopeCounts.user],
+                        ["task", "任务知识库", kbScopeCounts.task],
+                      ] as const
+                    ).map(([key, label, count]) => (
+                      <button
+                        key={key}
+                        type="button"
+                        className={kbBaseFilter === key ? "on" : ""}
+                        onClick={() => setKbBaseFilter(key)}
+                      >
+                        {label} <i>{count}</i>
+                      </button>
+                    ))}
+                  </div>
+                  <input
+                    className="kb-search-input"
+                    placeholder="搜索知识库名称或简介…"
+                    value={kbBaseQuery}
+                    onChange={(e) => setKbBaseQuery(e.target.value)}
+                  />
+                </div>
+                <div className="kb-grid">
+                  {kbVisibleBases.map((b) => (
+                    <article
+                      key={b.id}
+                      className={`kb-card scope-${b.scope}`}
+                      onClick={() => {
+                        setKbBaseId(b.id);
+                        setKbQuery("");
+                      }}
+                    >
+                      <div className="kb-card-top">
+                        <strong>{b.name}</strong>
+                        {b.scope === "global" && <span className="kb-badge scope-global">全局</span>}
+                      </div>
+                      <p className="kb-card-desc">{b.description || "—"}</p>
+                      <p className="kb-card-meta">
+                        {b.doc_count ?? 0} 篇 ·{" "}
+                        {b.scope === "global" ? "admin 维护" : b.scope === "task" ? "挂靠任务" : "个人知识库"} ·{" "}
+                        {(b.updated_at || "").slice(0, 10)}
+                      </p>
+                    </article>
+                  ))}
+                  {!kbVisibleBases.length && <div className="empty-queue">没有匹配的知识库</div>}
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="kb-crumb">
+                  <button type="button" className="kb-crumb-link" onClick={() => setKbBaseId(null)}>
+                    知识库
+                  </button>
+                  <span> / </span>
+                  <span>
+                    {kbBase.scope === "global" ? "全局共享" : kbBase.scope === "task" ? "任务知识库" : "我的知识库"}
+                  </span>
+                  <span> / </span>
+                  <strong>{kbBase.name}</strong>
+                </p>
+                <div className="title-row">
+                  <div>
+                    <h2 className="page-title kb-detail-title">
+                      {kbBase.name}
+                      {kbBase.scope === "global" && <span className="kb-badge scope-global">全局</span>}
+                    </h2>
+                    <p className="kb-page-sub">
+                      {kbDocs.length} 个文件
+                      {kbBase.scope === "task" && <> · 任务 {kbBase.scope_id}</>}
+                      {kbBase.description ? ` · ${kbBase.description}` : ""}
+                    </p>
+                  </div>
+                  <div className="topbar-actions">
+                    <button
+                      className="btn primary kb-btn-candy"
+                      type="button"
+                      onClick={() => {
+                        setKbPendingFiles([]);
+                        setKbImportOpen(true);
+                      }}
+                    >
+                      ＋ 导入文件
+                    </button>
+                    {kbCanManage(kbBase) && (
+                      <button className="btn danger" type="button" onClick={() => deleteKbBase(kbBase.id)}>
+                        {tr("delete")}
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div className="kb-doc-list">
+                  {kbDocs.map((doc) => {
+                    const ext = (doc.title.split(".").pop() || "").toLowerCase();
+                    return (
+                      <div key={doc.id} className="kb-doc-row" onClick={() => setKbDocDetail(doc)}>
+                        <span className="kb-doc-name">{doc.title}</span>
+                        {KB_IMPORT_EXTS.has(ext) && (
+                          <span className={`kb-type-badge ext-${ext}`}>{ext}</span>
+                        )}
+                        <span className="kb-doc-meta">
+                          {categoryLabel(lang, doc.category)} · {doc.author_name || "—"} ·{" "}
+                          {(doc.updated_at || "").slice(0, 10)}
+                        </span>
+                        <button
+                          className="kb-doc-del"
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            deleteKbDoc(doc.id);
+                          }}
+                        >
+                          {tr("delete")}
+                        </button>
+                      </div>
+                    );
+                  })}
+                  {!kbDocs.length && (
+                    <div className="empty-queue">库里还没有文件，点右上角「＋ 导入文件」</div>
+                  )}
+                </div>
+              </>
+            )}
+          </main>
+
+          {/* 新建知识库弹窗：分类即可见范围；内置导入区，创建与首次导入一步完成 */}
+          {kbCreateOpen && (
+            <div className="mem-overlay" onClick={(e) => e.target === e.currentTarget && setKbCreateOpen(false)}>
+              <form className="panel mem-modal kb-modal" onSubmit={submitKbCreate}>
+                <div className="panel-label row-between">
+                  <span>新建知识库</span>
+                  <button type="button" className="btn ghost tiny" onClick={() => setKbCreateOpen(false)}>
+                    ×
+                  </button>
+                </div>
+                <div className="kb-modal-body">
+                  <label className="kb-field">
+                    <span>名称 *</span>
+                    <input
+                      className="kb-input"
+                      value={kbBaseForm.name}
+                      onChange={(e) => setKbBaseForm({ ...kbBaseForm, name: e.target.value })}
+                      placeholder="例如：Short Chat 打招呼文案"
+                      required
+                    />
+                  </label>
+                  <label className="kb-field">
+                    <span>简介</span>
+                    <textarea
+                      className="kb-input"
+                      rows={2}
+                      value={kbBaseForm.description}
+                      onChange={(e) => setKbBaseForm({ ...kbBaseForm, description: e.target.value })}
+                      placeholder="一句话说明这个库沉淀什么、供谁检索"
+                    />
+                  </label>
+                  <div className="kb-field">
+                    <span>分类（即可见范围）</span>
+                    <div className="kb-scope-grid">
+                      <button
+                        type="button"
+                        className={`kb-scope-opt${kbBaseForm.scope === "global" ? " on" : ""}`}
+                        disabled={user?.role !== "admin"}
+                        onClick={() => setKbBaseForm({ ...kbBaseForm, scope: "global" })}
+                      >
+                        <b>全局共享</b>
+                        <em>{user?.role === "admin" ? "全员可见" : "仅 Admin 可创建"}</em>
+                      </button>
+                      <button
+                        type="button"
+                        className={`kb-scope-opt${kbBaseForm.scope === "user" ? " on" : ""}`}
+                        onClick={() => setKbBaseForm({ ...kbBaseForm, scope: "user" })}
+                      >
+                        <b>我的知识库</b>
+                        <em>仅自己可见</em>
+                      </button>
+                      <button
+                        type="button"
+                        className={`kb-scope-opt${kbBaseForm.scope === "task" ? " on" : ""}`}
+                        onClick={() => setKbBaseForm({ ...kbBaseForm, scope: "task" })}
+                      >
+                        <b>任务知识库</b>
+                        <em>挂靠任务</em>
+                      </button>
+                    </div>
+                  </div>
+                  {kbBaseForm.scope === "task" && (
+                    <label className="kb-field">
+                      <span>关联任务</span>
+                      <select
+                        className="kb-input"
+                        value={kbBaseForm.task_id}
+                        onChange={(e) => setKbBaseForm({ ...kbBaseForm, task_id: e.target.value })}
+                        required
+                      >
+                        <option value="">选择任务…</option>
+                        {kbTasks.map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.title} · {t.id}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  <div className="kb-field">
+                    <span>导入文件（可选，创建后也可在库详情继续导入）</span>
+                    <div
+                      className="kb-drop"
+                      onClick={() => kbCreateFileRef.current?.click()}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        addKbFiles(e.dataTransfer.files);
+                      }}
+                    >
+                      <strong>拖拽文件到此处，或点击选择</strong>
+                      <div className="kb-chips">
+                        {["docx", "doc", "ppt", "pptx", "csv", "xlsx", "md", "txt", "pdf"].map((x) => (
+                          <span key={x} className="kb-chip">
+                            {x}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    <input
+                      ref={kbCreateFileRef}
+                      type="file"
+                      multiple
+                      hidden
+                      accept={KB_IMPORT_ACCEPT}
+                      onChange={(e) => {
+                        addKbFiles(e.target.files);
+                        e.target.value = "";
+                      }}
+                    />
+                    {kbPendingFiles.map((item, i) => (
+                      <div key={`${item.file.name}-${i}`} className={`kb-frow${item.status === "failed" ? " dim" : ""}`}>
+                        <span className="kb-fname">{item.file.name}</span>
+                        <span className="kb-fmeta">{Math.max(1, Math.round(item.file.size / 1024))} KB</span>
+                        <span className={`kb-fstatus st-${item.status}`}>
+                          {item.status === "uploading"
+                            ? "导入中…"
+                            : item.status === "done"
+                              ? "已完成"
+                              : item.status === "failed"
+                                ? item.message || "导入失败"
+                                : "待导入"}
+                        </span>
+                        <button
+                          type="button"
+                          className="kb-fdel"
+                          onClick={() => setKbPendingFiles((prev) => prev.filter((_, idx) => idx !== i))}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="kb-modal-foot">
+                  <span className="kb-foot-meta">{kbImportableCount} 个文件将随库导入</span>
+                  <button type="button" className="btn ghost" onClick={() => setKbCreateOpen(false)}>
                     {tr("cancel")}
+                  </button>
+                  <button className="btn primary kb-btn-candy" type="submit" disabled={busy}>
+                    创建并导入 ({kbImportableCount})
                   </button>
                 </div>
               </form>
-            ) : kbSelected ? (
-              <article className="kb-article">
-                <div className="topbar">
-                  <div>
-                    <p className="eyebrow">
-                      {categoryLabel(lang, kbSelected.category)} · {(kbSelected.tags || []).join(" / ")}
-                    </p>
-                    <h2 className="mission-title">{kbSelected.title}</h2>
-                    <p className="kb-summary">{kbSelected.summary}</p>
-                  </div>
-                  <div className="topbar-actions">
-                    <button className="btn ghost" type="button" onClick={() => startEditKbDoc(kbSelected)}>
-                      {tr("editDoc")}
-                    </button>
-                    <button className="btn danger" type="button" onClick={() => deleteKbDoc(kbSelected.id)}>
-                      {tr("delete")}
-                    </button>
-                  </div>
+            </div>
+          )}
+
+          {/* 库详情补充导入弹窗：选中/拖入即自动上传，无需再点按钮 */}
+          {kbImportOpen && kbBase && (
+            <div className="mem-overlay" onClick={(e) => e.target === e.currentTarget && setKbImportOpen(false)}>
+              <div className="panel mem-modal kb-modal kb-modal-import">
+                <div className="panel-label row-between">
+                  <span>导入文件 · {kbBase.name}</span>
+                  <button type="button" className="btn ghost tiny" onClick={() => setKbImportOpen(false)}>
+                    ×
+                  </button>
                 </div>
-                <pre className="preview kb-preview">{kbSelected.body}</pre>
-                <p className="kb-meta">
-                  {kbSelected.author_name} · {kbSelected.updated_at}
-                </p>
-              </article>
-            ) : (
-              <div className="empty-queue">{tr("emptyCodex")}</div>
-            )}
-          </main>
-        </div>
+                <div className="kb-modal-body">
+                  <div
+                    className="kb-drop"
+                    onClick={() => kbImportFileRef.current?.click()}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      addKbFiles(e.dataTransfer.files, kbBase.id);
+                    }}
+                  >
+                    <strong>拖拽文件到此处，或点击选择（选中后自动上传）</strong>
+                    <div className="kb-chips">
+                      {["docx", "doc", "ppt", "pptx", "csv", "xlsx", "md", "txt", "pdf"].map((x) => (
+                        <span key={x} className="kb-chip">
+                          {x}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <input
+                    ref={kbImportFileRef}
+                    type="file"
+                    multiple
+                    hidden
+                    accept={KB_IMPORT_ACCEPT}
+                    onChange={(e) => {
+                      addKbFiles(e.target.files, kbBase.id);
+                      e.target.value = "";
+                    }}
+                  />
+                  {kbPendingFiles.map((item) => (
+                    <div key={item.uid} className={`kb-frow${item.status === "failed" ? " dim" : ""}`}>
+                      <span className="kb-fname">{item.file.name}</span>
+                      <span className="kb-fmeta">{Math.max(1, Math.round(item.file.size / 1024))} KB</span>
+                      <span className={`kb-fstatus st-${item.status}`}>
+                        {item.status === "uploading"
+                          ? "导入中…"
+                          : item.status === "done"
+                            ? "已完成"
+                            : item.status === "failed"
+                              ? item.message || "导入失败"
+                              : "待导入"}
+                      </span>
+                      <button
+                        type="button"
+                        className="kb-fdel"
+                        onClick={() => setKbPendingFiles((prev) => prev.filter((p) => p.uid !== item.uid))}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <div className="kb-modal-foot">
+                  <span className="kb-foot-meta">
+                    {kbImportDoneCount} 个已完成{kbImportFailedCount ? ` · ${kbImportFailedCount} 个失败` : ""}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn primary kb-btn-candy"
+                    onClick={() => {
+                      setKbImportOpen(false);
+                      setKbPendingFiles([]);
+                    }}
+                  >
+                    完成
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 文档详情弹窗：Markdown 渲染全文 */}
+          {kbDocDetail && (
+            <div className="mem-overlay" onClick={(e) => e.target === e.currentTarget && setKbDocDetail(null)}>
+              <div className="panel mem-modal mem-detail-modal" onClick={(e) => e.stopPropagation()}>
+                <div className="mem-detail-meta">
+                  <strong>{kbDocDetail.title}</strong>
+                  <span className="mem-detail-sep" />
+                  <span className="mem-detail-scope">{categoryLabel(lang, kbDocDetail.category)}</span>
+                  <span className="mem-detail-author">
+                    {kbDocDetail.author_name || "—"} · {(kbDocDetail.updated_at || "").slice(0, 10)}
+                  </span>
+                </div>
+                <div className="mem-detail-scroll">
+                  <MarkdownPreview text={kbDocDetail.body || kbDocDetail.summary} />
+                </div>
+                <div className="kb-modal-foot">
+                  <span className="kb-foot-meta">{(kbDocDetail.tags || []).join(" · ")}</span>
+                  <button className="btn ghost" type="button" onClick={() => deleteKbDoc(kbDocDetail.id)}>
+                    {tr("delete")}
+                  </button>
+                  <button className="btn primary" type="button" onClick={() => setKbDocDetail(null)}>
+                    关闭
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </>
       )}
 
       {view === "memory" && (
@@ -4100,7 +4619,35 @@ export default function App() {
                 <div key={u.id} className="user-row">
                   <strong>{u.display_name}</strong>
                   <code>{u.username}</code>
-                  <span className="st">{u.role === "admin" ? tr("adminRole") : tr("memberRole")}</span>
+                  {/* 角色下拉：变更即提交；系统至少保留一个 admin */}
+                  <select
+                    className="st"
+                    value={u.role}
+                    disabled={busy}
+                    onChange={(e) => {
+                      void setUserRole(u.id, e.target.value as UserRole);
+                    }}
+                  >
+                    <option value="member">{tr("memberRole")}</option>
+                    <option value="admin">{tr("adminRole")}</option>
+                  </select>
+                  <span className="st">
+                    {u.status === "pending"
+                      ? tr("userStatusPending")
+                      : u.status === "rejected"
+                        ? tr("userStatusRejected")
+                        : tr("userStatusActive")}
+                  </span>
+                  {u.status === "pending" && (
+                    <>
+                      <button type="button" className="btn primary" disabled={busy} onClick={() => setUserStatus(u.id, "active")}>
+                        {tr("approveUser")}
+                      </button>
+                      <button type="button" className="btn" disabled={busy} onClick={() => setUserStatus(u.id, "rejected")}>
+                        {tr("rejectUser")}
+                      </button>
+                    </>
+                  )}
                   <button type="button" className="btn danger" onClick={() => deleteUser(u.id)}>
                     {tr("delete")}
                   </button>
