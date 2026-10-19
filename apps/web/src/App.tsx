@@ -1243,6 +1243,37 @@ export default function App() {
     }
   }, [view, token, refreshMemory]);
 
+  // 简介异步生成：列表存在 pending 记忆时每 2s 轮询刷新，全部落定后自动停止
+  useEffect(() => {
+    if (view !== "memory" || !token) return;
+    if (!memories.some((m) => m.summary_status === "pending")) return;
+    const t = window.setTimeout(async () => {
+      try {
+        const data = await api<MemoryEntry[]>("/api/memory", { token });
+        setMemories(data);
+        // 详情弹窗若打开中，同步最新条目（loading → 简介内容）
+        setMemDetail((prev) => (prev ? data.find((m) => m.id === prev.id) || prev : prev));
+      } catch {
+        /* 单次轮询失败忽略，下一轮重试 */
+      }
+    }, 2000);
+    return () => window.clearTimeout(t);
+  }, [view, token, memories]);
+
+  // 重新生成简介：置 pending 触发 loading，随后由轮询自动带回结果
+  async function regenerateMemSummary(id: string) {
+    try {
+      const entry = await api<MemoryEntry>(`/api/memory/${id}/summary/regenerate`, {
+        token,
+        method: "POST",
+      });
+      setMemories((list) => list.map((m) => (m.id === id ? entry : m)));
+      setMemDetail((prev) => (prev && prev.id === id ? entry : prev));
+    } catch (err) {
+      setError(errMsg(err));
+    }
+  }
+
   useEffect(() => {
     if ((view === "agents" || view === "tasks") && token) {
       refreshAgents().catch((e) => setError(errMsg(e)));
@@ -2932,7 +2963,16 @@ export default function App() {
                   <span className="kind-tag">{tr(memKindLabel[m.kind])}</span>
                   <span className="mem-card-scope">{memTargetLabel(m)}</span>
                 </div>
-                <p className="memory-quote">「{m.summary || m.content}」</p>
+                <p className="memory-quote">
+                  {m.summary_status === "pending" ? (
+                    <span className="mem-summary-pending">
+                      <span className="mini-spinner" aria-hidden="true" />
+                      {tr("memSummaryPending")}
+                    </span>
+                  ) : (
+                    <>「{m.summary || m.content}」</>
+                  )}
+                </p>
                 <div className="mem-card-meta">
                   {(m.tags || []).length ? `${(m.tags || []).join(" · ")} · ` : ""}
                   {m.author_name || ""}
@@ -3127,9 +3167,29 @@ export default function App() {
                 <div className="mem-detail-scroll">
                   <div className="mem-detail-callout">
                     <span className="mem-detail-label">{tr("memSummary")}</span>
-                    <p className="mem-detail-summary">
-                      {memDetail.summary || memDetail.content}
-                    </p>
+                    {memDetail.summary_status === "pending" ? (
+                      <span className="mem-summary-pending">
+                        <span className="mini-spinner" aria-hidden="true" />
+                        {tr("memSummaryPending")}
+                      </span>
+                    ) : (
+                      <>
+                        <p className="mem-detail-summary">
+                          {memDetail.summary || memDetail.content}
+                        </p>
+                        {/* 无简介（旧数据/空返回）或上次生成失败时允许手动重试 */}
+                        {(!memDetail.summary || memDetail.summary_status === "failed") && (
+                          <button
+                            type="button"
+                            className="btn ghost tiny mem-summary-retry"
+                            onClick={() => void regenerateMemSummary(memDetail.id)}
+                          >
+                            {tr("memSummaryRetry")}
+                            {memDetail.summary_status === "failed" ? ` · ${tr("memSummaryFailed")}` : ""}
+                          </button>
+                        )}
+                      </>
+                    )}
                   </div>
                   <div className="mem-detail-full">
                     <div className="mem-detail-full-label">

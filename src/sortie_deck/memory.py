@@ -45,6 +45,9 @@ class MemoryEntry(BaseModel):
     # 一句话简介（写入时 LLM 生成；失败降级为 content 截断）。注入提示词时
     # 只带简介行，Agent 需要时按 id 取全文（Claude Code MEMORY.md 模式）。
     summary: str = ""
+    # 简介生成状态：pending=LLM 生成中 / done=已生成 / failed=生成失败（展示截断）。
+    # 旧数据为空串，语义等同 done 的截断兜底。
+    summary_status: Literal["", "pending", "done", "failed"] = ""
     tags: list[str] = Field(default_factory=list)
     source: str = "manual"
     author_id: str = ""
@@ -157,8 +160,8 @@ class MemoryStore:
         except OSError:
             pass  # 索引是派生物，写失败不影响数据
 
-    def set_summary(self, mem_id: str, summary: str) -> MemoryEntry:
-        """写入 LLM 生成的简介并刷新索引（简介生成失败时调用方降级为截断）。"""
+    def set_summary(self, mem_id: str, summary: str, *, status: str = "done") -> MemoryEntry:
+        """写入 LLM 生成的简介并刷新索引（status 标记本轮生成结果）。"""
         with self._lock:
             entries = self._read()
             for i, e in enumerate(entries):
@@ -166,6 +169,22 @@ class MemoryStore:
                     continue
                 data = e.model_dump()
                 data["summary"] = summary.strip()[:60]
+                data["summary_status"] = status
+                data["updated_at"] = utc_now().isoformat()
+                entries[i] = MemoryEntry.model_validate(data)
+                self._write(entries)
+                return entries[i]
+        raise KeyError(mem_id)
+
+    def set_summary_status(self, mem_id: str, status: str) -> MemoryEntry:
+        """仅流转简介状态（pending/failed），不动 summary 内容。"""
+        with self._lock:
+            entries = self._read()
+            for i, e in enumerate(entries):
+                if e.id != mem_id:
+                    continue
+                data = e.model_dump()
+                data["summary_status"] = status
                 data["updated_at"] = utc_now().isoformat()
                 entries[i] = MemoryEntry.model_validate(data)
                 self._write(entries)

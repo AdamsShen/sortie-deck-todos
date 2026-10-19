@@ -347,6 +347,8 @@ export interface MemoryEntry {
   content: string;
   /** 一句话简介（写入时 LLM 生成，失败降级为 content 截断） */
   summary?: string;
+  /** 简介生成状态：pending=生成中 / done=已生成 / failed=失败可重试；空串为旧数据 */
+  summary_status?: "" | "pending" | "done" | "failed";
   tags: string[];
   source?: string;
   author_id?: string;

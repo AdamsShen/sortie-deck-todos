@@ -498,6 +498,19 @@ async def create_memory(
         raise HTTPException(403, "workspace 记忆仅管理员可创建")
     entry = get_memory().create(req, author_id=user.id, author_name=user.display_name)
 
+    # 有 LLM 环境时简介标记为生成中，异步生成完成后落 done / failed；
+    # 无 LLM 环境保持空状态，前端直接展示 content 截断兜底
+    def _llm_enabled() -> bool:
+        try:
+            from sortie_deck.llm import LlmClient
+
+            return LlmClient(timeout=15.0).enabled
+        except Exception:  # noqa: BLE001 — 状态判定失败按无 LLM 处理
+            return False
+
+    if _llm_enabled():
+        entry = get_memory().set_summary_status(entry.id, "pending")
+
     # 异步生成一句话简介（Claude Code MEMORY.md 模式的索引行）；失败降级为
     # content 截断（display_summary 兜底），绝不阻塞写入响应
     async def _fill_summary(entry_id: str, content: str) -> None:
@@ -506,6 +519,7 @@ async def create_memory(
 
             llm = LlmClient(timeout=15.0)
             if not llm.enabled:
+                get_memory().set_summary_status(entry_id, "failed")
                 return  # 无 LLM 环境保持截断简介
             data = await llm.chat_json(
                 system=(
@@ -517,10 +531,18 @@ async def create_memory(
             s = str(data.get("summary") or "").strip()
             if s:
                 get_memory().set_summary(entry_id, s)
+                return
+            # 模型返回了空简介：标记失败让用户可手动重试
+            get_memory().set_summary_status(entry_id, "failed")
         except Exception:  # noqa: BLE001 — 简介是增强项，失败保持截断
-            logger.info("记忆简介生成失败，降级为截断: id=%s", entry_id)
+            logger.warning("记忆简介生成失败，标记 failed 可重试: id=%s", entry_id, exc_info=True)
+            try:
+                get_memory().set_summary_status(entry_id, "failed")
+            except KeyError:
+                pass
 
-    asyncio.create_task(_fill_summary(entry.id, entry.content))
+    if _llm_enabled():
+        asyncio.create_task(_fill_summary(entry.id, entry.content))
     return entry.model_dump(mode="json")
 
 
@@ -544,6 +566,52 @@ async def lookup_memories(
         for i in req.ids
         if i in known
     ]
+
+
+@app.post("/api/memory/{mem_id}/summary/regenerate")
+async def regenerate_memory_summary(
+    mem_id: str, user: PublicUser = Depends(require_user)
+) -> dict[str, Any]:
+    """重新生成记忆简介：置 pending 并异步调用 LLM，返回最新 entry 供前端展示 loading。"""
+    try:
+        entry = get_memory().get(mem_id)
+        # 权限与 PATCH 一致：workspace 收敛管理员，user 域仅本人或管理员
+        if entry.scope == "workspace" and user.role != "admin":
+            raise HTTPException(403, "workspace 记忆仅管理员可修改")
+        if entry.scope == "user" and entry.scope_id != user.id and user.role != "admin":
+            raise HTTPException(403, "forbidden")
+    except KeyError:
+        raise HTTPException(404, "memory not found") from None
+    from sortie_deck.llm import LlmClient
+
+    llm = LlmClient(timeout=15.0)
+    if not llm.enabled:
+        raise HTTPException(409, "LLM 未配置，无法生成简介")
+    get_memory().set_summary_status(mem_id, "pending")
+
+    async def _fill(entry_id: str, content: str) -> None:
+        try:
+            data = await llm.chat_json(
+                system=(
+                    "为一条 Agent 记忆生成不超过 30 字的中文简介，"
+                    "保留约束与适用场景，直接给出简介文本，JSON 格式 {\"summary\": \"...\"}。"
+                ),
+                user=content,
+            )
+            s = str(data.get("summary") or "").strip()
+            if s:
+                get_memory().set_summary(entry_id, s)
+                return
+            get_memory().set_summary_status(entry_id, "failed")
+        except Exception:  # noqa: BLE001 — 简介是增强项，失败保持截断
+            logger.warning("记忆简介重试失败，标记 failed: id=%s", entry_id, exc_info=True)
+            try:
+                get_memory().set_summary_status(entry_id, "failed")
+            except KeyError:
+                pass
+
+    asyncio.create_task(_fill(mem_id, entry.content))
+    return get_memory().get(mem_id).model_dump(mode="json")
 
 
 @app.patch("/api/memory/{mem_id}")

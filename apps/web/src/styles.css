@@ -3397,6 +3397,30 @@ textarea {
   color: var(--text);
   text-wrap: pretty;
 }
+/* 简介生成中：行内 loading（列表卡片与详情弹窗共用） */
+.mem-summary-pending {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  opacity: 0.65;
+  font-style: italic;
+}
+.mem-summary-pending .mini-spinner {
+  width: 0.7em;
+  height: 0.7em;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: mem-summary-spin 0.8s linear infinite;
+}
+@keyframes mem-summary-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.mem-summary-retry {
+  margin-top: 0.45rem;
+}
 .mem-detail-modal .mem-detail-full-label {
   display: flex;
   align-items: center;
