@@ -12,9 +12,30 @@ Sortie Deck **只做导入与目录管理**；**检索依赖 WeKnora 自身**（
 | 代码 | `knowledge.py`（本地目录镜像）、`weknora.py`、`knowledge_gateway.py`、`knowledge_pack.py` |
 | 本地目录 | `data/knowledge.json`（catalog，非全文检索引擎） |
 | 后端 | `TDT_KB_BACKEND=local\|weknora` |
+| 检索模式 | `TDT_WEKNORA_RETRIEVAL_MODE=hybrid\|graph`（见 §2.1） |
 | API | `/api/knowledge` · `/status` · `/folders` · `/import` · `/sync` · `/retrieve` |
 | CLI | `tdt knowledge {status,sync,import,pack}` |
 | Skill | `packages/skills/knowledge-for-cursor` |
+
+## 2.1 检索模式（hybrid vs graph）
+
+WeKnora 的混合检索（`hybrid-search`）与 GraphRAG 是两条链路：
+
+| | `hybrid`（默认） | `graph` |
+|---|---|---|
+| 接口 | `POST /knowledge-bases/{kb}/hybrid-search` | `POST /sessions` + `POST /knowledge-chat/{sid}`（SSE） |
+| 召回 | BM25 + 向量双路 | 混合检索 + 查询实体抽取 → Neo4j 图谱一跳扩展 → 关联 chunk 补充召回 |
+| 延迟 | ~0.3s | ~10-40s（管线内含 LLM 调用；拿到 references 即断开） |
+| 依赖 | 无 | WeKnora 服务端 `NEO4J_ENABLE=true` + 知识库 `GraphEnabled` + `ExtractConfig.Enabled` |
+| 失败行为 | — | 自动降级到 hybrid-search（`_retrieve_graph` 返回空即回退） |
+
+配置（`settings.py`）：`weknora_retrieval_mode`、`weknora_chat_timeout`（SSE 流超时，默认 90s）。
+`/api/knowledge/status` 返回 `retrieval_mode` 与 `graph_enabled`（读知识库 `capabilities.graph`）。
+实现：`WeKnoraClient.knowledge_chat_references()`（解析 SSE references 事件转 `WeKnoraHit`）、
+`KnowledgeGateway._retrieve_graph()`（会话按次创建/销毁，失败告警降级）。
+
+部署与运维细节（模型配置、SSRF 白名单、系统代理坑、图谱抽取调优）见
+`docs/zh/notes/weknora-graphrag-plan.md`。
 
 ## 2. 职责边界
 

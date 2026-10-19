@@ -132,6 +132,141 @@ def test_gateway_import_manual_and_sync(tmp_path):
     assert any(d.remote_id == "remote_1" for d in store.list())
 
 
+def test_knowledge_chat_references_parses_sse():
+    """graph 模式底层：SSE 流中 references 事件应转成 WeKnoraHit，拿到后不等正文。"""
+
+    sse = (
+        'data:{"response_type":"thinking","content":"..."}\n\n'
+        "data:"
+        + json.dumps(
+            {
+                "response_type": "references",
+                "knowledge_references": [
+                    {
+                        "id": "chunk9",
+                        "knowledge_id": "k7",
+                        "knowledge_title": "Design",
+                        "content": "full body",
+                        "matched_content": "matched slice",
+                        "score": 0.99,
+                        "knowledge_base_id": "kb1",
+                        "match_type": 2,
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        )
+        + "\n\n"
+        'data:{"response_type":"answer","content":"不应该被读取"}\n\n'
+        'data:{"response_type":"complete","done":true}\n\n'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/knowledge-chat/sess1")
+        body = json.loads(request.content.decode())
+        assert body["query"] == "打招呼"
+        assert body["knowledge_base_ids"] == ["kb1"]
+        return httpx.Response(200, content=sse.encode(), headers={"Content-Type": "text/event-stream"})
+
+    with WeKnoraClient("http://weknora.test", "key", client=_mock_transport(handler)) as client:
+        hits = client.knowledge_chat_references("sess1", "打招呼", ["kb1"])
+    assert len(hits) == 1
+    assert hits[0].knowledge_id == "k7"
+    # 优先取 matched_content（图谱扩展召回的片段）
+    assert hits[0].content == "matched slice"
+    assert hits[0].score == 0.99
+
+
+def test_gateway_graph_mode_falls_back_to_hybrid(tmp_path):
+    """graph 模式下 knowledge-chat 失败应降级 hybrid-search，检索不中断。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/sessions") and request.method == "POST":
+            return httpx.Response(200, json={"success": True, "data": {"id": "s1"}})
+        if "/knowledge-chat/" in path:
+            # 模拟图谱链路故障
+            return httpx.Response(500, json={"success": False, "message": "boom"})
+        if path.endswith("/hybrid-search"):
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "data": [
+                        {
+                            "id": "c1",
+                            "knowledge_id": "k9",
+                            "knowledge_title": "Portal",
+                            "content": "office portal preview",
+                            "score": 0.01,
+                        }
+                    ],
+                },
+            )
+        if path.endswith("/knowledge-bases"):
+            return httpx.Response(200, json={"success": True, "data": [{"id": "kb1"}]})
+        return httpx.Response(404, json={"success": False, "message": path})
+
+    store = KnowledgeStore(tmp_path / "knowledge.json")
+    store._write([])
+    client = WeKnoraClient("http://weknora.test", "key", client=_mock_transport(handler))
+    gw = KnowledgeGateway(
+        store,
+        backend="weknora",
+        weknora_base_url="http://weknora.test",
+        weknora_api_key="key",
+        weknora_kb_id="kb1",
+        weknora_retrieval_mode="graph",
+        client=client,
+    )
+    hits = gw.retrieve("portal", limit=2)
+    assert len(hits) == 1
+    assert hits[0].source == "weknora"
+    assert hits[0].title == "Portal"
+
+
+def test_gateway_hybrid_mode_skips_graph_pipeline(tmp_path):
+    """hybrid 模式不应触碰 sessions/knowledge-chat，直接走 hybrid-search。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        assert "/sessions" not in path
+        assert "/knowledge-chat/" not in path
+        if path.endswith("/hybrid-search"):
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "data": [
+                        {
+                            "id": "c1",
+                            "knowledge_id": "k9",
+                            "knowledge_title": "Portal",
+                            "content": "office portal preview",
+                            "score": 0.01,
+                        }
+                    ],
+                },
+            )
+        if path.endswith("/knowledge-bases"):
+            return httpx.Response(200, json={"success": True, "data": [{"id": "kb1"}]})
+        return httpx.Response(404, json={"success": False, "message": path})
+
+    store = KnowledgeStore(tmp_path / "knowledge.json")
+    store._write([])
+    client = WeKnoraClient("http://weknora.test", "key", client=_mock_transport(handler))
+    gw = KnowledgeGateway(
+        store,
+        backend="weknora",
+        weknora_base_url="http://weknora.test",
+        weknora_api_key="key",
+        weknora_kb_id="kb1",
+        client=client,
+    )
+    hits = gw.retrieve("portal", limit=2)
+    assert hits[0].title == "Portal"
+
+
 def test_load_pack_via_gateway(tmp_path):
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

@@ -24,6 +24,8 @@ from sortie_deck.settings import Settings, settings
 def iso_settings(tmp_path, monkeypatch):
     """Isolate the global settings data dir (knowledge/missions under tmp)."""
     monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    # 强制本地后端：单测不应依赖真实 WeKnora 实例（.env 可能配置了 weknora）
+    monkeypatch.setattr(settings, "kb_backend", "local")
     return settings
 
 

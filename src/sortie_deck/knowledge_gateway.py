@@ -7,6 +7,7 @@ when `kb_backend=weknora`; local JSON is catalog/fallback only.
 from __future__ import annotations
 
 import contextlib
+import logging
 from pathlib import Path
 from typing import Any, Literal
 
@@ -20,6 +21,8 @@ from sortie_deck.knowledge import (
 )
 from sortie_deck.models import new_id, utc_now
 from sortie_deck.weknora import WeKnoraClient, WeKnoraError, WeKnoraHit, WeKnoraKnowledge
+
+logger = logging.getLogger(__name__)
 
 
 class RetrieveHit(BaseModel):
@@ -53,11 +56,15 @@ class KnowledgeGateway:
         weknora_base_url: str | None = None,
         weknora_api_key: str | None = None,
         weknora_kb_id: str | None = None,
+        weknora_retrieval_mode: str = "hybrid",
+        weknora_chat_timeout: float = 90.0,
         client: WeKnoraClient | None = None,
     ) -> None:
         self.store = store
         self.backend = (backend or "local").strip().lower()
         self.weknora_kb_id = (weknora_kb_id or "").strip() or None
+        self.retrieval_mode = (weknora_retrieval_mode or "hybrid").strip().lower()
+        self.chat_timeout = float(weknora_chat_timeout or 90.0)
         self._client = client
         self._weknora_base_url = weknora_base_url
         self._weknora_api_key = weknora_api_key
@@ -79,6 +86,12 @@ class KnowledgeGateway:
                 info["weknora"] = health
             except WeKnoraError as exc:
                 info["weknora"] = {"ok": False, "error": str(exc)}
+            info["retrieval_mode"] = self.retrieval_mode
+            try:
+                detail = self.client().knowledge_base_detail(self.weknora_kb_id or "")
+                info["graph_enabled"] = bool((detail.get("capabilities") or {}).get("graph"))
+            except WeKnoraError as exc:
+                logger.warning("weknora status: kb detail failed: %s", exc)
         return info
 
     def client(self) -> WeKnoraClient:
@@ -283,14 +296,19 @@ class KnowledgeGateway:
         remaining = max(1, limit - len(mission_hits))
         seen_ids = {h.remote_id for h in mission_hits}
         if self.uses_weknora:
-            hits = self.client().hybrid_search(
-                self.weknora_kb_id or "",
-                q,
-                match_count=max(1, remaining + len(seen_ids)),
-            )
-            global_hits = [
-                self._hit_from_weknora(h) for h in hits if h.knowledge_id not in seen_ids
-            ][:remaining]
+            global_hits: list[RetrieveHit] = []
+            if self.retrieval_mode == "graph":
+                global_hits = self._retrieve_graph(q, remaining, seen_ids)
+            if not global_hits:
+                # graph 模式失败/无结果 → 降级 hybrid-search（保底可用）
+                hits = self.client().hybrid_search(
+                    self.weknora_kb_id or "",
+                    q,
+                    match_count=max(1, remaining + len(seen_ids)),
+                )
+                global_hits = [
+                    self._hit_from_weknora(h) for h in hits if h.knowledge_id not in seen_ids
+                ][:remaining]
             return mission_hits + global_hits
         # local fallback (dev only)
         from sortie_deck.knowledge_pack import search_for_mission
@@ -310,6 +328,40 @@ class KnowledgeGateway:
             if doc.id not in seen_ids
         ][:remaining]
         return mission_hits + global_hits
+
+    def _retrieve_graph(
+        self, query: str, remaining: int, seen_ids: set[str | None]
+    ) -> list[RetrieveHit]:
+        """graph 模式全局池：走 knowledge-chat（图谱实体扩展）检索。
+
+        WeKnora 的 GraphRAG 增强（查询实体识别 → Neo4j 图谱一跳扩展 →
+        关联 chunk 补充召回）只在该管线生效；失败时返回空列表，
+        由调用方降级到 hybrid-search，绝不让检索中断。
+        """
+        try:
+            session_id = self.client().create_session()
+        except WeKnoraError as exc:
+            logger.warning("weknora graph retrieve: create_session failed: %s", exc)
+            return []
+        try:
+            hits = self.client().knowledge_chat_references(
+                session_id,
+                query,
+                [self.weknora_kb_id or ""],
+                timeout=self.chat_timeout,
+            )
+        except WeKnoraError as exc:
+            logger.warning(
+                "weknora graph retrieve failed, fallback to hybrid: %s", exc
+            )
+            return []
+        finally:
+            self.client().delete_session(session_id)
+        return [
+            self._hit_from_weknora(h)
+            for h in hits
+            if h.knowledge_id not in seen_ids
+        ][:max(1, remaining)]
 
     # --- mission namespace ---------------------------------------------------
 
@@ -480,4 +532,6 @@ def gateway_from_settings(settings: Any, store: KnowledgeStore | None = None) ->
         weknora_base_url=getattr(settings, "weknora_base_url", None),
         weknora_api_key=getattr(settings, "weknora_api_key", None),
         weknora_kb_id=getattr(settings, "weknora_kb_id", None),
+        weknora_retrieval_mode=getattr(settings, "weknora_retrieval_mode", "hybrid"),
+        weknora_chat_timeout=getattr(settings, "weknora_chat_timeout", 90.0),
     )

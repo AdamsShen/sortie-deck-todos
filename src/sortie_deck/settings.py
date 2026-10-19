@@ -136,6 +136,11 @@ class Settings(BaseSettings):
     weknora_base_url: str | None = None  # e.g. http://127.0.0.1:8080
     weknora_api_key: str | None = None
     weknora_kb_id: str | None = None
+    # 检索模式：hybrid = hybrid-search（快，无图谱）；graph = knowledge-chat 管线
+    # （图谱实体扩展召回，Neo4j 需开启，慢且每次检索触发一次 LLM 调用）
+    weknora_retrieval_mode: str = "hybrid"  # hybrid | graph
+    # graph 模式下 knowledge-chat SSE 流的超时（秒）
+    weknora_chat_timeout: float = 90.0
     # Chat bridges
     slack_signing_secret: str | None = None
     feishu_verification_token: str | None = None
