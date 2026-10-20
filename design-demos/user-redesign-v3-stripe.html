@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>用户管理 · V3 Stripe 思维</title>
+<!-- huashu-design · 逻辑三（最佳设计师）：Stripe Dashboard 设计语言
+     思维：信息架构优先——页面先回答「现在最需要我处理什么」，再给全量列表。
+     白底 + 8pt 网格 + 精致微文案 + 墨蓝主色（避开通用紫）。示意数据 demo。 -->
+<style>
+  :root {
+    --bg: #ffffff; --bg-soft: #f6f8fa; --line: #e3e8ee;
+    --txt: #1a1f36; --txt-2: #697386; --txt-3: #8792a2;
+    --navy: #133a5e; --navy-soft: #eef4f9; --ok: #217a53; --ok-bg: #e6f4ee;
+    --warn: #9a6b00; --warn-bg: #fdf3dc; --danger: #b3261e;
+    --sans: -apple-system, "PingFang SC", "Segoe UI", sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg-soft); color: var(--txt); font-family: var(--sans); font-size: 14px; line-height: 1.55; -webkit-font-smoothing: antialiased; }
+  .topbar { background: var(--bg); border-bottom: 1px solid var(--line); padding: 0 36px; height: 52px; display: flex; align-items: center; gap: 26px; }
+  .topbar .logo { font-weight: 700; font-size: 15px; }
+  .topbar nav { display: flex; gap: 4px; font-size: 13px; color: var(--txt-2); flex: 1; }
+  .topbar nav a { padding: 5px 10px; border-radius: 6px; }
+  .topbar nav a.on { background: var(--navy-soft); color: var(--navy); font-weight: 600; }
+  .topbar .me { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .topbar .me .av { width: 26px; height: 26px; border-radius: 50%; background: var(--navy); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 12px; }
+  .page { max-width: 960px; margin: 0 auto; padding: 36px 24px 80px; }
+  .page .eyebrow { font-size: 12px; color: var(--txt-3); letter-spacing: 0.06em; text-transform: uppercase; }
+  .page h1 { font-size: 24px; font-weight: 700; letter-spacing: -0.015em; margin-top: 2px; }
+  .page .lede { color: var(--txt-2); margin-top: 4px; max-width: 560px; }
+  .readout { display: flex; margin-top: 24px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .readout .seg { flex: 1; padding: 16px 20px; border-right: 1px solid var(--line); }
+  .readout .seg:last-child { border-right: none; }
+  .readout .v { font-size: 22px; font-weight: 700; }
+  .readout .k { font-size: 12.5px; color: var(--txt-2); margin-top: 1px; }
+  .readout .seg.attn { background: var(--warn-bg); }
+  .readout .seg.attn .v, .readout .seg.attn .k { color: var(--warn); }
+  .card { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; margin-top: 24px; overflow: hidden; }
+  .card > .hd { padding: 14px 20px; border-bottom: 1px solid var(--line); display: flex; align-items: baseline; justify-content: space-between; }
+  .card > .hd h2 { font-size: 15px; font-weight: 600; }
+  .card > .hd .hint { font-size: 12.5px; color: var(--txt-3); }
+  .urow { display: flex; align-items: center; gap: 14px; padding: 12px 20px; border-bottom: 1px solid var(--line); }
+  .urow:last-child { border-bottom: none; }
+  .urow:hover { background: #fafbfc; }
+  .urow .av { width: 34px; height: 34px; border-radius: 50%; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; flex: none; }
+  .urow .id b { font-weight: 600; }
+  .urow .id .un { color: var(--txt-3); font-size: 12.5px; margin-left: 8px; }
+  .urow .id .note { color: var(--txt-2); font-size: 12.5px; margin-top: 1px; }
+  .urow .sp { flex: 1; }
+  .pill { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 99px; }
+  .pill.ok { color: var(--ok); background: var(--ok-bg); }
+  .pill.no { color: var(--danger); background: #fbeae9; }
+  .sel { font-family: inherit; font-size: 13px; color: var(--txt); border: 1px solid var(--line); border-radius: 8px; background: var(--bg); padding: 5px 10px; outline: none; cursor: pointer; }
+  .sel:hover { border-color: #c9d2dd; }
+  .linkbtn { font-family: inherit; font-size: 13px; color: var(--txt-2); background: none; border: 1px solid var(--line); border-radius: 8px; padding: 5px 12px; cursor: pointer; }
+  .linkbtn:hover { color: var(--danger); border-color: #f0c4c1; background: #fdf7f6; }
+  .primary { font-family: inherit; font-size: 13.5px; font-weight: 600; color: #fff; background: var(--navy); border: none; border-radius: 8px; padding: 8px 16px; cursor: pointer; }
+  .primary:hover { background: #1b4d7c; }
+  .form { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 20px; padding: 20px; }
+  .form .full { display: grid; grid-template-columns: 1fr 1fr 1fr 170px auto; gap: 14px; grid-column: 1 / -1; align-items: end; }
+  .f label { display: block; font-size: 12.5px; font-weight: 600; margin-bottom: 5px; }
+  .f .help { font-size: 11.5px; color: var(--txt-3); margin-top: 5px; }
+  .f input, .f select {
+    width: 100%; font-family: inherit; font-size: 13.5px; color: var(--txt);
+    border: 1px solid var(--line); border-radius: 8px; background: var(--bg);
+    padding: 8px 11px; outline: none; transition: border 0.12s, box-shadow 0.12s;
+  }
+  .f input:focus, .f select:focus { border-color: var(--navy); box-shadow: 0 0 0 3px rgba(19,58,94,0.12); }
+  .f input::placeholder { color: var(--txt-3); }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="logo">Sortie Deck</div>
+  <nav>
+    <a href="#">作战图</a><a href="#">任务</a><a href="#">知识库</a><a href="#">记忆</a>
+    <a href="#">角色工坊</a><a href="#">工具箱</a><a href="#">角色锻造</a><a href="#">小群</a>
+    <a href="#">决策中心</a><a href="#" class="on">管理</a>
+  </nav>
+  <div class="me"><div class="av">A</div>Admin · 管理员</div>
+</div>
+
+<div class="page">
+  <div class="eyebrow">ADMIN ONLY · 管理页</div>
+  <h1>用户管理</h1>
+  <p class="lede">审核自助注册的账号，调整用户角色。角色变更与审核结果即时生效。</p>
+
+  <div class="readout">
+    <div class="seg"><div class="v">6</div><div class="k">总用户</div></div>
+    <div class="seg attn"><div class="v">2<small>需处理</small></div><div class="k">待审核注册</div></div>
+    <div class="seg"><div class="v">2</div><div class="k">管理员</div></div>
+    <div class="seg"><div class="v">4</div><div class="k">普通权限用户</div></div>
+  </div>
+
+  <div class="card">
+    <div class="hd"><h2>待审核注册</h2><span class="hint">通过后用户即可登录；拒绝后其登录态立即失效</span></div>
+    <div class="urow">
+      <div class="av" style="background:#7a5af8">雨</div>
+      <div class="id"><b>王小雨</b><span class="un">@wangxy</span><div class="note">10-19 14:32 自助注册</div></div>
+      <div class="sp"></div>
+      <button class="primary">通过</button>
+      <button class="linkbtn">拒绝</button>
+    </div>
+    <div class="urow">
+      <div class="av" style="background:#0e7a5f">牧</div>
+      <div class="id"><b>李牧</b><span class="un">@limu</span><div class="note">10-19 09:15 自助注册</div></div>
+      <div class="sp"></div>
+      <button class="primary">通过</button>
+      <button class="linkbtn">拒绝</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="hd"><h2>全部用户</h2><span class="hint">点击角色可直接调整</span></div>
+    <div class="urow">
+      <div class="av" style="background:#3b4252">A</div>
+      <div class="id"><b>Admin</b><span class="un">@admin</span></div>
+      <div class="sp"></div>
+      <select class="sel"><option>管理员</option><option>普通权限用户</option></select>
+      <span class="pill ok">正常</span>
+      <button class="linkbtn">删除</button>
+    </div>
+    <div class="urow">
+      <div class="av" style="background:#8a5a2b">默</div>
+      <div class="id"><b>陈默</b><span class="un">@chenmo</span></div>
+      <div class="sp"></div>
+      <select class="sel"><option>管理员</option><option>普通权限用户</option></select>
+      <span class="pill ok">正常</span>
+      <button class="linkbtn">删除</button>
+    </div>
+    <div class="urow">
+      <div class="av" style="background:#2b6a8a">离</div>
+      <div class="id"><b>苏离</b><span class="un">@suli</span></div>
+      <div class="sp"></div>
+      <select class="sel"><option>普通权限用户</option><option>管理员</option></select>
+      <span class="pill ok">正常</span>
+      <button class="linkbtn">删除</button>
+    </div>
+    <div class="urow">
+      <div class="av" style="background:#4d5a3a">野</div>
+      <div class="id"><b>江野</b><span class="un">@jiangye</span></div>
+      <div class="sp"></div>
+      <select class="sel"><option>普通权限用户</option><option>管理员</option></select>
+      <span class="pill ok">正常</span>
+      <button class="linkbtn">删除</button>
+    </div>
+    <div class="urow">
+      <div class="av" style="background:#6b3a3a">祺</div>
+      <div class="id"><b>周祺</b><span class="un">@zhouqi</span></div>
+      <div class="sp"></div>
+      <select class="sel"><option>普通权限用户</option></select>
+      <span class="pill no">已拒绝</span>
+      <button class="linkbtn">删除</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="hd"><h2>添加用户</h2><span class="hint">手动创建的账号为「正常」状态，可直接登录</span></div>
+    <div class="form">
+      <div class="full">
+        <div class="f">
+          <label>用户名</label>
+          <input placeholder="如 chenmo">
+          <div class="help">登录用账号名，创建后不可修改</div>
+        </div>
+        <div class="f">
+          <label>显示名</label>
+          <input placeholder="如 陈默">
+          <div class="help">任务与分享面板中展示的名称</div>
+        </div>
+        <div class="f">
+          <label>初始密码</label>
+          <input type="password" placeholder="至少 6 位">
+          <div class="help">请通知用户首次登录后自行保管</div>
+        </div>
+        <div class="f">
+          <label>角色</label>
+          <select><option>普通权限用户</option><option>管理员</option></select>
+        </div>
+        <button class="primary">添加用户</button>
+      </div>
+    </div>
+  </div>
+</div>
+<!-- huashu-design · 示意数据 demo -->
+</body>
+</html>

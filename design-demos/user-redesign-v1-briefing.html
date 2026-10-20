@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>用户管理 · V1 作战简报公文风</title>
+<!-- huashu-design · 逻辑一（轮盘自拟）：作战简报公文风
+     假设：风格库缺失，No.13 自拟「军事公文/档案登记表」风，契合 Sortie Deck 作战隐喻。
+     示意数据 demo，交互仅视觉演示。 -->
+<style>
+  :root {
+    --paper: #f5f1e8; --paper-deep: #ede7d8; --ink: #1e241c; --ink-soft: #55584c;
+    --rule: #c9c2ae; --green: #3d5a3a; --green-deep: #2b4129; --wax: #a33b2e;
+    --mono: "SF Mono", Menlo, monospace;
+    --serif: "Songti SC", "Noto Serif CJK SC", STSong, serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--paper); color: var(--ink); font-family: var(--serif);
+    font-size: 14px; line-height: 1.6;
+    background-image: repeating-linear-gradient(0deg, transparent 0 3px, rgba(0,0,0,0.012) 3px 4px);
+  }
+  .masthead {
+    border-bottom: 2px solid var(--ink); padding: 14px 40px 12px;
+    display: flex; align-items: baseline; justify-content: space-between;
+  }
+  .masthead .brand { font-size: 18px; font-weight: 700; letter-spacing: 0.08em; }
+  .masthead .brand em { font-style: normal; color: var(--wax); }
+  .masthead .meta { font-family: var(--mono); font-size: 11px; color: var(--ink-soft); letter-spacing: 0.1em; }
+  .doc-head { max-width: 980px; margin: 34px auto 0; padding: 0 24px; }
+  .doc-class {
+    display: inline-flex; font-family: var(--mono); font-size: 11px; letter-spacing: 0.3em;
+    color: var(--wax); border: 1px solid var(--wax); padding: 3px 12px 3px 14px;
+  }
+  .doc-head h1 { font-size: 34px; font-weight: 700; letter-spacing: 0.06em; margin-top: 14px; }
+  .doc-head .sub { font-family: var(--mono); font-size: 12px; color: var(--ink-soft); margin-top: 6px; letter-spacing: 0.08em; }
+  .ledger {
+    max-width: 980px; margin: 26px auto 0; padding: 0 24px;
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    border-top: 2px solid var(--ink); border-bottom: 1px solid var(--rule);
+  }
+  .ledger .inner { display: grid; grid-template-columns: repeat(3, 1fr); width: 100%; }
+  .ledger .cell { padding: 14px 20px 12px; border-right: 1px solid var(--rule); }
+  .ledger .cell:last-child { border-right: none; }
+  .ledger .num { font-size: 30px; font-weight: 700; font-family: var(--mono); }
+  .ledger .num.warn { color: var(--wax); }
+  .ledger .label { font-family: var(--mono); font-size: 11px; letter-spacing: 0.25em; color: var(--ink-soft); margin-top: 2px; }
+  .section { max-width: 980px; margin: 40px auto 0; padding: 0 24px; }
+  .section > h2 {
+    display: flex; align-items: center; gap: 14px;
+    font-size: 16px; font-weight: 700; letter-spacing: 0.2em;
+  }
+  .section > h2 .no { font-family: var(--mono); font-size: 11px; color: var(--ink-soft); letter-spacing: 0.1em; }
+  .section > h2::after { content: ""; flex: 1; height: 1px; background: var(--ink); opacity: 0.55; }
+  .pending { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 18px; }
+  .stamp-card {
+    border: 1.5px solid var(--ink); background: var(--paper-deep);
+    padding: 18px 20px 16px; position: relative;
+  }
+  .stamp-card .file-no { font-family: var(--mono); font-size: 11px; color: var(--ink-soft); letter-spacing: 0.15em; }
+  .stamp-card .who { font-size: 19px; font-weight: 700; margin-top: 6px; }
+  .stamp-card .uname { font-family: var(--mono); font-size: 12px; color: var(--ink-soft); }
+  .stamp-card .when { font-family: var(--mono); font-size: 11px; color: var(--ink-soft); margin-top: 8px; }
+  .stamp {
+    position: absolute; top: 16px; right: 18px;
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.35em;
+    color: var(--wax); border: 2px solid var(--wax); padding: 4px 8px 4px 11px;
+    transform: rotate(6deg); opacity: 0.85;
+  }
+  .stamp-card .acts { display: flex; gap: 10px; margin-top: 16px; }
+  .btn {
+    font-family: var(--serif); font-size: 13px; letter-spacing: 0.25em;
+    padding: 7px 18px 7px 21px; cursor: pointer; border: 1.5px solid var(--ink);
+    background: transparent; color: var(--ink); transition: all 0.15s;
+  }
+  .btn.primary { background: var(--green-deep); color: var(--paper); border-color: var(--green-deep); }
+  .btn.primary:hover { background: var(--green); }
+  .btn.plain:hover { background: rgba(0,0,0,0.06); }
+</style>
+</head>
+<body>
+<style>
+  .roster { margin-top: 18px; border-top: 2px solid var(--ink); }
+  .roster .row {
+    display: grid; grid-template-columns: 64px 1.4fr 1.1fr 0.9fr 0.8fr 72px;
+    gap: 14px; align-items: center; padding: 11px 6px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .roster .row.head {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.2em;
+    color: var(--ink-soft); padding: 8px 6px; border-bottom: 1px solid var(--ink);
+  }
+  .roster .idx { font-family: var(--mono); font-size: 12px; color: var(--ink-soft); }
+  .roster .name { font-weight: 700; font-size: 15px; }
+  .roster .name small { font-family: var(--mono); font-weight: 400; font-size: 11px; color: var(--ink-soft); margin-left: 8px; }
+  .roster select {
+    font-family: var(--serif); font-size: 13px; color: var(--ink);
+    background: transparent; border: none; border-bottom: 1px dashed var(--rule);
+    padding: 3px 2px; cursor: pointer; outline: none;
+  }
+  .roster select:hover { border-bottom-color: var(--ink); }
+  .tag { display: inline-block; font-family: var(--mono); font-size: 11px; letter-spacing: 0.2em; padding: 2px 8px 2px 10px; border: 1px solid; }
+  .tag.ok { color: var(--green); border-color: var(--green); }
+  .tag.no { color: var(--wax); border-color: var(--wax); opacity: 0.75; }
+  .roster .del {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.2em;
+    background: none; border: none; color: var(--ink-soft); cursor: pointer; text-align: right;
+  }
+  .roster .del:hover { color: var(--wax); }
+  .roster .row.me { background: rgba(61, 90, 58, 0.05); }
+  .enlist { margin-top: 18px; margin-bottom: 16px; border: 1.5px solid var(--ink); background: var(--paper-deep); }
+  .enlist .head { display: flex; justify-content: space-between; align-items: center; padding: 10px 20px; border-bottom: 1px solid var(--ink); }
+  .enlist .head b { letter-spacing: 0.3em; font-size: 14px; }
+  .enlist .head span { font-family: var(--mono); font-size: 11px; color: var(--ink-soft); }
+  .enlist form { display: grid; grid-template-columns: 1fr 1fr 1fr 180px auto; gap: 18px; padding: 20px 20px 22px; align-items: end; }
+  .field label { display: block; font-family: var(--mono); font-size: 11px; letter-spacing: 0.25em; color: var(--ink-soft); margin-bottom: 6px; }
+  .field input, .field select {
+    width: 100%; font-family: var(--serif); font-size: 14px; color: var(--ink);
+    background: transparent; border: none; border-bottom: 1.5px solid var(--ink);
+    padding: 5px 2px; outline: none;
+  }
+  .field input:focus { border-bottom-color: var(--green); }
+  .enlist .btn.primary { height: 38px; }
+  .footnote { max-width: 980px; margin: 0 auto 48px; padding: 0 24px; font-family: var(--mono); font-size: 11px; color: var(--ink-soft); letter-spacing: 0.1em; }
+</style>
+
+<div class="masthead">
+  <div class="brand">SORTIE DECK <em>·</em> 前线小队</div>
+  <div class="meta">作战图 / 任务 / 知识库 / 记忆 / 角色工坊 / 工具箱 / 角色锻造 / 小群 / 决策中心 / <b>管理</b></div>
+</div>
+
+<div class="doc-head">
+  <span class="doc-class">ADMIN ONLY · 管理页</span>
+  <h1>管理 · 用户管理</h1>
+  <div class="sub">FILE USR-2026-1019 · 本页仅管理员可见 · 修改即时生效</div>
+</div>
+
+<div class="ledger"><div class="inner">
+  <div class="cell"><div class="num">6</div><div class="label">总用户</div></div>
+  <div class="cell"><div class="num warn">2</div><div class="label">待审核</div></div>
+  <div class="cell"><div class="num">2</div><div class="label">管理员</div></div>
+</div></div>
+
+<div class="section">
+  <h2><span class="no">§1</span> 待审核注册 <span class="no">2 件待批</span></h2>
+  <div class="pending">
+    <div class="stamp-card">
+      <span class="stamp">待 审 核</span>
+      <div class="file-no">USR-0005 · 自助注册</div>
+      <div class="who">王小雨</div>
+      <div class="uname">@wangxy</div>
+      <div class="when">注册于 2026-10-19 14:32</div>
+      <div class="acts"><button class="btn primary">通过</button><button class="btn plain">拒绝</button></div>
+    </div>
+    <div class="stamp-card">
+      <span class="stamp">待 审 核</span>
+      <div class="file-no">USR-0006 · 自助注册</div>
+      <div class="who">李牧</div>
+      <div class="uname">@limu</div>
+      <div class="when">注册于 2026-10-19 09:15</div>
+      <div class="acts"><button class="btn primary">通过</button><button class="btn plain">拒绝</button></div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h2><span class="no">§2</span> 在册用户花名册</h2>
+  <div class="roster">
+    <div class="row head"><span>编号</span><span>姓名 / 账号</span><span>角色</span><span>状态</span><span>备注</span><span style="text-align:right">操作</span></div>
+    <div class="row me">
+      <span class="idx">0001</span>
+      <span class="name">Admin<small>@admin</small></span>
+      <span><select><option>管理员</option><option>普通权限用户</option></select></span>
+      <span><span class="tag ok">正常</span></span>
+      <span style="color:var(--ink-soft);font-size:12px">内置账号</span>
+      <button class="del">删除</button>
+    </div>
+    <div class="row">
+      <span class="idx">0002</span>
+      <span class="name">陈默<small>@chenmo</small></span>
+      <span><select><option>管理员</option><option>普通权限用户</option></select></span>
+      <span><span class="tag ok">正常</span></span>
+      <span style="color:var(--ink-soft);font-size:12px">—</span>
+      <button class="del">删除</button>
+    </div>
+    <div class="row">
+      <span class="idx">0003</span>
+      <span class="name">苏离<small>@suli</small></span>
+      <span><select><option>普通权限用户</option><option>管理员</option></select></span>
+      <span><span class="tag ok">正常</span></span>
+      <span style="color:var(--ink-soft);font-size:12px">—</span>
+      <button class="del">删除</button>
+    </div>
+    <div class="row">
+      <span class="idx">0004</span>
+      <span class="name">江野<small>@jiangye</small></span>
+      <span><select><option>普通权限用户</option><option>管理员</option></select></span>
+      <span><span class="tag ok">正常</span></span>
+      <span style="color:var(--ink-soft);font-size:12px">—</span>
+      <button class="del">删除</button>
+    </div>
+    <div class="row">
+      <span class="idx">0007</span>
+      <span class="name">周祺<small>@zhouqi</small></span>
+      <span><select><option>普通权限用户</option></select></span>
+      <span><span class="tag no">已拒绝</span></span>
+      <span style="color:var(--ink-soft);font-size:12px">无法登录</span>
+      <button class="del">删除</button>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-bottom:0">
+  <h2><span class="no">§3</span> 添加用户</h2>
+  <div class="enlist">
+    <div class="head">
+      <b>录事栏 · 手动建号</b>
+      <span>手动创建的账号状态为「正常」，可直接登录</span>
+    </div>
+    <form>
+      <div class="field"><label>用户名 USERNAME</label><input placeholder="如 chenmo"></div>
+      <div class="field"><label>显示名 DISPLAY</label><input placeholder="如 陈默"></div>
+      <div class="field"><label>初始密码 PASSWORD</label><input type="password" placeholder="••••••••"></div>
+      <div class="field"><label>角色 ROLE</label><select><option>普通权限用户</option><option>管理员</option></select></div>
+      <button class="btn primary">添 加</button>
+    </form>
+  </div>
+</div>
+
+<div class="footnote">※ 本页为设计示意，用户与数据均为示例（demo mock）</div>
+</body>
+</html>

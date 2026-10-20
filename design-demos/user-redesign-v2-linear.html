@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>用户管理 · V2 Linear 标杆</title>
+<!-- huashu-design · 逻辑二（现实参照）：Linear 成员管理页设计语言迁移
+     参照：linear.app Settings > Members（已 WebSearch 核实）。
+     特征：暗色底 #0e0f13、13px 紧凑排版、左侧设置子导航、细边框 rgba 白、
+     行 hover 浮现操作、状态小圆点+文字、克制到几乎没有装饰。示意数据 demo。 -->
+<style>
+  :root {
+    --bg: #0e0f13; --panel: #14151a; --line: rgba(255,255,255,0.07);
+    --txt: #e8e9ed; --txt-2: #8a8f98; --txt-3: #5c626c;
+    --accent: #5e6ad2; --ok: #4cb782; --warn: #f2c94c; --danger: #eb5757;
+    --sans: -apple-system, "PingFang SC", "Segoe UI", sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--txt); font-family: var(--sans); font-size: 13px; line-height: 1.5; }
+  .shell { display: grid; grid-template-columns: 200px 1fr; min-height: 100vh; }
+  .side { border-right: 1px solid var(--line); padding: 18px 10px; }
+  .side .crumb { font-size: 12px; color: var(--txt-3); padding: 0 10px 10px; }
+  .side .crumb b { color: var(--txt-2); font-weight: 500; }
+  .side nav { display: flex; flex-direction: column; gap: 1px; margin-top: 6px; }
+  .side nav a { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-radius: 6px; color: var(--txt-2); font-size: 12.5px; }
+  .side nav a:hover { background: rgba(255,255,255,0.04); color: var(--txt); }
+  .side nav a.on { background: rgba(94,106,210,0.14); color: var(--txt); }
+  .side .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--txt-3); flex: none; }
+  .side nav a.on .dot { background: var(--accent); }
+  .main { max-width: 880px; padding: 40px 44px 80px; }
+  .main h1 { font-size: 15px; font-weight: 600; }
+  .main .desc { color: var(--txt-2); font-size: 12.5px; margin-top: 4px; }
+  .banner { margin-top: 20px; border: 1px solid rgba(242,201,76,0.25); background: rgba(242,201,76,0.06); border-radius: 8px; padding: 12px 14px; }
+  .banner .t { font-size: 12.5px; font-weight: 600; color: var(--warn); }
+  .banner .t span { color: var(--txt-2); font-weight: 400; margin-left: 8px; }
+  .req { display: flex; align-items: center; gap: 10px; margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(242,201,76,0.15); }
+  .req:first-of-type { border-top: none; padding-top: 0; margin-top: 8px; }
+  .avatar { width: 24px; height: 24px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: #fff; }
+  .req .info { flex: 1; min-width: 0; }
+  .req .info b { font-weight: 500; }
+  .req .info span { color: var(--txt-3); margin-left: 6px; }
+  .req .when { color: var(--txt-3); font-size: 11.5px; }
+  .req .acts { display: flex; gap: 6px; }
+  .btn { font-family: inherit; font-size: 12px; cursor: pointer; border-radius: 6px; padding: 4px 10px; border: 1px solid var(--line); background: transparent; color: var(--txt-2); transition: 0.12s; }
+  .btn:hover { background: rgba(255,255,255,0.05); color: var(--txt); }
+  .btn.ok { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.ok:hover { background: #6f7ae0; }
+  .stats { display: flex; gap: 22px; margin-top: 22px; color: var(--txt-2); font-size: 12.5px; }
+  .stats b { color: var(--txt); font-weight: 600; margin-right: 4px; }
+  .table { margin-top: 10px; border-top: 1px solid var(--line); }
+  .row { display: grid; grid-template-columns: 28px 1.6fr 1fr 0.9fr 60px; gap: 12px; align-items: center; padding: 9px 4px; border-bottom: 1px solid var(--line); }
+  .row:hover { background: rgba(255,255,255,0.02); }
+  .row .who { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .row .who b { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .who span { color: var(--txt-3); font-size: 12px; }
+  .role { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 5px; padding: 2px 8px; color: var(--txt-2); font-size: 12px; cursor: pointer; background: transparent; font-family: inherit; justify-self: start; }
+  .role:hover { color: var(--txt); border-color: rgba(255,255,255,0.18); }
+  .role .chev { color: var(--txt-3); font-size: 9px; }
+  .status { display: flex; align-items: center; gap: 7px; color: var(--txt-2); font-size: 12.5px; }
+  .status .s { width: 7px; height: 7px; border-radius: 50%; }
+  .status .s.ok { background: var(--ok); }
+  .status .s.no { background: var(--danger); }
+  .del { opacity: 0; font-family: inherit; font-size: 12px; cursor: pointer; background: none; border: none; color: var(--txt-3); text-align: right; padding: 0; transition: 0.12s; }
+  .row:hover .del { opacity: 1; }
+  .del:hover { color: var(--danger); }
+  .invite { margin-top: 34px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+  .invite .hd { padding: 12px 16px; border-bottom: 1px solid var(--line); font-weight: 600; font-size: 12.5px; }
+  .invite .hd span { color: var(--txt-3); font-weight: 400; margin-left: 8px; }
+  .invite form { display: grid; grid-template-columns: 1fr 1fr 1fr 150px auto; gap: 10px; padding: 14px 16px; align-items: center; }
+  .invite input, .invite select { font-family: inherit; font-size: 12.5px; color: var(--txt); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; outline: none; }
+  .invite input:focus { border-color: var(--accent); }
+  .invite input::placeholder { color: var(--txt-3); }
+  .invite .btn.ok { padding: 6px 14px; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="side">
+    <div class="crumb"><b>Sortie Deck</b> / 设置</div>
+    <nav>
+      <a href="#"><span class="dot"></span>通用</a>
+      <a href="#" class="on"><span class="dot"></span>用户管理</a>
+      <a href="#"><span class="dot"></span>记忆库</a>
+      <a href="#"><span class="dot"></span>工具箱</a>
+      <a href="#"><span class="dot"></span>桥接通道</a>
+    </nav>
+  </aside>
+
+  <main class="main">
+    <h1>用户管理</h1>
+    <p class="desc">管理登录账号：审核自助注册、调整角色、移除成员。修改即时生效。</p>
+
+    <div class="banner">
+      <div class="t">待审核注册<span>2 位用户等待审批</span></div>
+      <div class="req">
+        <div class="avatar" style="background:#7a5af8">雨</div>
+        <div class="info"><b>王小雨</b><span>@wangxy</span></div>
+        <span class="when">10-19 14:32 注册</span>
+        <div class="acts"><button class="btn ok">通过</button><button class="btn">拒绝</button></div>
+      </div>
+      <div class="req">
+        <div class="avatar" style="background:#0e7a5f">牧</div>
+        <div class="info"><b>李牧</b><span>@limu</span></div>
+        <span class="when">10-19 09:15 注册</span>
+        <div class="acts"><button class="btn ok">通过</button><button class="btn">拒绝</button></div>
+      </div>
+    </div>
+
+    <div class="stats">
+      <span><b>6</b>总用户</span>
+      <span><b>2</b>管理员</span>
+      <span><b>4</b>普通权限用户</span>
+    </div>
+
+    <div class="table">
+      <div class="row">
+        <div class="avatar" style="background:#3b4252">A</div>
+        <div class="who"><b>Admin</b><span>@admin</span></div>
+        <button class="role">管理员 <span class="chev">▼</span></button>
+        <div class="status"><span class="s ok"></span>正常</div>
+        <button class="del">删除</button>
+      </div>
+      <div class="row">
+        <div class="avatar" style="background:#8a5a2b">默</div>
+        <div class="who"><b>陈默</b><span>@chenmo</span></div>
+        <button class="role">管理员 <span class="chev">▼</span></button>
+        <div class="status"><span class="s ok"></span>正常</div>
+        <button class="del">删除</button>
+      </div>
+      <div class="row">
+        <div class="avatar" style="background:#2b6a8a">离</div>
+        <div class="who"><b>苏离</b><span>@suli</span></div>
+        <button class="role">普通权限用户 <span class="chev">▼</span></button>
+        <div class="status"><span class="s ok"></span>正常</div>
+        <button class="del">删除</button>
+      </div>
+      <div class="row">
+        <div class="avatar" style="background:#4d5a3a">野</div>
+        <div class="who"><b>江野</b><span>@jiangye</span></div>
+        <button class="role">普通权限用户 <span class="chev">▼</span></button>
+        <div class="status"><span class="s ok"></span>正常</div>
+        <button class="del">删除</button>
+      </div>
+      <div class="row">
+        <div class="avatar" style="background:#6b3a3a">祺</div>
+        <div class="who"><b>周祺</b><span>@zhouqi</span></div>
+        <button class="role">普通权限用户 <span class="chev">▼</span></button>
+        <div class="status"><span class="s no"></span>已拒绝</div>
+        <button class="del">删除</button>
+      </div>
+    </div>
+
+    <div class="invite">
+      <div class="hd">添加用户<span>手动创建的账号状态为「正常」，可直接登录</span></div>
+      <form>
+        <input placeholder="用户名，如 chenmo">
+        <input placeholder="显示名，如 陈默">
+        <input type="password" placeholder="初始密码">
+        <select><option>普通权限用户</option><option>管理员</option></select>
+        <button class="btn ok">添加</button>
+      </form>
+    </div>
+  </main>
+</div>
+<!-- huashu-design · 示意数据 demo -->
+</body>
+</html>
