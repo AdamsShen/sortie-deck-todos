@@ -5070,3 +5070,344 @@ tr:hover td {
   background: color-mix(in srgb, var(--danger) 12%, transparent);
   color: var(--danger);
 }
+
+/* ---- 用户管理页 · V3 Stripe 思维版式（仅 view=admin 使用，uadmin- 前缀隔离） ---- */
+.uadmin {
+  max-width: 960px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.uadmin-head .uadmin-eyebrow {
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.uadmin-head h1 {
+  font-family: var(--font);
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin-top: 0.15rem;
+}
+
+.uadmin-head .uadmin-lede {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin-top: 0.2rem;
+  max-width: 36rem;
+}
+
+/* 读数条：一条水平读数，待审核有值时高亮 */
+.uadmin-readout {
+  display: flex;
+  margin-top: 1.4rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.uadmin-readout .seg {
+  flex: 1;
+  padding: 0.9rem 1.2rem 0.8rem;
+  border-right: 1px solid var(--line);
+}
+
+.uadmin-readout .seg:last-child {
+  border-right: none;
+}
+
+.uadmin-readout .v {
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.uadmin-readout .k {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-top: 0.05rem;
+}
+
+.uadmin-readout .seg.attn {
+  background: color-mix(in srgb, #d97706 8%, var(--panel));
+}
+
+.uadmin-readout .seg.attn .v,
+.uadmin-readout .seg.attn .k {
+  color: #b45309;
+}
+
+[data-theme="ink"] .uadmin-readout .seg.attn {
+  background: color-mix(in srgb, #f2c94c 8%, var(--panel));
+}
+
+[data-theme="ink"] .uadmin-readout .seg.attn .v,
+[data-theme="ink"] .uadmin-readout .seg.attn .k {
+  color: #f2c94c;
+}
+
+/* 卡片：白面板 + 细线 + 标题行 */
+.uadmin-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  margin-top: 1.4rem;
+  overflow: hidden;
+}
+
+.uadmin-card > .hd {
+  display: flex;
+  align-items: baseline;
+  gap: 0.9rem;
+  padding: 0.85rem 1.25rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.uadmin-card > .hd h2 {
+  font-family: var(--font);
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.uadmin-card > .hd .hint {
+  font-size: 0.78rem;
+  color: var(--muted);
+  flex: 1;
+}
+
+.uadmin-search {
+  font-family: var(--font);
+  font-size: 0.8rem;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.35rem 0.7rem;
+  width: 13rem;
+  outline: none;
+  transition: border 0.12s, box-shadow 0.12s;
+}
+
+.uadmin-search:focus {
+  border-color: var(--copper);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--copper) 18%, transparent);
+}
+
+.uadmin-search::placeholder {
+  color: var(--muted);
+}
+
+/* 用户行 */
+.urow {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.7rem 1.25rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.urow:last-child {
+  border-bottom: none;
+}
+
+.urow:hover {
+  background: var(--panel-2);
+}
+
+.urow .av {
+  width: 2.1rem;
+  height: 2.1rem;
+  border-radius: 50%;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  font-weight: 600;
+  flex: none;
+}
+
+.urow .id {
+  min-width: 0;
+}
+
+.urow .id b {
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+
+.urow .id .un {
+  color: var(--muted);
+  font-size: 0.78rem;
+  margin-left: 0.45rem;
+  font-family: var(--mono);
+}
+
+.urow .sp {
+  flex: 1;
+}
+
+.urow .sel {
+  font-family: var(--font);
+  font-size: 0.8rem;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 0.3rem 0.55rem;
+  outline: none;
+  cursor: pointer;
+  flex: none;
+  width: auto;
+  max-width: 9rem;
+}
+
+.urow .sel:hover {
+  border-color: var(--line-hot);
+}
+
+.urow .pill {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.18rem 0.6rem;
+  border-radius: 99px;
+  white-space: nowrap;
+}
+
+.urow .pill.ok {
+  color: var(--signal);
+  background: var(--signal-dim);
+}
+
+.urow .pill.pend {
+  color: #b45309;
+  background: color-mix(in srgb, #d97706 14%, transparent);
+}
+
+.urow .pill.no {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.urow .linkbtn {
+  font-family: var(--font);
+  font-size: 0.78rem;
+  color: var(--muted);
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.3rem 0.7rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.urow .linkbtn:hover {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--line));
+  background: color-mix(in srgb, var(--danger) 6%, transparent);
+}
+
+.urow .primary {
+  font-family: var(--font);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #fff;
+  background: var(--copper);
+  border: none;
+  border-radius: 8px;
+  padding: 0.35rem 0.85rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.urow .primary:hover {
+  filter: brightness(1.1);
+}
+
+.uadmin-empty {
+  padding: 1.1rem 1.25rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+/* 添加用户表单：两列网格 + helper text */
+.uadmin-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.9rem 1.2rem;
+  padding: 1.1rem 1.25rem 1.25rem;
+}
+
+.uadmin-form .f label {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 600;
+  margin-bottom: 0.3rem;
+}
+
+.uadmin-form .f .help {
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin-top: 0.3rem;
+}
+
+.uadmin-form .f input,
+.uadmin-form .f select {
+  width: 100%;
+  font-family: var(--font);
+  font-size: 0.85rem;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 0.5rem 0.65rem;
+  outline: none;
+  transition: border 0.12s, box-shadow 0.12s;
+}
+
+.uadmin-form .f input:focus,
+.uadmin-form .f select:focus {
+  border-color: var(--copper);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--copper) 18%, transparent);
+}
+
+.uadmin-form .f input::placeholder {
+  color: var(--muted);
+}
+
+.uadmin-form .primary {
+  grid-column: 1 / -1;
+  justify-self: start;
+  font-family: var(--font);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #fff;
+  background: var(--copper);
+  border: none;
+  border-radius: 8px;
+  padding: 0.5rem 1.1rem;
+  cursor: pointer;
+}
+
+.uadmin-form .primary:hover {
+  filter: brightness(1.1);
+}
+
+@media (max-width: 720px) {
+  .uadmin-form {
+    grid-template-columns: 1fr;
+  }
+
+  .uadmin-search {
+    width: 100%;
+  }
+
+  .uadmin-card > .hd {
+    flex-wrap: wrap;
+  }
+}

@@ -119,6 +119,14 @@ function errMsg(err: unknown): string {
   return String(err);
 }
 
+// 用户管理页头像底色：按用户名哈希从固定色板取色，同一用户颜色稳定
+const AVATAR_PALETTE = ["#3b5bdb", "#0e9f6e", "#8a5a2b", "#7a3b8a", "#b3542e", "#133a5e", "#2b6a8a", "#5a6b3a"];
+function avatarColor(name: string): string {
+  let h = 0;
+  for (let i = 0; i < name.length; i += 1) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return AVATAR_PALETTE[h % AVATAR_PALETTE.length]!;
+}
+
 function displayTime(iso: string): string {
   try {
     return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -173,6 +181,8 @@ export default function App() {
   const [regForm, setRegForm] = useState({ username: "", password: "", display_name: "" });
   const [regDone, setRegDone] = useState(false);
   const [users, setUsers] = useState<PublicUser[]>([]);
+  // 用户管理页搜索框：按用户名 / 显示名即时过滤（列表为全量拉取，前端过滤即可）
+  const [userSearch, setUserSearch] = useState("");
   const [newUser, setNewUser] = useState<{
     username: string;
     password: string;
@@ -1998,6 +2008,17 @@ export default function App() {
       setBusy(false);
     }
   }
+
+  // 用户管理页派生数据：计数、待审核名单、按用户名/显示名即时过滤
+  const adminPending = users.filter((u) => u.status === "pending");
+  const adminKeyword = userSearch.trim().toLowerCase();
+  const adminFiltered = adminKeyword
+    ? users.filter(
+        (u) =>
+          u.username.toLowerCase().includes(adminKeyword) ||
+          u.display_name.toLowerCase().includes(adminKeyword),
+      )
+    : users;
 
   if (!token || !user) {
     return (
@@ -4619,45 +4640,95 @@ export default function App() {
       )}
 
       {view === "admin" && user.role === "admin" && (
+        /* 用户管理页 · V3 Stripe 思维版式：读数条 + 待审核卡 + 全量用户卡（含搜索）+ 添加卡 */
         <main className="main page-pad">
-          <h2 className="page-title">{tr("admin")} · {tr("users")}</h2>
-          <form className="form admin-form" onSubmit={createUser}>
-            <input
-              placeholder={tr("username")}
-              value={newUser.username}
-              onChange={(e) => setNewUser({ ...newUser, username: e.target.value })}
-              required
-            />
-            <input
-              placeholder={tr("displayName")}
-              value={newUser.display_name}
-              onChange={(e) => setNewUser({ ...newUser, display_name: e.target.value })}
-              required
-            />
-            <input
-              type="password"
-              placeholder={tr("password")}
-              value={newUser.password}
-              onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
-              required
-            />
-            <select value={newUser.role} onChange={(e) => setNewUser({ ...newUser, role: e.target.value as UserRole })}>
-              <option value="member">{tr("memberRole")}</option>
-              <option value="admin">{tr("adminRole")}</option>
-            </select>
-            <button className="btn primary" type="submit" disabled={busy}>
-              {tr("addUser")}
-            </button>
-          </form>
-          <div className="panel">
-            <div className="user-table">
-              {users.map((u) => (
-                <div key={u.id} className="user-row">
-                  <strong>{u.display_name}</strong>
-                  <code>{u.username}</code>
+          <div className="uadmin">
+            <div className="uadmin-head">
+              <div className="uadmin-eyebrow">ADMIN ONLY · {tr("admin")}</div>
+              <h1>{tr("users")}</h1>
+              <p className="uadmin-lede">{tr("usersLede")}</p>
+            </div>
+
+            <div className="uadmin-readout">
+              <div className="seg">
+                <div className="v">{users.length}</div>
+                <div className="k">{tr("countUsers")}</div>
+              </div>
+              <div className={`seg${adminPending.length ? " attn" : ""}`}>
+                <div className="v">{adminPending.length}</div>
+                <div className="k">{tr("countPending")}</div>
+              </div>
+              <div className="seg">
+                <div className="v">{users.filter((u) => u.role === "admin").length}</div>
+                <div className="k">{tr("countAdmins")}</div>
+              </div>
+              <div className="seg">
+                <div className="v">{users.filter((u) => u.role === "member").length}</div>
+                <div className="k">{tr("countMembers")}</div>
+              </div>
+            </div>
+
+            {adminPending.length > 0 && (
+              <div className="uadmin-card">
+                <div className="hd">
+                  <h2>{tr("userStatusPending")}</h2>
+                  <span className="hint">{tr("usersPendingHint")}</span>
+                </div>
+                {adminPending.map((u) => (
+                  <div className="urow" key={u.id}>
+                    <span className="av" style={{ background: avatarColor(u.username) }}>
+                      {u.display_name.slice(0, 1)}
+                    </span>
+                    <div className="id">
+                      <b>{u.display_name}</b>
+                      <span className="un">@{u.username}</span>
+                    </div>
+                    <span className="sp" />
+                    <button
+                      type="button"
+                      className="primary"
+                      disabled={busy}
+                      onClick={() => setUserStatus(u.id, "active")}
+                    >
+                      {tr("approveUser")}
+                    </button>
+                    <button
+                      type="button"
+                      className="linkbtn"
+                      disabled={busy}
+                      onClick={() => setUserStatus(u.id, "rejected")}
+                    >
+                      {tr("rejectUser")}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="uadmin-card">
+              <div className="hd">
+                <h2>{tr("users")}</h2>
+                <span className="hint">{tr("usersAllHint")}</span>
+                <input
+                  className="uadmin-search"
+                  placeholder={tr("usersSearch")}
+                  value={userSearch}
+                  onChange={(e) => setUserSearch(e.target.value)}
+                />
+              </div>
+              {adminFiltered.map((u) => (
+                <div className="urow" key={u.id}>
+                  <span className="av" style={{ background: avatarColor(u.username) }}>
+                    {u.display_name.slice(0, 1)}
+                  </span>
+                  <div className="id">
+                    <b>{u.display_name}</b>
+                    <span className="un">@{u.username}</span>
+                  </div>
+                  <span className="sp" />
                   {/* 角色下拉：变更即提交；系统至少保留一个 admin */}
                   <select
-                    className="st"
+                    className="sel"
                     value={u.role}
                     disabled={busy}
                     onChange={(e) => {
@@ -4667,28 +4738,69 @@ export default function App() {
                     <option value="member">{tr("memberRole")}</option>
                     <option value="admin">{tr("adminRole")}</option>
                   </select>
-                  <span className="st">
+                  <span className={`pill ${u.status === "pending" ? "pend" : u.status === "rejected" ? "no" : "ok"}`}>
                     {u.status === "pending"
                       ? tr("userStatusPending")
                       : u.status === "rejected"
                         ? tr("userStatusRejected")
                         : tr("userStatusActive")}
                   </span>
-                  {u.status === "pending" && (
-                    <>
-                      <button type="button" className="btn primary" disabled={busy} onClick={() => setUserStatus(u.id, "active")}>
-                        {tr("approveUser")}
-                      </button>
-                      <button type="button" className="btn" disabled={busy} onClick={() => setUserStatus(u.id, "rejected")}>
-                        {tr("rejectUser")}
-                      </button>
-                    </>
-                  )}
-                  <button type="button" className="btn danger" onClick={() => deleteUser(u.id)}>
+                  <button type="button" className="linkbtn" onClick={() => deleteUser(u.id)}>
                     {tr("delete")}
                   </button>
                 </div>
               ))}
+              {!adminFiltered.length && <div className="uadmin-empty">{tr("usersEmpty")}</div>}
+            </div>
+
+            <div className="uadmin-card">
+              <div className="hd">
+                <h2>{tr("addUser")}</h2>
+                <span className="hint">{tr("addUserHint")}</span>
+              </div>
+              <form className="uadmin-form" onSubmit={createUser}>
+                <div className="f">
+                  <label>{tr("username")}</label>
+                  <input
+                    placeholder="chenmo"
+                    value={newUser.username}
+                    onChange={(e) => setNewUser({ ...newUser, username: e.target.value })}
+                    required
+                  />
+                  <div className="help">{tr("helpUsername")}</div>
+                </div>
+                <div className="f">
+                  <label>{tr("displayName")}</label>
+                  <input
+                    placeholder={tr("displayName")}
+                    value={newUser.display_name}
+                    onChange={(e) => setNewUser({ ...newUser, display_name: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="f">
+                  <label>{tr("password")}</label>
+                  <input
+                    type="password"
+                    placeholder="••••••••"
+                    value={newUser.password}
+                    onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
+                    required
+                  />
+                  <div className="help">{tr("helpPassword")}</div>
+                </div>
+                <div className="f">
+                  <label>{tr("role")}</label>
+                  <select value={newUser.role} onChange={(e) => setNewUser({ ...newUser, role: e.target.value as UserRole })}>
+                    <option value="member">{tr("memberRole")}</option>
+                    <option value="admin">{tr("adminRole")}</option>
+                  </select>
+                  <div className="help">{tr("helpRole")}</div>
+                </div>
+                <button className="primary" type="submit" disabled={busy}>
+                  {tr("addUser")}
+                </button>
+              </form>
             </div>
           </div>
         </main>
