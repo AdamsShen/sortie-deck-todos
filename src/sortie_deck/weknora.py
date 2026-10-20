@@ -170,6 +170,10 @@ class WeKnoraClient:
                 "match_count": match_count,
                 "vector_threshold": vector_threshold,
                 "keyword_threshold": keyword_threshold,
+                # WeKnora 仅在请求显式携带 rerank 对象时才走重排路径（handler
+                # knowledgebase.go: req.Rerank != nil 分支）；租户未配 rerank
+                # 模型时 WeKnora 自动降级为 RRF 检索序，故这里可以无条件开启
+                "rerank": {"enabled": True},
             },
         )
         rows = payload.get("data") if isinstance(payload, dict) else payload
