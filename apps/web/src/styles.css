@@ -4753,7 +4753,7 @@ tr:hover td {
 }
 .kb-doc-row {
   display: grid;
-  grid-template-columns: minmax(0, 1.6fr) auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1.5fr) auto auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.9rem;
   background: var(--panel);
@@ -4810,6 +4810,41 @@ tr:hover td {
   background: var(--deep);
   color: var(--muted);
 }
+.kb-parse-badge {
+  font-family: var(--mono);
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  border-radius: 99px;
+  padding: 0.16rem 0.5rem;
+  flex: none;
+  white-space: nowrap;
+}
+.kb-parse-badge.ps-completed {
+  background: var(--signal-dim);
+  color: var(--signal);
+}
+.kb-parse-badge.ps-processing,
+.kb-parse-badge.ps-pending,
+.kb-parse-badge.ps-waiting {
+  background: color-mix(in srgb, var(--copper) 12%, transparent);
+  color: var(--copper);
+  animation: kb-parse-pulse 1.6s ease-in-out infinite;
+}
+.kb-parse-badge.ps-failed {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+}
+@keyframes kb-parse-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
 .kb-doc-meta {
   font-family: var(--mono);
   font-size: 0.62rem;

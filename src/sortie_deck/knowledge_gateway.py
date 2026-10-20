@@ -212,6 +212,29 @@ class KnowledgeGateway:
             base_id=req.base_id,
         )
 
+    def refresh_parse_status(self, base_id: str) -> list[KnowledgeDoc]:
+        """刷新某库内 WeKnora 文档的解析状态（一次 list_knowledge 全量映射，避免逐文档请求）。
+
+        local 模式无远程状态，直接返回现状；WeKnoraError 由路由层转 502。
+        远端已删除的文档保持原状态不动。
+        """
+        docs = self.store.list(base_id=base_id)
+        if not self.uses_weknora:
+            return docs
+        remote_rows = self.client().list_knowledge(self.weknora_kb_id or "")
+        by_remote = {rk.id: rk for rk in remote_rows if rk.id}
+        out: list[KnowledgeDoc] = []
+        for d in docs:
+            if not d.remote_id:
+                out.append(d)
+                continue
+            rk = by_remote.get(d.remote_id)
+            if rk is None or rk.parse_status == d.parse_status:
+                out.append(d)
+                continue
+            out.append(self.store.update(d.id, UpdateKnowledgeRequest(parse_status=rk.parse_status)))
+        return out
+
     def sync_catalog(self, *, author_name: str = "WeKnora") -> dict[str, Any]:
         """Refresh local catalog from WeKnora list (directory management)."""
         if not self.uses_weknora:

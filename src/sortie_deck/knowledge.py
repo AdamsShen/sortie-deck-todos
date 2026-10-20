@@ -77,6 +77,8 @@ class UpdateKnowledgeRequest(BaseModel):
     tags: list[str] | None = None
     category: Literal["playbook", "runbook", "lore", "reference"] | None = None
     base_id: str | None = None
+    # WeKnora 异步解析状态回写（processing / completed / failed）
+    parse_status: str | None = None
 
 
 _SEED: list[dict] = [

@@ -739,6 +739,26 @@ async def knowledge_import(
     return doc.model_dump(mode="json")
 
 
+@app.post("/api/knowledge/bases/{base_id}/refresh-status")
+async def refresh_knowledge_parse_status(
+    base_id: str, user: PublicUser = Depends(require_user)
+) -> list[dict[str, Any]]:
+    """刷新库内文档的 WeKnora 解析状态（前端轮询用；只需库可见性，不需写权限）。"""
+    try:
+        base = get_knowledge_bases().get(base_id)
+    except KeyError:
+        raise HTTPException(404, "knowledge base not found") from None
+    visible = _visible_base_ids(user)
+    if visible is not None and base.id not in visible:
+        raise HTTPException(403, "无权访问该知识库")
+    try:
+        docs = get_knowledge_gateway().refresh_parse_status(base.id)
+    except WeKnoraError as exc:
+        logger.warning("解析状态刷新失败 base=%s: %s", base_id, exc)
+        raise HTTPException(502, str(exc)) from exc
+    return [d.model_dump(mode="json") for d in docs]
+
+
 @app.get("/api/knowledge/{doc_id}")
 async def get_knowledge_doc(doc_id: str, _user: PublicUser = Depends(require_user)) -> dict[str, Any]:
     try:

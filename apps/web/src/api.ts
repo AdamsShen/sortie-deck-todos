@@ -305,3 +305,14 @@ export async function importKnowledgeFile(
     body: fd,
   });
 }
+
+/** 轮询刷新库内文档的 WeKnora 解析状态（返回更新后的文档列表） */
+export async function refreshKnowledgeParseStatus(
+  token: string,
+  baseId: string,
+): Promise<KnowledgeDoc[]> {
+  return api<KnowledgeDoc[]>(`/api/knowledge/bases/${encodeURIComponent(baseId)}/refresh-status`, {
+    token,
+    method: "POST",
+  });
+}

@@ -8,6 +8,7 @@ import {
   importKnowledgeFile,
   listHarnesses,
   listKnowledgeBases,
+  refreshKnowledgeParseStatus,
   listMissionShares,
   listSubRooms,
   registerUser,
@@ -1291,6 +1292,32 @@ export default function App() {
     }),
     [kbBases]
   );
+
+  // WeKnora 异步解析：仍处于解析中的文档（completed / failed 视为终态）
+  const kbParsingDocs = useMemo(
+    () =>
+      kbDocs.filter(
+        (d) =>
+          d.backend === "weknora" &&
+          !!d.remote_id &&
+          !["completed", "failed"].includes(d.parse_status || "") &&
+          d.parse_status !== ""
+      ),
+    [kbDocs]
+  );
+
+  // 库内存在解析中的文档时每 3s 轮询刷新 parse_status，直至全部到终态
+  useEffect(() => {
+    if (view !== "knowledge" || !kbBaseId || !kbParsingDocs.length) return;
+    const timer = window.setInterval(() => {
+      refreshKnowledgeParseStatus(token, kbBaseId)
+        .then((docs) => setKbDocs(docs))
+        .catch(() => {
+          /* 轮询失败静默，下一轮重试 */
+        });
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [view, kbBaseId, kbParsingDocs.length, token]);
 
   /** 新建弹窗打开：重置表单并拉取当前用户可见任务列表供「关联任务」下拉 */
   async function openKbCreate() {
@@ -3189,6 +3216,15 @@ export default function App() {
                         <span className="kb-doc-name">{doc.title}</span>
                         {KB_IMPORT_EXTS.has(ext) && (
                           <span className={`kb-type-badge ext-${ext}`}>{ext}</span>
+                        )}
+                        {doc.backend === "weknora" && !!doc.remote_id && (
+                          <span className={`kb-parse-badge ps-${doc.parse_status || "processing"}`}>
+                            {doc.parse_status === "completed"
+                              ? "解析完成"
+                              : doc.parse_status === "failed"
+                                ? "解析失败"
+                                : "解析中"}
+                          </span>
                         )}
                         <span className="kb-doc-meta">
                           {categoryLabel(lang, doc.category)} · {doc.author_name || "—"} ·{" "}

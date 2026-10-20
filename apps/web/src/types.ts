@@ -355,6 +355,11 @@ export interface KnowledgeDoc {
   category: KnowledgeCategory;
   /** 所属知识库 id；空串表示存量文档（归属默认全局库） */
   base_id?: string;
+  /** 文档后端来源：weknora 文档的解析状态需轮询展示 */
+  backend?: "local" | "weknora";
+  remote_id?: string | null;
+  /** WeKnora 异步解析状态：processing / completed / failed；local 文档为空 */
+  parse_status?: string;
   author_id?: string;
   author_name?: string;
   created_at?: string;
