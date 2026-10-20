@@ -19,7 +19,7 @@
 
 结果是：真相源碎成多份粘贴、航线不可见、门禁不可审计——看起来「很 AI」，实际仍是**传话筒式协作**。
 
-![改造前 · 传话筒式 AI 协作](../assets/sortie-before-relay-handdrawn.jpg)
+![改造前 · 传话筒式 AI 协作](../../assets/sortie-before-relay-handdrawn.jpg)
 
 > 产品 → AI → 需求文档 → 澄清会议 → IM 传话 → 开发/测试各自的 AI → 提测？
 
@@ -39,7 +39,7 @@
 | 航线口头约定 | Brief → 航线规划官提案 → **真人确认** 后出击 |
 | 群里 @ 当门禁 | LangGraph `interrupt()` HITL（可恢复、可审计） |
 
-![改造后 · Sortie Deck 控制面](../assets/sortie-after-control-plane-handdrawn.jpg)
+![改造后 · Sortie Deck 控制面](../../assets/sortie-after-control-plane-handdrawn.jpg)
 
 > Brief → 可确认航线 → 角色 Agent 按契约交付 → HITL 门禁 → 小队可见协作 → 提测 / 交付
 

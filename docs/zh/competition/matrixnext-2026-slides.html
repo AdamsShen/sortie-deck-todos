@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sortie Deck · MatrixNEXT 2026</title>
+  <style>
+    :root {
+      --bg: #0c1118;
+      --panel: #141c27;
+      --text: #eef3f8;
+      --muted: #9aabbc;
+      --line: #2a3848;
+      --accent: #3dffa8;
+      --warn: #ff8b6a;
+      --blue: #6ec8ff;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC",
+        "Segoe UI", system-ui, sans-serif;
+    }
+    .deck {
+      height: 100%;
+      overflow: hidden;
+      position: relative;
+    }
+    .slide {
+      display: none;
+      height: 100%;
+      padding: clamp(1.2rem, 3vw, 2.4rem) clamp(1.4rem, 4vw, 3.2rem) 4.2rem;
+      flex-direction: column;
+      gap: 0.9rem;
+      background:
+        radial-gradient(1000px 500px at 10% -10%, rgba(61,255,168,0.08), transparent 55%),
+        radial-gradient(800px 400px at 100% 0%, rgba(110,200,255,0.08), transparent 50%),
+        var(--bg);
+    }
+    .slide.on { display: flex; }
+    .eyebrow {
+      color: var(--accent);
+      letter-spacing: 0.08em;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      font-weight: 600;
+    }
+    h1 {
+      margin: 0;
+      font-size: clamp(1.8rem, 4.2vw, 3rem);
+      line-height: 1.15;
+      font-weight: 700;
+    }
+    h2 {
+      margin: 0;
+      font-size: clamp(1.35rem, 2.8vw, 2.1rem);
+      line-height: 1.25;
+    }
+    .lead {
+      color: var(--muted);
+      font-size: clamp(1rem, 1.6vw, 1.2rem);
+      max-width: 48rem;
+      line-height: 1.55;
+    }
+    .hero {
+      margin-top: auto;
+      margin-bottom: auto;
+      display: grid;
+      gap: 1rem;
+    }
+    .pill-row { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+    .pill {
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.03);
+      border-radius: 999px;
+      padding: 0.35rem 0.8rem;
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+    .pill strong { color: var(--text); font-weight: 600; }
+    .flow {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+      align-items: center;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: clamp(0.75rem, 1.3vw, 0.95rem);
+      color: var(--blue);
+    }
+    .flow span {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      padding: 0.35rem 0.55rem;
+      border-radius: 6px;
+    }
+    .flow i { color: var(--muted); font-style: normal; }
+    .img-wrap {
+      flex: 1;
+      min-height: 0;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+      background: #1a1510;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .img-wrap img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: clamp(0.78rem, 1.25vw, 0.95rem);
+      background: rgba(20,28,39,0.7);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 0.7rem 0.85rem;
+      text-align: left;
+      vertical-align: top;
+      line-height: 1.4;
+    }
+    th {
+      background: rgba(61,255,168,0.08);
+      color: var(--accent);
+      font-weight: 600;
+    }
+    tr:last-child td { border-bottom: 0; }
+    td:first-child { color: var(--muted); width: 22%; }
+    .grid2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      flex: 1;
+      min-height: 0;
+    }
+    @media (max-width: 900px) {
+      .grid2 { grid-template-columns: 1fr; }
+    }
+    .card {
+      border: 1px solid var(--line);
+      background: rgba(20,28,39,0.75);
+      border-radius: 12px;
+      padding: 1rem 1.1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
+    }
+    .card h3 {
+      margin: 0;
+      font-size: 1.05rem;
+      color: var(--accent);
+    }
+    .card p, .card li {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.45;
+      font-size: 0.92rem;
+    }
+    .card ol, .card ul {
+      margin: 0;
+      padding-left: 1.1rem;
+    }
+    .footer-bar {
+      position: fixed;
+      left: 0; right: 0; bottom: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0.65rem 1.2rem;
+      background: rgba(8,12,18,0.88);
+      border-top: 1px solid var(--line);
+      backdrop-filter: blur(8px);
+      font-size: 0.82rem;
+      color: var(--muted);
+      z-index: 10;
+    }
+    .nav button {
+      appearance: none;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 0.4rem 0.75rem;
+      cursor: pointer;
+      font: inherit;
+    }
+    .nav button:hover { border-color: var(--accent); }
+    .progress {
+      height: 3px;
+      background: var(--line);
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 11;
+    }
+    .progress > i {
+      display: block;
+      height: 100%;
+      width: 0;
+      background: linear-gradient(90deg, var(--accent), var(--blue));
+    }
+    .big-quote {
+      font-size: clamp(1.15rem, 2.2vw, 1.6rem);
+      line-height: 1.45;
+      max-width: 40rem;
+      border-left: 3px solid var(--accent);
+      padding-left: 1rem;
+      color: var(--text);
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: var(--blue);
+      font-size: 0.92em;
+    }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <div class="progress"><i id="bar"></i></div>
+  <div class="deck" id="deck">
+
+    <section class="slide on" data-title="封面">
+      <div class="hero">
+        <div class="eyebrow">MatrixNEXT 2026 · 创意赛道 · 流程自动驾驶</div>
+        <h1>Sortie Deck</h1>
+        <p class="lead">AI 原生办公迭代控制面 —— 用可确认航线、产物契约与人在环，替代 IM 传话筒协作。</p>
+        <div class="pill-row">
+          <span class="pill"><strong>队伍</strong> SortieDeck</span>
+          <span class="pill"><strong>开源</strong> Apache-2.0</span>
+          <span class="pill"><strong>编排</strong> LangGraph</span>
+          <span class="pill"><strong>仓库</strong> lpliu-art/sortie-deck-todos</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-title="问题">
+      <div class="eyebrow">01 · 问题</div>
+      <h2>我们已经有 AI，为什么协作还是乱的？</h2>
+      <p class="lead">总线仍是人和 IM：各自开聊天窗口、粘贴接力、截图当契约。</p>
+      <div class="flow">
+        <span>产品</span><i>→</i><span>AI</span><i>→</i><span>需求文档</span><i>→</i>
+        <span>澄清会议</span><i>→</i><span>IM 传话</span><i>→</i>
+        <span>开发/测试各自的 AI</span><i>→</i><span>提测？</span>
+      </div>
+      <div class="img-wrap">
+        <img src="../../assets/sortie-before-relay-handdrawn.jpg" alt="改造前：传话筒式 AI 协作" />
+      </div>
+    </section>
+
+    <section class="slide" data-title="方案">
+      <div class="eyebrow">02 · 方案</div>
+      <h2>把「聊天接力」换成控制面</h2>
+      <p class="lead">
+        Sortie Deck 不是又一个聊天框。按任务集结角色 Agent，用 LangGraph 编排出击航线，
+        关键门禁保留人在环，阶段之间用产物契约传递结果。
+      </p>
+      <div class="flow">
+        <span>Brief</span><i>→</i><span>航线规划官</span><i>→</i><span>真人确认</span><i>→</i>
+        <span>角色 Agent</span><i>→</i><span>HITL</span><i>→</i><span>提测 / 交付</span>
+      </div>
+      <div class="img-wrap">
+        <img src="../../assets/sortie-after-control-plane-handdrawn.jpg" alt="改造后：Sortie Deck 控制面" />
+      </div>
+    </section>
+
+    <section class="slide" data-title="对照">
+      <div class="eyebrow">03 · 改造前后</div>
+      <h2>一表看清差异</h2>
+      <table>
+        <thead>
+          <tr><th>维度</th><th>改造前</th><th>改造后 · Sortie Deck</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>总线</td>
+            <td>IM 当总线、人当传话筒</td>
+            <td>小队频道可见协作；IM 不再当真相源</td>
+          </tr>
+          <tr>
+            <td>AI 用法</td>
+            <td>每人各开 AI、粘贴接力</td>
+            <td>任务级角色 Agent + 可插拔执行器</td>
+          </tr>
+          <tr>
+            <td>契约</td>
+            <td>截图 / 聊天当契约</td>
+            <td>命名产物文件，下游读文件</td>
+          </tr>
+          <tr>
+            <td>航线</td>
+            <td>口头约定</td>
+            <td>Brief → 规划官提案 → <strong>真人确认</strong> 后出击</td>
+          </tr>
+          <tr>
+            <td>门禁</td>
+            <td>群里 @ 一下</td>
+            <td><code>LangGraph interrupt()</code> HITL（可恢复、可审计）</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="slide" data-title="创新点">
+      <div class="eyebrow">04 · 创新点</div>
+      <h2>为什么不是「又一个 Agent 聊天」</h2>
+      <div class="grid2">
+        <div class="card">
+          <h3>控制面一等公民</h3>
+          <p>任务、航线、HITL、产物都是一等对象，而不是埋在对话历史里。</p>
+        </div>
+        <div class="card">
+          <h3>可确认航线</h3>
+          <p>规划官提案节点（含并行）；真人确认/手改后才编译图出击。</p>
+        </div>
+        <div class="card">
+          <h3>契约化产物</h3>
+          <p>阶段写命名文件；下游读文件。并行路径作用域，避免互相覆盖。</p>
+        </div>
+        <div class="card">
+          <h3>图语义 HITL</h3>
+          <p><code>interrupt()</code> 暂停；放行 / 打回 / 改写 / 停止 / 重路由。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-title="技术栈">
+      <div class="eyebrow">05 · 技术栈</div>
+      <h2>可运行、可插拔、可本地部署</h2>
+      <div class="grid2">
+        <div class="card">
+          <h3>控制面</h3>
+          <ul>
+            <li>Python 3.12 · FastAPI · Pydantic v2</li>
+            <li>LangGraph + checkpointer</li>
+            <li>SSE 实时事件 · JSON/SQLite</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>执行与工作台</h3>
+          <ul>
+            <li>执行器：mock / Claude Code / Cursor CLI</li>
+            <li>React 19 · TypeScript · Vite</li>
+            <li>Tools · MCP · Skills 领域目录</li>
+          </ul>
+        </div>
+      </div>
+      <p class="lead" style="margin-top:0.5rem">
+        源码：<a href="https://github.com/lpliu-art/sortie-deck-todos/tree/dev" target="_blank" rel="noopener">github.com/lpliu-art/sortie-deck-todos</a>
+        · 完整说明：<a href="./matrixnext-2026.md">matrixnext-2026.md</a>
+      </p>
+    </section>
+
+    <section class="slide" data-title="演示">
+      <div class="eyebrow">06 · 演示路径</div>
+      <h2>一条完整出击（可剪成 ≤3 分钟视频）</h2>
+      <div class="grid2">
+        <div class="card">
+          <h3>剧本</h3>
+          <ol>
+            <li>登录工作台，填写任务 Brief</li>
+            <li>查看航线规划官提案并确认</li>
+            <li>出击，观察轨道与并行阶段</li>
+            <li>命中 HITL：放行 / 改写</li>
+            <li>打开阶段产物：读文件不读聊天</li>
+          </ol>
+        </div>
+        <div class="card">
+          <h3>本地启动</h3>
+          <p><code>pip install -e ".[dev]"</code></p>
+          <p><code>sortie api</code> → :8787</p>
+          <p><code>npm run dev</code>（apps/web）→ :5173</p>
+          <p>账号 <code>admin</code> / <code>admin123</code></p>
+          <p>冒烟：<code>sortie smoke</code></p>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-title="结尾">
+      <div class="hero">
+        <div class="eyebrow">MatrixNEXT 2026</div>
+        <h1>让 Agent 接手流程，<br />让人守住出击权。</h1>
+        <p class="big-quote">Sortie Deck —— 办公迭代的控制面，而不是又一个聊天框。</p>
+        <div class="pill-row">
+          <span class="pill">创意赛道 · 流程自动驾驶</span>
+          <span class="pill">SortieDeck</span>
+          <span class="pill">谢谢</span>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="footer-bar">
+    <span id="label">1 / 8 · 封面</span>
+    <div class="nav">
+      <button type="button" id="prev">← 上一页</button>
+      <button type="button" id="next">下一页 →</button>
+    </div>
+    <span>← → 或空格翻页 · F 全屏</span>
+  </div>
+
+  <script>
+    const slides = [...document.querySelectorAll(".slide")];
+    const bar = document.getElementById("bar");
+    const label = document.getElementById("label");
+    let i = 0;
+
+    function show(n) {
+      i = Math.max(0, Math.min(slides.length - 1, n));
+      slides.forEach((s, idx) => s.classList.toggle("on", idx === i));
+      bar.style.width = ((i + 1) / slides.length * 100) + "%";
+      const title = slides[i].dataset.title || "";
+      label.textContent = (i + 1) + " / " + slides.length + " · " + title;
+      history.replaceState(null, "", "#" + (i + 1));
+    }
+
+    document.getElementById("prev").onclick = () => show(i - 1);
+    document.getElementById("next").onclick = () => show(i + 1);
+
+    window.addEventListener("keydown", (e) => {
+      if (["ArrowRight", "PageDown", " ", "Enter"].includes(e.key)) {
+        e.preventDefault(); show(i + 1);
+      } else if (["ArrowLeft", "PageUp", "Backspace"].includes(e.key)) {
+        e.preventDefault(); show(i - 1);
+      } else if (e.key === "Home") show(0);
+      else if (e.key === "End") show(slides.length - 1);
+      else if (e.key === "f" || e.key === "F") {
+        if (!document.fullscreenElement) document.documentElement.requestFullscreen?.();
+        else document.exitFullscreen?.();
+      }
+    });
+
+    const hash = parseInt(location.hash.slice(1), 10);
+    show(Number.isFinite(hash) && hash > 0 ? hash - 1 : 0);
+  </script>
+</body>
+</html>
