@@ -131,6 +131,7 @@ nav:
       - Python Argument Unpacking: notes/python-star-unpacking.md
       - RAG 业界实现调研: notes/rag-industry-survey.md
       - WeKnora 混合检索 + GraphRAG 落地方案: notes/weknora-graphrag-plan.md
+      - 知识库两条链路源码解析: notes/kb-pipeline-deep-dive.md
   - Roadmap: roadmap.md
   - Contributing: contributing.md
 
