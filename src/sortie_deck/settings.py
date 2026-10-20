@@ -97,6 +97,17 @@ class Settings(BaseSettings):
     # Allow skill scripts to actually be *executed* (not just stored).
     skill_run_enabled: bool = True
     skill_run_timeout_seconds: float = 30.0
+    # In-loop toolkit meta-tool (mode 2): executors may declare toolkit_search /
+    # toolkit_pick intents in StageResult.meta; the orchestration layer resolves
+    # them (recall → validate → float). Independent from loadout_auto so the
+    # in-loop path stays available even when JIT pre-loading is off.
+    toolkit_search: bool = True
+    # Toolkit 召回后端（方案 A：复用 WeKnora 混合检索 + rerank）：
+    #   local   = 三层加权词元打分（默认，零依赖）
+    #   weknora = 条目镜像进专用 KB，走 hybrid-search（向量+BM25→RRF→bge-reranker）
+    # 复用 weknora_base_url / weknora_api_key；KB id 为空则始终降级 local。
+    toolkit_recall_backend: str = "local"
+    toolkit_weknora_kb_id: str | None = None
     # --- MCP session pool ----------------------------------------------------
     # stdio servers get one instance per (item, task); reused within the task,
     # idle-evicted after ttl (no in-flight calls) with a global LRU cap.

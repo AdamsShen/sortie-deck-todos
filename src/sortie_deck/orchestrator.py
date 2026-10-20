@@ -448,6 +448,43 @@ class Orchestrator:
         ini.timeline.append(event)
         ini.updated_at = utc_now()
 
+    async def _merge_state_events(self, ini: Initiative, state_events: list[dict[str, Any]] | None) -> None:
+        """把 graph 状态里的 events 增量合并进 timeline（按 stage+message 去重）并广播到任务频道。
+
+        供两处调用：astream 每个执行步（实时把 toolkit_usage / toolkit_meta 等
+        事件推给前端）与 _apply_graph_result 的收尾全量合并（去重保证不重复）。
+        """
+        existing_msgs = {(e.stage, e.message) for e in ini.timeline}
+        for ev in state_events or []:
+            key = (ev.get("stage", ""), ev.get("message", ""))
+            if key in existing_msgs:
+                continue
+            data = dict(ev.get("data") or {})
+            for k in ("executor", "status", "proposed_next", "qa_attempt"):
+                if k in ev and k not in data:
+                    data[k] = ev[k]
+            self._append_timeline(
+                ini,
+                TimelineEvent(
+                    stage=ev.get("stage", ini.current_stage),
+                    role=ev.get("role"),
+                    kind=ev.get("kind", "info"),
+                    message=ev.get("message", ""),
+                    data=data,
+                ),
+            )
+            role_name = ev.get("role") or "system"
+            agent = next((r for r in ini.roles if r.role.value == role_name), None)
+            await self._post_room(
+                ini.id,
+                text=f"[{ev.get('stage')}] {ev.get('message', '')}",
+                actor_kind=ActorKind.AGENT if agent else ActorKind.SYSTEM,
+                actor_name=agent.title if agent else "Pipeline",
+                actor_id=agent.id if agent else None,
+                role=role_name if agent else None,
+                msg_type="stage",
+            )
+
     # --- mission knowledge namespace (RAG writeback) ----------------------
 
     _KB_INDEX_KINDS = frozenset(
@@ -1663,35 +1700,7 @@ class Orchestrator:
         else:
             ini.status = InitiativeStatus.DONE if ini.current_stage == "done" else InitiativeStatus.RUNNING
 
-        existing_msgs = {(e.stage, e.message) for e in ini.timeline}
-        for ev in values.get("events") or []:
-            key = (ev.get("stage", ""), ev.get("message", ""))
-            if key not in existing_msgs:
-                data = dict(ev.get("data") or {})
-                for k in ("executor", "status", "proposed_next", "qa_attempt"):
-                    if k in ev and k not in data:
-                        data[k] = ev[k]
-                self._append_timeline(
-                    ini,
-                    TimelineEvent(
-                        stage=ev.get("stage", ini.current_stage),
-                        role=ev.get("role"),
-                        kind=ev.get("kind", "info"),
-                        message=ev.get("message", ""),
-                        data=data,
-                    ),
-                )
-                role_name = ev.get("role") or "system"
-                agent = next((r for r in ini.roles if r.role.value == role_name), None)
-                await self._post_room(
-                    ini.id,
-                    text=f"[{ev.get('stage')}] {ev.get('message', '')}",
-                    actor_kind=ActorKind.AGENT if agent else ActorKind.SYSTEM,
-                    actor_name=agent.title if agent else "Pipeline",
-                    actor_id=agent.id if agent else None,
-                    role=role_name if agent else None,
-                    msg_type="stage",
-                )
+        await self._merge_state_events(ini, values.get("events") or [])
 
         if ini.status == InitiativeStatus.DONE:
             await self._post_room(
@@ -1772,6 +1781,14 @@ class Orchestrator:
                         self.store.upsert(ini)
                         await self._emit(
                             ini.id, {"type": "progress", "stage": ini.current_stage, "initiative_id": ini.id}
+                        )
+                    if event.get("events"):
+                        # 每个执行步实时合并事件（toolkit_usage / toolkit_meta 等），
+                        # 前端经 SSE update 立即看到该阶段的工具调用
+                        await self._merge_state_events(ini, event["events"])
+                        self.store.upsert(ini)
+                        await self._emit(
+                            ini.id, {"type": "update", "initiative": ini.model_dump(mode="json")}
                         )
 
                 snap = await graph.aget_state(config)

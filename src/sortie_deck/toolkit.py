@@ -424,6 +424,31 @@ class ToolkitStore:
             encoding="utf-8",
         )
 
+    def _mirror_sync(self, item: ToolkitItem | None, *, item_id: str = "", removed: bool = False) -> None:
+        """条目变更后同步 WeKnora 镜像（方案 A：混合检索 + rerank）。
+
+        失败仅记日志，绝不阻塞条目主流程；backend 非 weknora 时直接跳过。
+        """
+        try:
+            from sortie_deck.settings import settings as _settings
+
+            if (_settings.toolkit_recall_backend or "").strip().lower() != "weknora":
+                return
+            from sortie_deck.toolkit_index import mirror_remove, mirror_upsert
+
+            if removed:
+                mirror_remove(item_id)
+                logger.info("toolkit mirror removed (id=%s)", item_id)
+            elif item is not None:
+                result = mirror_upsert(item)
+                logger.info("toolkit mirror %s (%s)", result, item.id)
+        except Exception:  # noqa: BLE001 — 镜像失败不影响条目主流程
+            logger.warning(
+                "toolkit mirror sync failed (id=%s removed=%s)",
+                item_id or getattr(item, "id", ""),
+                removed,
+            )
+
     def list(
         self,
         *,
@@ -494,6 +519,7 @@ class ToolkitStore:
             items = self._read()
             items.append(item)
             self._write(items)
+        self._mirror_sync(item)
         return item
 
     def upsert_by_name(
@@ -514,6 +540,7 @@ class ToolkitStore:
                     data["updated_at"] = utc_now().isoformat()
                     items[i] = ToolkitItem.model_validate(data)
                     self._write(items)
+                    self._mirror_sync(items[i])
                     return items[i]
         return self.create(req, author_id=author_id, author_name=author_name)
 
@@ -536,6 +563,7 @@ class ToolkitStore:
                 data["updated_at"] = utc_now().isoformat()
                 items[i] = ToolkitItem.model_validate(data)
                 self._write(items)
+                self._mirror_sync(items[i])
                 return items[i]
         raise KeyError(item_id)
 
@@ -546,6 +574,7 @@ class ToolkitStore:
             if len(next_items) == len(items):
                 raise KeyError(item_id)
             self._write(next_items)
+            self._mirror_sync(None, item_id=item_id, removed=True)
 
     def import_payload(
         self,

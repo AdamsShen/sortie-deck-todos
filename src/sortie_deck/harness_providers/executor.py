@@ -19,6 +19,30 @@ from typing import Any
 
 from sortie_deck.models import CODING_ROLE_VALUES, ENG_BUILD_STAGES, StageContext, StageResult
 
+_TOOLKIT_META_PROTOCOL = """Toolkit meta-tool (in-loop capability requests):
+If you are missing a capability (tool / MCP / skill), you may request it from the
+mission toolkit library instead of inventing one:
+1. Ask for candidates by returning this JSON inside your result meta:
+   {"toolkit_search": {"query": "<what you need, free text>", "kinds": ["tool", "mcp", "skill"]}}
+2. The orchestrator replies with candidate summaries in your toolkit brief.
+3. To use one, declare: {"toolkit_pick": {"item_id": "<id from candidates>"}}
+   Validated items are floated into your context (budget: 8 picks per stage).
+4. To run a script of a picked skill, declare:
+   {"skill_run": {"item_id": "<picked id>", "script": "scripts/x.py", "args": []}}
+   The item must be picked first in this stage; write-looking script names
+   require "confirmed": true. Budget: 4 skill runs per stage.
+Disabled or policy-blocked items are never returned."""
+
+
+def _toolkit_search_enabled() -> bool:
+    """元工具总开关（缺省关闭与否读 settings，测试可 monkeypatch）。"""
+    try:
+        from sortie_deck.settings import settings
+
+        return bool(getattr(settings, "toolkit_search", False))
+    except Exception:  # noqa: BLE001 — settings 不可用时按关闭处理
+        return False
+
 
 def _legacy_executor_name(ctx: StageContext) -> str:
     """Pre-harness routing (mirrors graph._executor_name minus harness)."""
@@ -258,6 +282,10 @@ class HarnessStageExecutor:
             sections.append(f"Layered memory brief:\n{ctx.memory_brief}")
         if ctx.toolkit_brief:
             sections.append(ctx.toolkit_brief)
+        # In-loop 元工具协议说明：教模型"缺能力时如何申请"（search 召回候选 → pick 上浮）。
+        # 意图经 StageResult.meta 透传，本段只是说明书；关闭开关时不注入。
+        if _toolkit_search_enabled():
+            sections.append(_TOOLKIT_META_PROTOCOL)
         if repo_section:
             sections.append(repo_section.strip())
         artifact_index = list(pack.get("artifact_index") or [])

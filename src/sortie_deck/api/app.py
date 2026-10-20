@@ -1417,6 +1417,20 @@ async def import_toolkit(
         raise HTTPException(400, str(exc)) from exc
 
 
+@app.post("/api/toolkit/reindex")
+async def reindex_toolkit_index(_user: PublicUser = Depends(require_admin)) -> dict[str, Any]:
+    """全量重建工具箱的 WeKnora 镜像索引（方案 A：混合检索 + rerank）。
+
+    本地 toolkit.json 为准：多退少补。backend 未开 / KB 未配置时返回 skipped。
+    """
+    from sortie_deck.toolkit_index import sync_all
+
+    try:
+        return sync_all(get_toolkit())
+    except Exception as exc:  # noqa: BLE001 — WeKnora 异常转 502 便于前端提示
+        raise HTTPException(502, f"reindex failed: {exc}") from exc
+
+
 @app.get("/api/executors")
 async def list_executors(_user: PublicUser = Depends(require_user)) -> dict[str, Any]:
     from sortie_deck.plugins.entrypoints import probe_executor

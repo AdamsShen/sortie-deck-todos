@@ -13,6 +13,7 @@ candidate can serve a need.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 from typing import Any, Literal
@@ -94,15 +95,45 @@ def _score(item: ToolkitItem, want: set[str]) -> float:
 
 def recall(
     store: ToolkitStore | None,
-    capability: str,
+    capability: str = "",
     *,
     limit: int = 5,
     kinds: list[str] | None = None,
+    query: str = "",
+    allowed_ids: set[str] | None = None,
 ) -> list[tuple[ToolkitItem, float]]:
-    """Rank toolkit items against one capability label (cheap inverted match)."""
+    """Rank toolkit items against one capability label (cheap inverted match).
+
+    capability / query 二者至少传一个：capability 是预定义的能力标签（模式 1），
+    query 是模型在推理循环内给出的自由文本（模式 2 元工具），两者词元合并打分。
+    allowed_ids 传入时做硬过滤（org_policy 白名单），None 表示不过滤。
+
+    召回后端（方案 A）：TDT_TOOLKIT_RECALL_BACKEND=weknora 时先走 WeKnora
+    hybrid-search（向量+BM25→RRF→rerank，条目经 toolkit_index 镜像），任何
+    异常/未配置都静默降级到本地三层加权打分。
+    """
     if store is None:
         return []
-    want = _tokens(capability)
+    combined = f"{capability} {query}".strip()
+    if combined:
+        try:
+            from sortie_deck.toolkit_index import mirror_available, weknora_recall
+
+            if mirror_available():
+                rows = weknora_recall(
+                    store,
+                    combined,
+                    kinds=kinds,
+                    allowed_ids=allowed_ids,
+                    limit=limit,
+                )
+                if rows is not None:
+                    return rows
+        except Exception as exc:  # noqa: BLE001 — 混合检索失败降级本地打分
+            logging.getLogger(__name__).warning(
+                "toolkit weknora recall failed, fallback to local scoring: %s", exc
+            )
+    want = _tokens(combined)
     if not want:
         return []
     scored: list[tuple[ToolkitItem, float]] = []
@@ -111,10 +142,92 @@ def recall(
             continue
         if kinds and item.kind not in kinds:
             continue
+        if allowed_ids is not None and item.id not in allowed_ids:
+            continue
         score = _score(item, want)
         if score > 0:
             scored.append((item, score))
     return sorted(scored, key=lambda pair: pair[1], reverse=True)[:limit]
+
+
+# --- in-loop meta-tool (mode 2) ---------------------------------------------
+# 预算常量：对齐方案文档 3.3 节（每次搜索 ≤5 候选、单阶段累计上浮 ≤8 条、
+# skill 正文上浮 ≤5000 字符），防止元工具路径把阶段上下文撑爆。
+SEARCH_TOP_K = 5
+PICK_BUDGET_PER_STAGE = 8
+SUMMARY_FLOAT_LIMIT = 200
+SKILL_BODY_FLOAT_LIMIT = 5000
+# skill_run 意图：每阶段最多执行 4 次脚本；回填 brief 的单次输出摘要上限
+SKILL_RUN_BUDGET_PER_STAGE = 4
+SKILL_OUTPUT_FLOAT_LIMIT = 8000
+
+
+def summarize_candidates(pairs: list[tuple[ToolkitItem, float]]) -> list[dict[str, str]]:
+    """把召回结果压成给模型看的候选摘要（toolkit_search 意图的返回载荷）。
+
+    输入: recall() 的输出，如 [(ToolkitItem(id="tk_x", kind="mcp"), 0.9), ...]
+    输出: [{"id": "tk_x", "kind": "mcp", "name": "filesystem",
+            "summary": "官方 filesystem MCP，读写仓库沙箱"}]
+    summary 截断到 SUMMARY_FLOAT_LIMIT，防止单条候选污染上下文。
+    """
+    out: list[dict[str, str]] = []
+    for item, _score in pairs:
+        out.append(
+            {
+                "id": item.id,
+                "kind": item.kind,
+                "name": item.name,
+                "summary": (item.summary or "")[:SUMMARY_FLOAT_LIMIT],
+            }
+        )
+    return out
+
+
+def unfreeze_item(item: ToolkitItem) -> str:
+    """把一个被点名的条目"解冻"为注入阶段上下文的文本（toolkit_pick 的产物）。
+
+    tool → 端点与用途；mcp → 连接方式（env 永不展开明文）；skill → 正文，
+    超过 SKILL_BODY_FLOAT_LIMIT 截断并标注。脚本只执行不读入（不在此展开）。
+    输入: ToolkitItem；输出: 多行文本，直接追加进 toolkit_brief。
+    """
+    if item.kind == "tool":
+        return f"- [tool/{item.runtime}] {item.name}: {item.endpoint or item.summary}"
+    if item.kind == "mcp":
+        target = item.url or " ".join([item.command, *item.args]).strip() or item.summary
+        return f"- [mcp/{item.transport}] {item.name}: {target}"
+    body = (item.body or "").strip()
+    if len(body) > SKILL_BODY_FLOAT_LIMIT:
+        body = body[:SKILL_BODY_FLOAT_LIMIT] + "\n… [已截断，完整正文请经 skill 执行获取]"
+    return f"- [skill] {item.name}\n{body}"
+
+
+async def pick_candidate(
+    store: ToolkitStore | None,
+    item_id: str,
+    *,
+    allowed_ids: set[str] | None = None,
+    probe: bool = True,
+) -> tuple[ToolkitItem | None, str]:
+    """校验一次 toolkit_pick 点名，返回 (条目, 失败原因)。
+
+    失败原因用于回传给模型（可换条目或换词重搜），永远不抛异常——
+    pick 失败只降级不中断阶段。校验顺序：存在 → 启用 → 白名单 → 探活。
+    """
+    if store is None:
+        return None, "toolkit store unavailable"
+    try:
+        item = store.get(item_id)
+    except KeyError:
+        return None, f"item `{item_id}` not found"
+    if not item.enabled:
+        return None, f"item `{item_id}` is disabled"
+    if allowed_ids is not None and item.id not in allowed_ids:
+        return None, f"item `{item_id}` is outside the org allowlist"
+    if probe:
+        status, detail = await probe_item(item)
+        if status not in {"ok", "skipped"}:
+            return None, f"probe {status}: {detail}"
+    return item, ""
 
 
 # --- probe ----------------------------------------------------------------

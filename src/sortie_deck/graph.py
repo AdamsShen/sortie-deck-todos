@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -12,6 +13,16 @@ from langgraph.types import interrupt
 from sortie_deck.agent_contract import ContractError, validate_handoff
 from sortie_deck.artifacts import ArtifactStore
 from sortie_deck.contracts import validate_stage_artifacts
+from sortie_deck.loadout import (
+    PICK_BUDGET_PER_STAGE,
+    SEARCH_TOP_K,
+    SKILL_OUTPUT_FLOAT_LIMIT,
+    SKILL_RUN_BUDGET_PER_STAGE,
+    pick_candidate,
+    recall,
+    summarize_candidates,
+    unfreeze_item,
+)
 from sortie_deck.manager import BranchStatus, MissionManager
 from sortie_deck.models import (
     CODING_ROLE_VALUES,
@@ -91,6 +102,239 @@ def _coding_perm_from_instruction(instruction: str | None) -> dict[str, str]:
     return {"coding_permission_mode": mode}
 
 
+def _truncate_output(text: str, *, max_chars: int = 40000) -> str:
+    """单次工具输出的硬截断（对齐 Claude Code ~25k token 上限，约 4 万字符）。
+
+    防止单个工具的超大返回把阶段上下文撑爆；截断时显式标注，模型可感知。
+    """
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "\n… [output truncated: exceeded per-call limit]"
+
+
+@dataclass
+class ToolkitMetaOutcome:
+    """in-loop 元工具意图的处理结果（run_toolkit_meta 的返回值）。
+
+    brief_append 直接并入 toolkit_briefs[f"stage:{stage}"]；events 进事件流；
+    records 落为阶段产物 toolkit_meta.json 供审计回放。
+    """
+
+    brief_append: str = ""
+    events: list[dict[str, Any]] = field(default_factory=list)
+    records: list[dict[str, Any]] = field(default_factory=list)
+
+
+async def run_toolkit_meta(
+    store: Any,
+    *,
+    stage: str,
+    meta: dict[str, Any] | None,
+    allowed_ids: set[str] | None = None,
+    used_picks: int = 0,
+    floated: list[str] | None = None,
+    skill_used: int = 0,
+    workspace_dir: str | None = None,
+) -> ToolkitMetaOutcome:
+    """处理 executor 声明的 in-loop 元工具意图（toolkit_search / toolkit_pick / skill_run）。
+
+    executor 只在 StageResult.meta 里"声明意图"，检索/校验/上浮/执行全部在本函数
+    （编排层）完成——授权与预算集中在一处，与 _run_mcp_calls 同一模式。
+
+    意图结构（StageResult.meta）：
+      {"toolkit_search": {"query": "...", "kinds": ["mcp", "tool"]}}  自由文本召回
+      {"toolkit_pick": {"item_id": "tk_x"}}                           点名上浮
+      {"skill_run": {"item_id": "tk_x", "script": "scripts/x.py",
+                     "args": [], "confirmed": false}}                 执行脚本
+                                                                     （须先 pick）
+
+    pick 校验链：存在 → 启用 → 白名单 → 预算 → 探活；任一失败都把原因回传给
+    模型（可换条目/换词重搜），永不抛异常、不中断阶段。
+    """
+    from sortie_deck.settings import settings as _settings
+
+    outcome = ToolkitMetaOutcome()
+    if not bool(getattr(_settings, "toolkit_search", False)):
+        return outcome
+    if not isinstance(meta, dict):
+        return outcome
+
+    search_intent = meta.get("toolkit_search")
+    pick_intent = meta.get("toolkit_pick")
+    run_intent = meta.get("skill_run")
+    floated = list(floated or [])
+    # 多个意图并存时 brief 增量按序拼接（单意图行为与旧版一致）
+    notes: list[str] = []
+
+    if isinstance(search_intent, dict) and str(search_intent.get("query") or "").strip():
+        query = str(search_intent.get("query")).strip()
+        kinds = search_intent.get("kinds") if isinstance(search_intent.get("kinds"), list) else None
+        rows = recall(
+            store,
+            query=query,
+            kinds=kinds,
+            limit=SEARCH_TOP_K,
+            allowed_ids=allowed_ids,
+        )
+        candidates = summarize_candidates(rows)
+        if candidates:
+            notes.append(
+                "Toolkit search results (pick by item id when needed):\n"
+                + json.dumps(candidates, ensure_ascii=False)
+            )
+        else:
+            notes.append(f"Toolkit search for `{query}` found no matching capability.")
+        outcome.events.append(
+            {
+                "stage": stage,
+                "kind": "toolkit_meta",
+                "message": f"toolkit_search: {query}",
+                "data": {"candidates": candidates},
+            }
+        )
+        outcome.records.append(
+            {"op": "search", "stage": stage, "query": query, "candidates": candidates}
+        )
+
+    if isinstance(pick_intent, dict):
+        item_id = str(pick_intent.get("item_id") or "").strip()
+        if item_id:
+            record: dict[str, Any] = {"op": "pick", "stage": stage, "item_id": item_id}
+            if item_id in floated:
+                record["reason"] = "already floated in this stage"
+                notes.append(
+                    f"Toolkit pick `{item_id}` was already floated earlier in this stage."
+                )
+            elif used_picks >= PICK_BUDGET_PER_STAGE:
+                record["reason"] = "pick budget exhausted"
+                notes.append(
+                    f"Toolkit pick budget exhausted ({PICK_BUDGET_PER_STAGE} per stage) — "
+                    "continue with what you have."
+                )
+            else:
+                item, reason = await pick_candidate(store, item_id, allowed_ids=allowed_ids)
+                if item is None:
+                    record["reason"] = reason
+                    notes.append(f"Toolkit pick `{item_id}` rejected: {reason}")
+                else:
+                    record["floated"] = True
+                    floated.append(item.id)
+                    notes.append(unfreeze_item(item))
+            outcome.events.append(
+                {
+                    "stage": stage,
+                    "kind": "toolkit_meta",
+                    "message": f"toolkit_pick: {item_id}",
+                    "data": dict(record),
+                }
+            )
+            outcome.records.append(record)
+
+    if isinstance(run_intent, dict):
+        await _handle_skill_run(
+            store,
+            stage=stage,
+            intent=run_intent,
+            allowed_ids=allowed_ids,
+            floated=floated,
+            skill_used=skill_used,
+            workspace_dir=workspace_dir,
+            outcome=outcome,
+            notes=notes,
+        )
+
+    outcome.brief_append = "\n".join(n for n in notes if n)
+    return outcome
+
+
+async def _handle_skill_run(
+    store: Any,
+    *,
+    stage: str,
+    intent: dict[str, Any],
+    allowed_ids: set[str] | None,
+    floated: list[str],
+    skill_used: int,
+    workspace_dir: str | None,
+    outcome: ToolkitMetaOutcome,
+    notes: list[str],
+) -> None:
+    """兑现 skill_run 意图：校验（预算/先 pick/白名单/探活/确认门）→ 沙箱执行。
+
+    输出摘要回填 brief（模型可见执行结果，闭环）；完整（截断后）输出留在
+    record 里，由调用方落 skill_runs.json 产物供审计回放。
+    """
+    from pathlib import Path
+
+    from sortie_deck.mcp_runtime import tool_looks_like_write
+    from sortie_deck.skill_runner import run_skill_script
+
+    item_id = str(intent.get("item_id") or "").strip()
+    script = str(intent.get("script") or "").strip()
+    run_args = intent.get("args") if isinstance(intent.get("args"), list) else []
+    confirmed = bool(intent.get("confirmed"))
+    record: dict[str, Any] = {"op": "skill_run", "stage": stage, "item_id": item_id, "script": script}
+
+    if not item_id or not script:
+        record["reason"] = "item_id and script are required"
+        notes.append(f"Skill run rejected: {record['reason']}.")
+    elif skill_used >= SKILL_RUN_BUDGET_PER_STAGE:
+        record["reason"] = "skill run budget exhausted"
+        notes.append(
+            f"Skill run budget exhausted ({SKILL_RUN_BUDGET_PER_STAGE} per stage)."
+        )
+    elif item_id not in floated:
+        # 闭环语义：先 pick 上浮（拿到用法说明）才能执行其脚本
+        record["reason"] = "item not picked in this stage — pick it first"
+        notes.append(
+            f"Skill run `{item_id}` rejected: pick the item first (toolkit_pick), "
+            "then run its scripts."
+        )
+    else:
+        item, reason = await pick_candidate(store, item_id, allowed_ids=allowed_ids)
+        if item is None:
+            record["reason"] = reason
+            notes.append(f"Skill run `{item_id}` rejected: {reason}")
+        elif tool_looks_like_write(Path(script).name) and not confirmed:
+            record["reason"] = "script looks like a write — confirmation required"
+            notes.append(
+                f"Skill run `{script}` looks like a write — set confirmed=true to run it."
+            )
+        else:
+            record["executed"] = True
+            result = await run_skill_script(
+                item, script, run_args, workspace_dir=workspace_dir
+            )
+            record.update(
+                {k: result.get(k) for k in ("ok", "exit_code", "timed_out", "duration_ms")}
+            )
+            record["stdout"] = result.get("stdout") or ""
+            record["stderr"] = result.get("stderr") or ""
+            if result.get("ok"):
+                notes.append(
+                    f"Skill `{item.name}` ran `{script}` (exit {result.get('exit_code')}):\n"
+                    + (result.get("stdout") or "").strip()[:SKILL_OUTPUT_FLOAT_LIMIT]
+                )
+            else:
+                fail_reason = result.get("reason") or (
+                    f"exit {result.get('exit_code')}"
+                    + (" (timed out)" if result.get("timed_out") else "")
+                )
+                notes.append(
+                    f"Skill `{item.name}` run `{script}` failed: {fail_reason}\n"
+                    "stderr: " + (result.get("stderr") or "")[:500]
+                )
+    outcome.events.append(
+        {
+            "stage": stage,
+            "kind": "toolkit_meta",
+            "message": f"skill_run: {item_id}:{script}",
+            "data": dict(record),
+        }
+    )
+    outcome.records.append(record)
+
+
 class PipelineState(TypedDict, total=False):
     initiative_id: str
     thread_id: str
@@ -116,6 +360,11 @@ class PipelineState(TypedDict, total=False):
     role_repos: dict[str, list[dict[str, Any]]]
     stage_toolkits: dict[str, list[str]]
     toolkit_briefs: dict[str, str]
+    # In-loop 元工具状态：每阶段 pick 预算计数 + 已上浮条目（去重）
+    toolkit_pick_budget: dict[str, int]
+    toolkit_floats: dict[str, list[str]]
+    # skill_run 意图：每阶段脚本执行次数（预算 SKILL_RUN_BUDGET_PER_STAGE）
+    skill_run_budget: dict[str, int]
     # Frozen plan fingerprint — lets a resume detect an edited pipeline
     plan_digest: str
     # Node the current step routes to (agent handoff / manager join decision)
@@ -444,29 +693,31 @@ def build_graph_from_template(
         stage: str,
         toolkit_ids: list[str],
         calls: Any,
-    ) -> dict[str, str]:
+    ) -> tuple[dict[str, str], list[dict[str, Any]]]:
         """Execute tool calls an executor *requested* (whitelist + confirm gate).
 
         Executors declare intent via ``StageResult.meta["mcp_calls"]``; the
         orchestration layer performs the actual call so authorisation lives in
         one place instead of inside every plugin.
+        返回 (产物字典, 调用结果列表)——结果列表供 toolkit_usage 事件使用。
         """
         from sortie_deck.settings import settings as _settings
 
         if not bool(getattr(_settings, "mcp_call_enabled", False)):
-            return {}
+            return {}, []
         if not isinstance(calls, list) or not calls:
-            return {}
+            return {}, []
         try:
             from sortie_deck.mcp_runtime import McpToolInvoker, resolve_mcp_items
             from sortie_deck.orchestrator import _toolkit_store
         except Exception:  # noqa: BLE001 — MCP path is optional
-            return {}
+            return {}, []
         items = resolve_mcp_items(_toolkit_store, list(toolkit_ids))
         invoker = McpToolInvoker(enabled=True)
         results: list[dict[str, Any]] = []
         try:
-            await invoker.open(items)
+            # task_id 传 initiative_id：池开启时按任务借出/复用实例，close 只归还不关闭
+            await invoker.open(items, task_id=str(state.get("initiative_id") or ""))
             for raw in calls[:10]:
                 if not isinstance(raw, dict):
                     continue
@@ -483,8 +734,11 @@ def build_graph_from_template(
         finally:
             await invoker.close()
         if not results:
-            return {}
-        return {"mcp_calls.json": json.dumps(results, ensure_ascii=False, indent=2)}
+            return {}, []
+        return (
+            {"mcp_calls.json": _truncate_output(json.dumps(results, ensure_ascii=False, indent=2))},
+            results,
+        )
 
     def _build_session_host(
         state: PipelineState,
@@ -740,12 +994,64 @@ def build_graph_from_template(
         else:
             result = await _execute_with_timeout()
 
-        mcp_artifacts = await _run_mcp_calls(
+        mcp_artifacts, mcp_results = await _run_mcp_calls(
             state, stage, toolkit_ids, (result.meta or {}).get("mcp_calls")
         )
 
+        # In-loop 元工具意图：executor 声明 toolkit_search / toolkit_pick，编排层兑现
+        async def _stage_toolkit_meta() -> ToolkitMetaOutcome:
+            try:
+                from sortie_deck.orchestrator import _toolkit_store, get_orchestrator
+
+                store = _toolkit_store
+                policy = None
+                try:
+                    policy = get_orchestrator().org_policy
+                except Exception:  # noqa: BLE001 — 无策略时不过滤
+                    policy = None
+                allowed = (
+                    set(policy.allowed_toolkit_ids)
+                    if policy and policy.allowed_toolkit_ids
+                    else None
+                )
+            except Exception:  # noqa: BLE001 — 元工具路径失败不影响阶段
+                return ToolkitMetaOutcome()
+            budget = state.get("toolkit_pick_budget") or {}
+            floats_map = state.get("toolkit_floats") or {}
+            skill_budget = state.get("skill_run_budget") or {}
+            return await run_toolkit_meta(
+                store,
+                stage=stage,
+                meta=result.meta,
+                allowed_ids=allowed,
+                used_picks=int(budget.get(stage, 0)),
+                floated=list(floats_map.get(stage) or []),
+                skill_used=int(skill_budget.get(stage, 0)),
+                workspace_dir=state.get("workspace_dir"),
+            )
+
+        toolkit_meta_out = await _stage_toolkit_meta()
+        meta_artifacts: dict[str, str] = {}
+        if toolkit_meta_out.records:
+            meta_artifacts["toolkit_meta.json"] = json.dumps(
+                toolkit_meta_out.records, ensure_ascii=False, indent=2
+            )
+        skill_run_records = [
+            r for r in toolkit_meta_out.records if r.get("op") == "skill_run"
+        ]
+        if skill_run_records:
+            # 脚本执行完整输出（已按 8000 字符截断）单独落产物，供审计回放
+            meta_artifacts["skill_runs.json"] = json.dumps(
+                skill_run_records, ensure_ascii=False, indent=2
+            )
+
         written: dict[str, str] = dict(upstream_paths)
-        for filename, content in {**consult_artifacts, **result.artifacts, **mcp_artifacts}.items():
+        for filename, content in {
+            **consult_artifacts,
+            **result.artifacts,
+            **mcp_artifacts,
+            **meta_artifacts,
+        }.items():
             ref = artifact_store.write_text(state["initiative_id"], stage, filename, content)
             written[filename] = ref.path
 
@@ -776,6 +1082,89 @@ def build_graph_from_template(
         )
         # Sub-room conclusions are surfaced for observability; the transcript is not.
         events.extend(subroom_events)
+        events.extend(toolkit_meta_out.events)
+
+        # 工具使用事件：timeline ← events 同步后，任务详情前端按阶段实时展示
+        # "本阶段绑定了哪些 tool/mcp/skill、实际调用了哪些 MCP 工具、检索/上浮了什么"。
+        if toolkit_ids or mcp_results or toolkit_meta_out.records:
+            try:
+                from sortie_deck.orchestrator import _toolkit_store as _tk_store
+
+                def _tk_brief_meta(tid: str) -> dict[str, str]:
+                    try:
+                        it = _tk_store.get(tid)
+                        return {"id": tid, "name": it.name, "kind": it.kind}
+                    except Exception:  # noqa: BLE001 — 条目被删时展示短 id
+                        return {"id": tid, "name": tid[:12], "kind": "tool"}
+            except Exception:  # noqa: BLE001 — 无工具箱时退化为裸 id
+                def _tk_brief_meta(tid: str) -> dict[str, str]:
+                    return {"id": tid, "name": tid[:12], "kind": "tool"}
+
+            def _pick_meta(record: dict[str, Any]) -> dict[str, Any]:
+                meta_row = dict(record)
+                if record.get("floated"):
+                    item_meta = _tk_brief_meta(str(record.get("item_id") or ""))
+                    meta_row.update(item_meta)
+                return meta_row
+
+            usage = {
+                "toolkits": [_tk_brief_meta(tid) for tid in toolkit_ids],
+                "mcp_calls": [
+                    {
+                        "tool": str(r.get("tool") or ""),
+                        "ok": bool(r.get("ok")),
+                        "blocked": bool(r.get("blocked")),
+                    }
+                    for r in mcp_results
+                ],
+                "searches": [
+                    {
+                        "query": str(r.get("query") or ""),
+                        "candidates": len(r.get("candidates") or []),
+                    }
+                    for r in toolkit_meta_out.records
+                    if r.get("op") == "search"
+                ],
+                "picks": [
+                    _pick_meta(r)
+                    for r in toolkit_meta_out.records
+                    if r.get("op") == "pick"
+                ],
+            }
+            call_names = [c["tool"] for c in usage["mcp_calls"] if c["tool"]]
+            events.append(
+                {
+                    "stage": stage,
+                    "role": role.value,
+                    "kind": "toolkit_usage",
+                    "message": (
+                        f"工具使用 · MCP 调用 {len(call_names)} 次"
+                        + (f"（{', '.join(call_names[:5])}）" if call_names else "")
+                        + f" · 检索 {len(usage['searches'])} 次 · 上浮 {len(usage['picks'])} 项"
+                    ),
+                    "data": usage,
+                }
+            )
+
+        # 元工具状态推进：pick 预算按阶段累计；上浮条目去重集合按阶段推进；
+        # skill_run 预算按"实际执行过"的次数累计（校验拒绝不消耗预算）
+        pick_budget = dict(state.get("toolkit_pick_budget") or {})
+        floats_map = dict(state.get("toolkit_floats") or {})
+        skill_budget = dict(state.get("skill_run_budget") or {})
+        if any(r.get("op") == "pick" and r.get("floated") for r in toolkit_meta_out.records):
+            pick_budget[stage] = int(pick_budget.get(stage, 0)) + 1
+        new_floats = [
+            r["item_id"]
+            for r in toolkit_meta_out.records
+            if r.get("op") == "pick" and r.get("floated")
+        ]
+        if new_floats:
+            floats_map[stage] = list(floats_map.get(stage) or []) + new_floats
+        executed_runs = sum(
+            1 for r in toolkit_meta_out.records if r.get("op") == "skill_run" and r.get("executed")
+        )
+        if executed_runs:
+            skill_budget[stage] = int(skill_budget.get(stage, 0)) + executed_runs
 
         return {
             **state,
@@ -785,6 +1174,23 @@ def build_graph_from_template(
             "events": events,
             "status": "running",
             "human_instruction": None,
+            "toolkit_briefs": (
+                # 仅当本阶段发生了上浮才更新 briefs，避免每步无谓覆盖
+                dict(state.get("toolkit_briefs") or {}) | (
+                    {
+                        f"stage:{stage}": (
+                            (dict(state.get("toolkit_briefs") or {}).get(f"stage:{stage}") or "")
+                            + "\n\n"
+                            + toolkit_meta_out.brief_append
+                        ).strip()
+                    }
+                    if toolkit_meta_out.brief_append
+                    else {}
+                )
+            ),
+            "toolkit_pick_budget": pick_budget,
+            "toolkit_floats": floats_map,
+            "skill_run_budget": skill_budget,
             # consumed by this node's conditional edge; cleared on every entry
             "handoff_target": None,
             # on_approval 回写标记：仅当 HITL 放行重入时置 True，消费后即清
@@ -875,6 +1281,13 @@ def build_graph_from_template(
         return node
 
     async def done_node(state: PipelineState) -> PipelineState:
+        # 任务结束：回收该任务名下全部 MCP 池实例（含 stateful，防会话滞留）
+        try:
+            from sortie_deck.mcp_runtime import get_mcp_pool
+
+            await get_mcp_pool().release_task(str(state.get("initiative_id") or ""))
+        except Exception:  # noqa: BLE001 — 池回收失败不影响任务收尾
+            pass
         events = list(state.get("events") or [])
         events.append({"stage": "done", "kind": "transition", "message": "Initiative completed"})
         return {**state, "stage": "done", "status": "done", "events": events}
