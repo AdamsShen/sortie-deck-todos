@@ -97,6 +97,12 @@ class Settings(BaseSettings):
     # Allow skill scripts to actually be *executed* (not just stored).
     skill_run_enabled: bool = True
     skill_run_timeout_seconds: float = 30.0
+    # --- MCP session pool ----------------------------------------------------
+    # stdio servers get one instance per (item, task); reused within the task,
+    # idle-evicted after ttl (no in-flight calls) with a global LRU cap.
+    mcp_pool_enabled: bool = True
+    mcp_pool_ttl_seconds: float = 300.0
+    mcp_pool_max_instances: int = 50
     # --- human escalation ---------------------------------------------------
     # Push undecidable questions to a human and pause until they answer.
     # With no channel configured the question still lands in the decision centre

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import re
 import threading
 import zipfile
@@ -15,6 +16,8 @@ from sortie_deck.models import new_id, utc_now
 ToolkitKind = Literal["tool", "mcp", "skill"]
 ToolRuntime = Literal["cli", "http", "function", "plugin"]
 McpTransport = Literal["stdio", "sse", "http"]
+
+logger = logging.getLogger(__name__)
 
 
 class SkillScript(BaseModel):
@@ -55,6 +58,9 @@ class ToolkitItem(BaseModel):
     executable: bool = False
     # Write operations still need a human confirmation before running
     read_only: bool = True
+    # 有状态 server（浏览器会话/登录态等）：池内每任务独占实例、不做空闲共享，
+    # 防止跨任务状态泄露（对齐方案文档 3.5 节）
+    stateful: bool = False
     author_id: str = ""
     author_name: str = ""
     created_at: str = Field(default_factory=lambda: utc_now().isoformat())
@@ -83,6 +89,7 @@ class CreateToolkitRequest(BaseModel):
     capabilities: list[str] = Field(default_factory=list)
     executable: bool = False
     read_only: bool = True
+    stateful: bool = False
 
 
 class UpdateToolkitRequest(BaseModel):
@@ -106,6 +113,7 @@ class UpdateToolkitRequest(BaseModel):
     capabilities: list[str] | None = None
     executable: bool | None = None
     read_only: bool | None = None
+    stateful: bool | None = None
 
 
 class ImportToolkitRequest(BaseModel):
@@ -478,6 +486,7 @@ class ToolkitStore:
             capabilities=[c.strip() for c in req.capabilities if c.strip()],
             executable=req.executable,
             read_only=req.read_only,
+            stateful=req.stateful,
             author_id=author_id,
             author_name=author_name,
         )
