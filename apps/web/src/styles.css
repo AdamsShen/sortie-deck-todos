@@ -2912,6 +2912,29 @@ textarea {
   margin-top: 0.35rem;
 }
 
+/* 节点详情 · 工具调用条（StageInspect 实时展示 tool/mcp/skill 使用） */
+.stage-toolkit-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.75rem;
+}
+
+.stage-toolkit-strip .toolkit-chip {
+  cursor: default;
+}
+
+.stage-toolkit-strip .toolkit-chip.toolkit-fail {
+  border-color: #ff6b6b;
+  color: #ff6b6b;
+  background: rgba(255, 107, 107, 0.08);
+}
+
+.stage-toolkit-strip .toolkit-search-tag {
+  border-style: dashed;
+  opacity: 0.85;
+}
+
 .toolkit-chip {
   appearance: none;
   border: 1px solid var(--line);

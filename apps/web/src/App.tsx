@@ -2616,6 +2616,7 @@ export default function App() {
                 executor: lang === "zh" ? "执行器" : "Executor",
                 chat: lang === "zh" ? "频道" : "Channel",
                 consult: lang === "zh" ? "上下游确认" : "Consult review",
+                tools: lang === "zh" ? "工具调用" : "Toolkit usage",
                 reveal: lang === "zh" ? "打开目录" : "Open folder",
               }}
             />

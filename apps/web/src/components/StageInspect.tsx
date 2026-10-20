@@ -22,9 +22,44 @@ type Props = {
     executor: string;
     chat: string;
     consult: string;
+    tools: string;
     reveal?: string;
   };
 };
+
+type ToolkitChip = { key: string; kind: string; name: string; tone: "ok" | "fail" | "" };
+
+/** 从 toolkit_usage 事件抽取结构化 chips（绑定 / 实际调用 / 检索 / 上浮）。 */
+function toolkitChips(events: TimelineEvent[]): ToolkitChip[] {
+  const chips: ToolkitChip[] = [];
+  const seen = new Set<string>();
+  const push = (key: string, kind: string, name: string, tone: ToolkitChip["tone"] = "") => {
+    if (!name || seen.has(key)) return;
+    seen.add(key);
+    chips.push({ key, kind, name, tone });
+  };
+  for (const e of events) {
+    if (e.kind !== "toolkit_usage") continue;
+    const data = (e.data || {}) as {
+      toolkits?: { id: string; name: string; kind: string }[];
+      mcp_calls?: { tool: string; ok: boolean; blocked: boolean }[];
+      searches?: { query: string; candidates: number }[];
+      picks?: { item_id: string; name?: string; kind?: string; floated?: boolean }[];
+    };
+    for (const t of data.toolkits || []) push(`bound:${t.id}`, t.kind, t.name);
+    for (const c of data.mcp_calls || [])
+      push(
+        `call:${e.message}:${c.tool}:${c.ok ? "ok" : "fail"}`,
+        "mcp",
+        `${c.tool}${c.ok ? "" : c.blocked ? " ⛔" : " ×"}`,
+        c.ok ? "ok" : "fail",
+      );
+    for (const p of data.picks || [])
+      if (p.floated) push(`pick:${p.item_id}`, p.kind || "tool", p.name || p.item_id.slice(0, 12));
+    for (const s of data.searches || []) push(`search:${s.query}`, "search", `${s.query} (${s.candidates})`);
+  }
+  return chips;
+}
 
 function isMarkdown(path: string, kind: string): boolean {
   return looksLikeMarkdown(path) || looksLikeMarkdown(kind);
@@ -80,6 +115,9 @@ export function StageInspect({
   const loops = useMemo(() => {
     return events.filter((e) => e.kind === "info" || e.kind === "error").length;
   }, [events]);
+
+  // 工具调用总览：本阶段绑定/实际调用的 tool·mcp·skill（实时，随 SSE update 刷新）
+  const usageChips = useMemo(() => toolkitChips(events), [events]);
 
   const roleAgent = useMemo(() => {
     const specs = initiative.meta?.pipeline_specs as { id: string; role?: string }[] | undefined;
@@ -150,6 +188,27 @@ export function StageInspect({
 
       <div className="stage-inspect-grid">
         <div className="stage-inspect-col">
+          {usageChips.length > 0 ? (
+            <>
+              <div className="panel-label">{labels.tools}</div>
+              <div className="stage-toolkit-strip">
+                {usageChips.map((chip) =>
+                  chip.kind === "search" ? (
+                    <span key={chip.key} className="toolkit-chip toolkit-search-tag">
+                      search · {chip.name}
+                    </span>
+                  ) : (
+                    <span
+                      key={chip.key}
+                      className={`toolkit-chip on kind-${chip.kind} ${chip.tone === "fail" ? "toolkit-fail" : ""}`}
+                    >
+                      {chip.kind}/{chip.name}
+                    </span>
+                  ),
+                )}
+              </div>
+            </>
+          ) : null}
           <div className="panel-label">{labels.consult}</div>
           {consultThread.length === 0 ? (
             <p className="empty-queue">{labels.empty}</p>
