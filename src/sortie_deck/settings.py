@@ -108,6 +108,14 @@ class Settings(BaseSettings):
     # 复用 weknora_base_url / weknora_api_key；KB id 为空则始终降级 local。
     toolkit_recall_backend: str = "local"
     toolkit_weknora_kb_id: str | None = None
+    # 阶段入口主动召回（模式 1.5）：每个阶段节点执行前由编排层直接 recall
+    # （查询 = 角色+阶段名+阶段标签+任务 brief 摘要），分数过阈值的条目经探活、
+    # 去重后注入阶段 brief；mcp 回写 stage_toolkits、skill 并入 toolkit_floats。
+    # 关闭时零行为变更；与 loadout_auto（创建时 JIT）、toolkit_search（模式 2）互不影响。
+    loadout_stage_recall: bool = True
+    # 主动召回的最低分阈值：召回结果全部低于该分数时不注入（"无需则不调用"的实现）。
+    # 打分口径同 loadout._score（能力标签 1.0 / tags 0.6 / 正文 0.25，WeKnora 复合分 0-1）。
+    loadout_recall_min_score: float = 0.2
     # --- MCP session pool ----------------------------------------------------
     # stdio servers get one instance per (item, task); reused within the task,
     # idle-evicted after ttl (no in-flight calls) with a global LRU cap.

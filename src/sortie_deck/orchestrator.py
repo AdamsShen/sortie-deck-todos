@@ -732,10 +732,17 @@ class Orchestrator:
                 continue
             role = str(stage.get("role") or "")
             label = str(stage.get("label") or stage.get("label_en") or "")
+            # brief 摘要参与召回：只有角色名/节点名时词元太短，难以命中
+            # 库内以描述性 summary/tags/capabilities 表达的条目
+            brief_snippet = (ini.brief or "").strip()[:300]
             needs = [
                 CapabilityNeed(capability=f"{role} {name}", reason="stage role and node id"),
                 CapabilityNeed(capability=label or name, reason="stage label"),
             ]
+            if brief_snippet:
+                needs.append(
+                    CapabilityNeed(capability=brief_snippet, reason="mission brief summary")
+                )
             try:
                 plan = await build_loadout(
                     store=_toolkit_store,
