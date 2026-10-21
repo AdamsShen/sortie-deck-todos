@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<!--
+  Sortie Deck · 主题面板重设计 V2 — 「外观预览」参照版
+  ============================================================
+  Assumptions:
+  1. 面板仍是顶栏「主题」按钮下的 popover（宽 ~300px），不是全屏设置页。
+  2. 功能六件套以代码实际为准（apps/web/src/App.tsx:524-615）:
+     主题选择(纸/墨) · 背景图 URL · 应用/上传/清除 · 音效开关 · 背景音乐开关
+  3. 背景预览用内联渐变占位（真实业务里是 /backgrounds/*.webp）。
+  设计逻辑: 现实参照 — Arc Browser「自定义空间」与 Notion「Appearance」弹层的范式迁移。
+  两者的共性: ① 主题选择用「缩小的真实界面预览」而不是抽象色块，所见即所得；
+  ② 设置按「外观 / 壁纸 / 声音」分组，组间留白 + 组内分段控件；③ 开关用现代
+  pill switch，状态一眼可读；④ 弹层有明确的最大宽度和 16px 呼吸边距。
+  迁移到 Sortie Deck: 把编辑部风的双主题（纸/墨）渲染成两台迷你任务板预览，
+  点击即换整页；壁纸区保留 URL 直填（这是本产品的实际工作流），但收进一行。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sortie Deck · 主题面板 V2 外观预览</title>
+<style>
+  :root {
+    /* 纸 · 浅色（styles.css:1-25） */
+    --void: #f6f9fc; --deep: #edf1f7; --panel: #ffffff; --panel-2: #f8fafd;
+    --line: #e3e8ee; --line-hot: #cbd2dc; --text: #1a1f36; --muted: #697386;
+    --signal: #0e9f6e; --signal-dim: #dff2e9; --copper: #3b5bdb;
+    --serif: "Songti SC", "Noto Serif SC", "Source Han Serif SC", Georgia, serif;
+    --font: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --radius: 10px;
+    --shadow: 0 20px 60px rgba(26, 31, 54, 0.16), 0 2px 8px rgba(26, 31, 54, 0.06);
+  }
+  [data-theme="ink"] {
+    /* 墨 · 暗色（styles.css:27-50） */
+    --void: #171a21; --deep: #1c2029; --panel: #20242d; --panel-2: #262b35;
+    --line: #32363f; --line-hot: #454a55; --text: #ece9e1; --muted: #8b8a80;
+    --signal: #3fd68f; --signal-dim: #24422f; --copper: #7b96f0;
+    --shadow: 0 20px 60px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.3);
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    font-family: var(--font); color: var(--text); background: var(--void);
+    min-height: 100vh; transition: background-color 0.35s ease, color 0.25s ease;
+  }
+
+  /* ───── 场景 ───── */
+  .scene { min-height: 100vh; display: flex; flex-direction: column; }
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 13px 26px; border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand-mark {
+    width: 30px; height: 30px; border-radius: 8px; background: var(--text); color: var(--panel);
+    display: grid; place-items: center; font-family: var(--serif); font-size: 15px;
+  }
+  .brand h1 { font-family: var(--serif); font-size: 16px; font-weight: 600; }
+  .brand small { display: block; font-size: 11px; color: var(--muted); }
+  .topnav { display: flex; gap: 2px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 3px; }
+  .topnav button {
+    font-size: 13px; color: var(--muted); background: none; border: none;
+    padding: 6px 12px; border-radius: 6px; cursor: pointer;
+  }
+  .topnav button.on { color: var(--text); background: var(--panel); box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+  .topbar-right { display: flex; align-items: center; gap: 12px; }
+
+  .theme-dock { position: relative; }
+  .theme-btn {
+    display: flex; align-items: center; gap: 7px; font-size: 13px;
+    color: var(--text); background: var(--panel-2); border: 1px solid var(--line-hot);
+    border-radius: 8px; padding: 7px 13px; cursor: pointer;
+  }
+  .theme-btn svg { width: 14px; height: 14px; }
+
+  /* ───── V2 面板: 外观预览 ───── */
+  .appearance {
+    position: absolute; right: 0; top: calc(100% + 10px); width: 312px;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 14px; box-shadow: var(--shadow); z-index: 30;
+    padding: 16px; display: flex; flex-direction: column; gap: 18px;
+    animation: pop 0.18s ease;
+  }
+  @keyframes pop { from { opacity: 0; transform: translateY(-4px) scale(0.98); } }
+
+  .ap-head { display: flex; align-items: center; justify-content: space-between; }
+  .ap-head h2 { font-family: var(--serif); font-size: 15px; font-weight: 600; }
+  .ap-head span { font-size: 11px; color: var(--muted); }
+
+  .ap-group > .g-label {
+    font-size: 11px; font-weight: 600; color: var(--muted);
+    letter-spacing: 0.02em; margin-bottom: 8px;
+  }
+
+  /* 主题: 两台迷你任务板，渲染真实布局比例 */
+  .theme-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .tcard {
+    border: 1.5px solid var(--line); border-radius: 10px; overflow: hidden;
+    background: none; padding: 0; cursor: pointer; text-align: left;
+    transition: border-color 0.15s ease, transform 0.15s ease;
+  }
+  .tcard:hover { transform: translateY(-1px); }
+  .tcard[aria-pressed="true"] { border-color: var(--signal); box-shadow: 0 0 0 3px var(--signal-dim); }
+  .tcard-view { height: 74px; padding: 7px 8px; display: flex; flex-direction: column; gap: 4px; }
+  /* 迷你预览内部结构: 顶栏 / 导航点 / 卡片 */
+  .tv-bar { height: 8px; border-radius: 2px; display: flex; align-items: center; gap: 2px; padding: 0 3px; }
+  .tv-bar i { width: 3px; height: 3px; border-radius: 50%; background: currentColor; opacity: 0.35; }
+  .tv-bar i:first-child { background: var(--mini-signal); opacity: 1; }
+  .tv-title { height: 6px; width: 46%; border-radius: 2px; background: currentColor; opacity: 0.9; }
+  .tv-line { height: 3px; border-radius: 2px; background: currentColor; opacity: 0.2; }
+  .tv-card { flex: 1; border-radius: 3px; border: 1px solid currentColor; border-color: color-mix(in srgb, currentColor 18%, transparent); padding: 3px; display: flex; flex-direction: column; gap: 2px; }
+  .tcard[data-mini="paper"] { --mini-signal: #0e9f6e; }
+  .tcard[data-mini="ink"]   { --mini-signal: #3fd68f; }
+  .tcard[data-mini="paper"] .tcard-view { background: #f6f9fc; color: #1a1f36; }
+  .tcard[data-mini="ink"]   .tcard-view { background: #171a21; color: #ece9e1; }
+  .tcard-meta {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 6px 9px; font-size: 12px; font-weight: 500;
+    background: var(--panel-2); border-top: 1px solid var(--line);
+  }
+  .tcard-meta em { font-style: normal; font-size: 10px; font-weight: 400; color: var(--muted); font-family: var(--mono); }
+
+  /* 壁纸: 一行 URL + 紧凑动作条 */
+  .wall-row { display: flex; gap: 6px; }
+  .wall-row input {
+    flex: 1; min-width: 0; font-size: 12px; color: var(--text);
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+    padding: 8px 10px; outline: none; transition: border-color 0.15s ease;
+  }
+  .wall-row input:focus { border-color: var(--copper); }
+  .wall-row button {
+    flex: none; font-size: 12px; border: 1px solid var(--line-hot); border-radius: 8px;
+    background: var(--panel); color: var(--text); padding: 0 12px; cursor: pointer;
+  }
+  .wall-row button.primary { background: var(--text); color: var(--panel); border-color: var(--text); }
+  .wall-links { display: flex; justify-content: space-between; margin-top: 8px; }
+  .wall-links button {
+    background: none; border: none; padding: 0; font-size: 11px;
+    color: var(--copper); cursor: pointer;
+  }
+  .wall-links button:hover { text-decoration: underline; }
+
+  /* 声音: pill switch */
+  .snd-list { display: flex; flex-direction: column; gap: 4px; }
+  .snd-item {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 7px 10px; border-radius: 8px; cursor: pointer;
+    transition: background 0.15s ease;
+  }
+  .snd-item:hover { background: var(--panel-2); }
+  .snd-item .name { font-size: 13px; }
+  .snd-item .name small { display: block; font-size: 10px; color: var(--muted); margin-top: 1px; }
+  .pill { position: relative; width: 34px; height: 20px; flex: none; }
+  .pill input { position: absolute; inset: 0; opacity: 0; cursor: pointer; z-index: 1; }
+  .pill .tk {
+    position: absolute; inset: 0; border-radius: 999px; background: var(--line-hot);
+    transition: background 0.2s ease;
+  }
+  .pill .kn {
+    position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+    background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+    transition: transform 0.2s ease;
+  }
+  .pill input:checked ~ .tk { background: var(--signal); }
+  .pill input:checked ~ .kn { transform: translateX(14px); }
+
+  .ap-foot {
+    display: flex; align-items: center; justify-content: space-between;
+    padding-top: 12px; border-top: 1px solid var(--line);
+    font-size: 11px; color: var(--muted);
+  }
+
+  /* 任务板示意 */
+  .board { flex: 1; padding: 26px; opacity: 0.78; }
+  .board h3 { font-family: var(--serif); font-size: 20px; margin-bottom: 4px; }
+  .board > p { font-size: 13px; color: var(--muted); margin-bottom: 16px; }
+  .task {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 13px 16px; margin-bottom: 10px; max-width: 560px;
+  }
+  .task b { font-size: 14px; font-weight: 600; }
+  .task span { display: block; font-size: 11px; color: var(--muted); margin-top: 4px; }
+</style>
+</head>
+<body data-theme="paper">
+<div class="scene">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">缩</div>
+      <div>
+        <h1>Sortie Deck</h1>
+        <small>建缩小镇 · 共交付，无传话</small>
+      </div>
+    </div>
+    <nav class="topnav">
+      <button>作战图</button>
+      <button class="on">任务</button>
+      <button>知识库</button>
+      <button>角色工坊</button>
+    </nav>
+    <div class="topbar-right">
+      <div class="theme-dock">
+        <button class="theme-btn" id="themeBtn">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6"/><path d="M8 2v12M2 8h12" opacity="0.4"/></svg>
+          主题
+        </button>
+
+        <!-- ═══ V2 外观预览面板 ═══ -->
+        <div class="appearance" role="dialog" aria-label="主题设置">
+          <div class="ap-head">
+            <h2>外观</h2>
+            <span>即时生效</span>
+          </div>
+
+          <div class="ap-group">
+            <div class="g-label">主题</div>
+            <div class="theme-cards" id="themeCards">
+              <button class="tcard" data-mini="paper" aria-pressed="true">
+                <span class="tcard-view">
+                  <span class="tv-bar"><i></i><i></i><i></i></span>
+                  <span class="tv-title"></span>
+                  <span class="tv-line"></span>
+                  <span class="tv-card">
+                    <span class="tv-line" style="width:70%"></span>
+                    <span class="tv-line" style="width:45%"></span>
+                  </span>
+                </span>
+                <span class="tcard-meta">纸 · 浅色<em>默认</em></span>
+              </button>
+              <button class="tcard" data-mini="ink" aria-pressed="false">
+                <span class="tcard-view">
+                  <span class="tv-bar"><i></i><i></i><i></i></span>
+                  <span class="tv-title"></span>
+                  <span class="tv-line"></span>
+                  <span class="tv-card">
+                    <span class="tv-line" style="width:70%"></span>
+                    <span class="tv-line" style="width:45%"></span>
+                  </span>
+                </span>
+                <span class="tcard-meta">墨 · 暗色<em>INK</em></span>
+              </button>
+            </div>
+          </div>
+
+          <div class="ap-group">
+            <div class="g-label">壁纸</div>
+            <div class="wall-row">
+              <input type="text" id="bgUrl" placeholder="粘贴图片链接或 /backgrounds/*.webp" value="https://… /backgrounds/dawn.webp">
+              <button class="primary" id="bgApply">应用</button>
+            </div>
+            <div class="wall-links">
+              <button id="bgUpload">上传本地图片…</button>
+              <button id="bgClear">清除壁纸</button>
+            </div>
+          </div>
+
+          <div class="ap-group">
+            <div class="g-label">声音</div>
+            <div class="snd-list">
+              <label class="snd-item">
+                <span class="name">界面音效<small>切换、开合时的反馈声</small></span>
+                <span class="pill"><input type="checkbox" checked><span class="tk"></span><span class="kn"></span></span>
+              </label>
+              <label class="snd-item">
+                <span class="name">背景音乐<small>小镇环境音，循环播放</small></span>
+                <span class="pill"><input type="checkbox"><span class="tk"></span><span class="kn"></span></span>
+              </label>
+            </div>
+          </div>
+
+          <div class="ap-foot">
+            <span>设置保存在本机</span>
+            <span id="footState">纸 · 浅色</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="board">
+    <h3>任务板</h3>
+    <p>点「＋ 新开任务」进入建队页，或直接填写简要导入。</p>
+    <div class="task"><b>1111111</b><span>intake · 12 人在小队 · 集成中</span></div>
+    <div class="task"><b>继续</b><span>done · 12 人在小队 · 已 fulfill</span></div>
+  </main>
+</div>
+
+<script>
+  // 纸/墨切换: 预览卡选中态 + 整页换主题 + 页脚状态同步
+  var cards = document.querySelectorAll(".tcard");
+  var foot = document.getElementById("footState");
+  cards.forEach(function (c) {
+    c.addEventListener("click", function () {
+      cards.forEach(function (q) { q.setAttribute("aria-pressed", "false"); });
+      c.setAttribute("aria-pressed", "true");
+      var ink = c.dataset.mini === "ink";
+      document.body.dataset.theme = ink ? "ink" : "paper";
+      foot.textContent = ink ? "墨 · 暗色" : "纸 · 浅色";
+    });
+  });
+  // 应用壁纸: 演示用渐变占位代替真实 webp
+  document.getElementById("bgApply").addEventListener("click", function () {
+    if (!document.getElementById("bgUrl").value.trim()) return;
+    document.querySelector(".board").style.background =
+      "linear-gradient(100deg, transparent 45%, rgba(59,91,219,0.09) 45% 66%, rgba(14,159,110,0.08) 66%)";
+  });
+  document.getElementById("bgClear").addEventListener("click", function () {
+    document.getElementById("bgUrl").value = "";
+    document.querySelector(".board").style.background = "";
+  });
+</script>
+</body>
+</html>

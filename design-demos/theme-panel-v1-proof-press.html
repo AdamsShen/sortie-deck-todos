@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<!--
+  Sortie Deck · 主题面板重设计 V1 — 「印刷校样」瑞士网格版
+  ============================================================
+  Assumptions:
+  1. 面板仍是 320px 级 popover，锚在顶栏「主题」按钮下，不改为全屏设置页。
+  2. 功能六件套以代码实际为准（apps/web/src/App.tsx:524-615）:
+     主题选择(纸/墨) · 背景图 URL · 背景/上传/清除 · 音效开关 · 背景音乐开关
+     截图里的「桌面/背景显示」按代码无对应实现，本版不保留。
+  3. 背景预览用内联渐变占位（真实业务里是 /backgrounds/*.webp）。
+  设计逻辑: 秒数轮盘 12 → 13 号 → 瑞士印刷网格。
+  核心想法: 把「主题面板」做成一张印刷校样单——发丝线分栏、mono 角标、
+  每个分区像版面上的一个「版框」，选中态用印刷套准十字而不是高亮色块。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sortie Deck · 主题面板 V1 印刷校样</title>
+<style>
+  :root {
+    /* 纸 · 浅色（与 styles.css:1-25 对齐） */
+    --void: #f6f9fc;
+    --deep: #edf1f7;
+    --panel: #ffffff;
+    --panel-2: #f8fafd;
+    --line: #e3e8ee;
+    --line-hot: #cbd2dc;
+    --text: #1a1f36;
+    --muted: #697386;
+    --signal: #0e9f6e;
+    --signal-dim: #dff2e9;
+    --copper: #3b5bdb;
+    --danger: #c9503a;
+    --serif: "Songti SC", "Noto Serif SC", "Source Han Serif SC", Georgia, serif;
+    --font: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --shadow: 0 18px 50px rgba(26, 31, 54, 0.14);
+  }
+  [data-theme="ink"] {
+    /* 墨 · 暗色（与 styles.css:27-50 对齐） */
+    --void: #171a21;
+    --deep: #1c2029;
+    --panel: #20242d;
+    --panel-2: #262b35;
+    --line: #32363f;
+    --line-hot: #454a55;
+    --text: #ece9e1;
+    --muted: #8b8a80;
+    --signal: #3fd68f;
+    --signal-dim: #24422f;
+    --copper: #7b96f0;
+    --danger: #e57760;
+    --shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    font-family: var(--font);
+    color: var(--text);
+    background: var(--void);
+    min-height: 100vh;
+    transition: background-color 0.35s ease, color 0.25s ease;
+  }
+
+  /* ───── 场景: 模拟任务板做底，衬出 popover ───── */
+  .scene { min-height: 100vh; display: flex; flex-direction: column; }
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 28px;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+  }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand-mark {
+    width: 30px; height: 30px; background: var(--text); color: var(--panel);
+    display: grid; place-items: center; font-family: var(--serif); font-size: 15px;
+  }
+  .brand h1 { font-family: var(--serif); font-size: 17px; font-weight: 600; letter-spacing: 0.02em; }
+  .brand small { display: block; font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: 0.12em; }
+  .topnav { display: flex; gap: 4px; }
+  .topnav button {
+    font-family: var(--font); font-size: 13px; color: var(--muted);
+    background: none; border: none; padding: 7px 12px; cursor: pointer;
+  }
+  .topnav button.on { color: var(--signal); background: var(--signal-dim); }
+  .topbar-right { display: flex; align-items: center; gap: 14px; }
+
+  /* 主题按钮 + 锚定面板 */
+  .theme-dock { position: relative; }
+  .theme-btn {
+    display: flex; align-items: center; gap: 6px;
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.06em;
+    color: var(--text); background: var(--panel-2);
+    border: 1px solid var(--line-hot); padding: 7px 12px; cursor: pointer;
+  }
+  .theme-btn .dot { width: 7px; height: 7px; background: var(--signal); }
+
+  /* ───── V1 面板: 印刷校样单 ───── */
+  .proof {
+    position: absolute; right: 0; top: calc(100% + 10px); width: 340px;
+    background: var(--panel); border: 1px solid var(--line-hot);
+    box-shadow: var(--shadow); z-index: 30;
+    /* 版框: 校样单四角的套准十字用伪元素画在角上 */
+  }
+  .proof::before, .proof::after,
+  .proof .reg-b::before, .proof .reg-b::after {
+    content: ""; position: absolute; width: 9px; height: 9px; pointer-events: none;
+    border-color: var(--muted); border-style: solid; border-width: 0;
+  }
+  .proof::before { top: -5px; left: -5px; border-top-width: 1px; border-left-width: 1px; }
+  .proof::after  { top: -5px; right: -5px; border-top-width: 1px; border-right-width: 1px; }
+  .proof .reg-b::before { bottom: -5px; left: -5px; border-bottom-width: 1px; border-left-width: 1px; }
+  .proof .reg-b::after  { bottom: -5px; right: -5px; border-bottom-width: 1px; border-right-width: 1px; }
+
+  .proof-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    padding: 12px 14px 10px; border-bottom: 1px solid var(--line);
+  }
+  .proof-head h2 { font-family: var(--serif); font-size: 15px; font-weight: 600; letter-spacing: 0.04em; }
+  .proof-head span { font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: 0.1em; }
+
+  /* 分区标题: mono 小标 + 发丝线，像版面的栏眉 */
+  .sect { padding: 12px 14px 14px; border-bottom: 1px solid var(--line); }
+  .sect:last-child { border-bottom: none; }
+  .sect-tag {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.16em; color: var(--muted);
+  }
+  .sect-tag::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+
+  /* 主题选择: 两块迷你版面预览，纸/墨各一块 */
+  .plate-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .plate {
+    position: relative; text-align: left; cursor: pointer;
+    border: 1px solid var(--line); background: none; padding: 0;
+  }
+  .plate-preview { height: 64px; padding: 8px; display: flex; flex-direction: column; gap: 5px; }
+  .plate-preview .ph-title { height: 7px; width: 55%; background: currentColor; opacity: 0.85; }
+  .plate-preview .ph-line { height: 3px; width: 90%; background: currentColor; opacity: 0.22; }
+  .plate-preview .ph-line.short { width: 62%; }
+  .plate[data-plate="paper"] .plate-preview { background: #f6f9fc; color: #1a1f36; border-bottom: 1px solid #e3e8ee; }
+  .plate[data-plate="ink"]   .plate-preview { background: #171a21; color: #ece9e1; border-bottom: 1px solid #32363f; }
+  .plate-meta {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 6px 8px; font-family: var(--mono); font-size: 11px; color: var(--text);
+  }
+  .plate-meta em { font-style: normal; color: var(--muted); font-size: 9px; letter-spacing: 0.08em; }
+  .plate[aria-pressed="true"] { border-color: var(--text); }
+  /* 选中态: 印刷套准十字，替代色块高亮 */
+  .plate[aria-pressed="true"]::after {
+    content: "+"; position: absolute; top: 3px; right: 6px;
+    font-family: var(--mono); font-size: 11px; color: var(--signal);
+  }
+
+  /* 声音: 表格式两行开关，行间发丝线 */
+  .snd-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 0;
+  }
+  .snd-row + .snd-row { border-top: 1px solid var(--line); }
+  .snd-name { font-size: 13px; }
+  .snd-name small { display: block; font-family: var(--mono); font-size: 9px; color: var(--muted); letter-spacing: 0.08em; margin-top: 2px; }
+  /* 开关: 方形滑轨，滑块带刻线，贴合印刷感 */
+  .snd-sw { position: relative; width: 34px; height: 18px; flex: none; }
+  .snd-sw input { position: absolute; inset: 0; opacity: 0; cursor: pointer; z-index: 1; }
+  .snd-sw .track {
+    position: absolute; inset: 0; border: 1px solid var(--line-hot); background: var(--panel-2);
+    transition: background 0.2s ease, border-color 0.2s ease;
+  }
+  .snd-sw .thumb {
+    position: absolute; top: 2px; left: 2px; width: 14px; height: 12px;
+    background: var(--muted); transition: transform 0.2s ease, background 0.2s ease;
+  }
+  .snd-sw .thumb::after { content: ""; position: absolute; inset: 4px 6px; background: var(--panel); }
+  .snd-sw input:checked ~ .track { border-color: var(--signal); background: var(--signal-dim); }
+  .snd-sw input:checked ~ .thumb { transform: translateX(15px); background: var(--signal); }
+
+  /* 背景: URL 栏做成校样的「图注行」 */
+  .bg-url { display: flex; border: 1px solid var(--line-hot); }
+  .bg-url span {
+    font-family: var(--mono); font-size: 10px; color: var(--muted);
+    padding: 8px 0 8px 10px; letter-spacing: 0.06em; flex: none;
+  }
+  .bg-url input {
+    flex: 1; min-width: 0; border: none; background: none; outline: none;
+    font-family: var(--mono); font-size: 11px; color: var(--text); padding: 8px 10px;
+  }
+  .bg-actions { display: flex; margin-top: 8px; border: 1px solid var(--line-hot); }
+  .bg-actions button {
+    flex: 1; background: none; border: none; border-right: 1px solid var(--line-hot);
+    padding: 8px 0; font-family: var(--font); font-size: 12px; color: var(--text); cursor: pointer;
+    transition: background 0.15s ease;
+  }
+  .bg-actions button:last-child { border-right: none; }
+  .bg-actions button:hover { background: var(--panel-2); }
+  .bg-actions button.primary { background: var(--text); color: var(--panel); }
+  .bg-actions button.primary:hover { background: var(--text); opacity: 0.9; }
+
+  .proof-foot {
+    display: flex; justify-content: space-between; padding: 8px 14px;
+    font-family: var(--mono); font-size: 9px; color: var(--muted); letter-spacing: 0.1em;
+    border-top: 1px solid var(--line);
+  }
+
+  /* 底下的任务板示意（静态，仅作场景衬托） */
+  .board { flex: 1; padding: 28px; opacity: 0.75; }
+  .board h3 { font-family: var(--serif); font-size: 20px; margin-bottom: 4px; }
+  .board p { font-size: 13px; color: var(--muted); margin-bottom: 18px; }
+  .task {
+    background: var(--panel); border: 1px solid var(--line);
+    padding: 14px 16px; margin-bottom: 10px; max-width: 560px;
+  }
+  .task b { font-size: 14px; font-weight: 600; }
+  .task span { display: block; font-family: var(--mono); font-size: 10px; color: var(--muted); margin-top: 5px; letter-spacing: 0.05em; }
+</style>
+</head>
+<body data-theme="paper">
+<div class="scene">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">缩</div>
+      <div>
+        <h1>Sortie Deck</h1>
+        <small>建缩小镇 · 共交付，无传话</small>
+      </div>
+    </div>
+    <nav class="topnav">
+      <button>作战图</button>
+      <button class="on">任务</button>
+      <button>知识库</button>
+      <button>角色工坊</button>
+    </nav>
+    <div class="topbar-right">
+      <div class="theme-dock">
+        <button class="theme-btn" id="themeBtn"><span class="dot"></span>主题</button>
+
+        <!-- ═══ V1 印刷校样面板 ═══ -->
+        <div class="proof" role="dialog" aria-label="主题设置">
+          <span class="reg-b"></span>
+          <div class="proof-head">
+            <h2>版面设置</h2>
+            <span>PROOF · A</span>
+          </div>
+
+          <section class="sect">
+            <div class="sect-tag">外观</div>
+            <div class="plate-row" id="plateRow">
+              <button class="plate" data-plate="paper" aria-pressed="true">
+                <span class="plate-preview">
+                  <span class="ph-title"></span>
+                  <span class="ph-line"></span>
+                  <span class="ph-line short"></span>
+                </span>
+                <span class="plate-meta">纸<em>PAPER</em></span>
+              </button>
+              <button class="plate" data-plate="ink" aria-pressed="false">
+                <span class="plate-preview">
+                  <span class="ph-title"></span>
+                  <span class="ph-line"></span>
+                  <span class="ph-line short"></span>
+                </span>
+                <span class="plate-meta">墨<em>INK</em></span>
+              </button>
+            </div>
+          </section>
+
+          <section class="sect">
+            <div class="sect-tag">声音</div>
+            <div class="snd-row">
+              <div class="snd-name">音效<small>SFX</small></div>
+              <label class="snd-sw">
+                <input type="checkbox" checked id="sfxSw">
+                <span class="track"></span><span class="thumb"></span>
+              </label>
+            </div>
+            <div class="snd-row">
+              <div class="snd-name">背景音乐<small>BGM</small></div>
+              <label class="snd-sw">
+                <input type="checkbox" id="bgmSw">
+                <span class="track"></span><span class="thumb"></span>
+              </label>
+            </div>
+          </section>
+
+          <section class="sect">
+            <div class="sect-tag">背景</div>
+            <div class="bg-url">
+              <span>URL</span>
+              <input type="text" id="bgUrl" placeholder="https://… /backgrounds/*.webp" value="https://… /backgrounds/dawn.webp">
+            </div>
+            <div class="bg-actions">
+              <button class="primary" id="bgApply">应用</button>
+              <button id="bgUpload">上传</button>
+              <button id="bgClear">清除</button>
+            </div>
+          </section>
+
+          <div class="proof-foot">
+            <span>SORTIE-DECK/THEME</span>
+            <span id="footState">纸 · PAPER</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="board">
+    <h3>任务板</h3>
+    <p>点「＋ 新开任务」进入建队页，或直接填写简要导入。</p>
+    <div class="task"><b>1111111</b><span>intake · 12 人在小队 · 集成中</span></div>
+    <div class="task"><b>继续</b><span>done · 12 人在小队 · 已 fulfill</span></div>
+  </main>
+</div>
+
+<script>
+  // 纸/墨切换: 整个 demo 换主题，按钮与页脚同步状态
+  var plates = document.querySelectorAll(".plate");
+  var foot = document.getElementById("footState");
+  plates.forEach(function (p) {
+    p.addEventListener("click", function () {
+      plates.forEach(function (q) { q.setAttribute("aria-pressed", "false"); });
+      p.setAttribute("aria-pressed", "true");
+      var ink = p.dataset.plate === "ink";
+      document.body.dataset.theme = ink ? "ink" : "paper";
+      foot.textContent = ink ? "墨 · INK" : "纸 · PAPER";
+    });
+  });
+  // 应用背景: 演示环境用渐变占位代替真实 webp
+  document.getElementById("bgApply").addEventListener("click", function () {
+    var v = document.getElementById("bgUrl").value.trim();
+    if (!v) return;
+    document.querySelector(".board").style.background =
+      "linear-gradient(105deg, transparent 40%, rgba(59,91,219,0.08) 40% 62%, rgba(14,159,110,0.07) 62%)";
+  });
+  document.getElementById("bgClear").addEventListener("click", function () {
+    document.getElementById("bgUrl").value = "";
+    document.querySelector(".board").style.background = "";
+  });
+</script>
+</body>
+</html>

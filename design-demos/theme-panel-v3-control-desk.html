@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<!--
+  Sortie Deck · 主题面板重设计 V3 — 「控制台」概念版
+  ============================================================
+  Assumptions:
+  1. 面板仍是顶栏「主题」按钮下的 popover（宽 ~340px），不是全屏设置页。
+  2. 功能六件套以代码实际为准（apps/web/src/App.tsx:524-615）:
+     主题选择(纸/墨) · 背景图 URL · 应用/上传/清除 · 音效开关 · 背景音乐开关
+  3. 背景预览用内联渐变占位（真实业务里是 /backgrounds/*.webp）。
+  设计逻辑: 最佳设计师 — Teenage Engineering 的硬件隐喻。
+  为什么是 TE: Sortie Deck 的面板里混着「感觉像设备控制」的东西（音效/BGM 开关）
+  和「感觉像文档设置」的东西（主题/壁纸），现状把它们平铺在一起，气质分裂。
+  TE 的答案是承认它是一台设备: 整个面板是一块石墨面板，主题选择做成 A/B 双通道
+  选择键，声音做成带 LED 的实体拨杆开关，壁纸 URL 是磁带舱标签，动作按钮做成
+  面板功能键。这是三版里最「novel」的一版—— intentionally 概念化。
+  注意: 暗面板即使在纸主题下也保持石墨色，因为设备面板不随文档换纸——
+  这是本版的核心态度（设备是设备的，文档是文档的）。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sortie Deck · 主题面板 V3 控制台</title>
+<style>
+  :root {
+    /* 纸 · 浅色（styles.css:1-25），页面文档部分使用 */
+    --void: #f6f9fc; --panel: #ffffff; --line: #e3e8ee; --text: #1a1f36;
+    --muted: #697386; --signal: #0e9f6e; --signal-dim: #dff2e9;
+    --copper: #3b5bdb;
+    --serif: "Songti SC", "Noto Serif SC", "Source Han Serif SC", Georgia, serif;
+    --font: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  [data-theme="ink"] {
+    --void: #171a21; --panel: #20242d; --line: #32363f; --text: #ece9e1;
+    --muted: #8b8a80; --signal: #3fd68f; --signal-dim: #24422f; --copper: #7b96f0;
+  }
+  /* 设备面板固定色，不随文档主题变 —— TE 面板是硬件，不是纸 */
+  .desk {
+    --dk-panel: #23262b;
+    --dk-well: #1a1c20;
+    --dk-line: #3a3e45;
+    --dk-text: #e8e6df;
+    --dk-mute: #9a9891;
+    --dk-accent: #ff6b35;   /* TE 橙，仅用于活动 LED 与选中键 */
+    --dk-green: #6fce8f;
+    --dk-shadow: 0 24px 60px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255,255,255,0.06);
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    font-family: var(--font); color: var(--text); background: var(--void);
+    min-height: 100vh; transition: background-color 0.35s ease, color 0.25s ease;
+  }
+
+  /* ───── 场景 ───── */
+  .scene { min-height: 100vh; display: flex; flex-direction: column; }
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 13px 26px; border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand-mark {
+    width: 30px; height: 30px; background: var(--text); color: var(--panel);
+    display: grid; place-items: center; font-family: var(--serif); font-size: 15px;
+  }
+  .brand h1 { font-family: var(--serif); font-size: 16px; font-weight: 600; }
+  .brand small { display: block; font-size: 11px; color: var(--muted); }
+  .topnav { display: flex; gap: 4px; }
+  .topnav button { font-size: 13px; color: var(--muted); background: none; border: none; padding: 7px 12px; cursor: pointer; }
+  .topnav button.on { color: var(--signal); background: var(--signal-dim); }
+  .topbar-right { display: flex; align-items: center; gap: 12px; }
+
+  .theme-dock { position: relative; }
+  .theme-btn {
+    display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 12px;
+    color: var(--text); background: var(--panel-2, #f8fafd);
+    border: 1px solid var(--line); padding: 7px 12px; cursor: pointer;
+  }
+  [data-theme="ink"] .theme-btn { background: #262b35; border-color: #454a55; }
+  .theme-btn .led { width: 7px; height: 7px; border-radius: 50%; background: #ff6b35; box-shadow: 0 0 6px rgba(255,107,53,0.8); }
+
+  /* ───── V3 面板: 设备控制台 ───── */
+  .console {
+    position: absolute; right: 0; top: calc(100% + 10px); width: 348px;
+    background: var(--dk-panel); border-radius: 12px; box-shadow: var(--dk-shadow);
+    border: 1px solid #17181b; z-index: 30; padding: 14px 14px 12px;
+    color: var(--dk-text); font-family: var(--mono);
+  }
+  /* 顶部铭牌行 */
+  .console-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 2px 12px; border-bottom: 1px solid var(--dk-line);
+  }
+  .console-head .plate-name { font-size: 12px; letter-spacing: 0.2em; color: var(--dk-text); }
+  .console-head .plate-name b { color: var(--dk-accent); font-weight: 400; }
+  .console-head .screws { display: flex; gap: 5px; }
+  .console-head .screws i {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--dk-well); box-shadow: inset 0 1px 2px rgba(0,0,0,0.8);
+  }
+
+  /* 通道区: A/B 选择键（纸/墨），像音频接口的输入选择 */
+  .ch-zone { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 12px 0; }
+  .ch-key {
+    position: relative; text-align: left; cursor: pointer;
+    background: var(--dk-well); border: 1px solid var(--dk-line);
+    padding: 9px 10px 8px; color: var(--dk-text); font-family: var(--mono);
+    transition: border-color 0.15s ease, background 0.15s ease;
+  }
+  .ch-key .ch-tag { font-size: 9px; letter-spacing: 0.18em; color: var(--dk-mute); display: block; margin-bottom: 4px; }
+  .ch-key .ch-name { font-size: 14px; letter-spacing: 0.1em; }
+  .ch-key .ch-meter { display: flex; gap: 2px; margin-top: 7px; }
+  .ch-key .ch-meter i { width: 9px; height: 4px; background: var(--dk-line); }
+  /* 选中的通道: 橙色描边 + 电平条点亮 */
+  .ch-key[aria-pressed="true"] { border-color: var(--dk-accent); background: #26221e; }
+  .ch-key[aria-pressed="true"] .ch-tag { color: var(--dk-accent); }
+  .ch-key[aria-pressed="true"] .ch-meter i { background: var(--dk-accent); opacity: 0.85; }
+  .ch-key[aria-pressed="true"] .ch-meter i:nth-child(n+4) { opacity: 0.4; }
+
+  /* 拨杆开关区: 音效 / BGM，实体拨杆 + LED */
+  .sw-zone { border-top: 1px solid var(--dk-line); padding: 4px 0 10px; }
+  .lever-row {
+    display: flex; align-items: center; gap: 10px; padding: 8px 2px;
+  }
+  .lever-row + .lever-row { border-top: 1px dashed #2c2f34; }
+  .lever {
+    position: relative; width: 44px; height: 20px; flex: none; cursor: pointer;
+  }
+  .lever input { position: absolute; inset: 0; opacity: 0; cursor: pointer; z-index: 1; }
+  .lever .slot {
+    position: absolute; inset: 4px 0; background: var(--dk-well);
+    border-radius: 3px; box-shadow: inset 0 1px 3px rgba(0,0,0,0.7);
+  }
+  .lever .stick {
+    position: absolute; top: 1px; left: 3px; width: 16px; height: 18px;
+    background: linear-gradient(180deg, #d7d4cc, #a8a59d);
+    border-radius: 3px; box-shadow: 0 2px 4px rgba(0,0,0,0.5);
+    transition: transform 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .lever .stick::after { content: ""; position: absolute; left: 3px; right: 3px; top: 8px; height: 2px; background: #55524b; }
+  .lever input:checked ~ .stick { transform: translateX(22px); background: linear-gradient(180deg, #ffd9c4, #ff9d70); }
+  .lever input:checked ~ .stick::after { background: #b34d1e; }
+  .lever-led { width: 8px; height: 8px; border-radius: 50%; background: #31343a; box-shadow: inset 0 1px 2px rgba(0,0,0,0.8); flex: none; }
+  .lever-row .lbl { font-size: 12px; letter-spacing: 0.12em; }
+  .lever-row .lbl small { display: block; font-size: 8px; letter-spacing: 0.14em; color: var(--dk-mute); margin-top: 2px; }
+  .lever-row .state { margin-left: auto; font-size: 9px; letter-spacing: 0.16em; color: var(--dk-mute); }
+  .lever-row.on .lever-led { background: var(--dk-green); box-shadow: 0 0 7px rgba(111,206,143,0.7); }
+  .lever-row.on .state { color: var(--dk-green); }
+
+  /* 磁带舱: 壁纸 URL + 功能键 */
+  .bay-zone { border-top: 1px solid var(--dk-line); padding-top: 12px; }
+  .bay-label {
+    display: flex; justify-content: space-between; font-size: 9px;
+    letter-spacing: 0.18em; color: var(--dk-mute); margin-bottom: 6px;
+  }
+  .bay {
+    background: var(--dk-well); border: 1px solid var(--dk-line);
+    padding: 8px 10px; display: flex; align-items: center; gap: 8px;
+  }
+  .bay input {
+    flex: 1; min-width: 0; background: none; border: none; outline: none;
+    font-family: var(--mono); font-size: 11px; color: var(--dk-text);
+  }
+  .bay input::placeholder { color: #55575c; }
+  .bay .tape { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--dk-line); flex: none; position: relative; }
+  .bay .tape::after { content: ""; position: absolute; inset: 3px; border-radius: 50%; background: var(--dk-line); }
+  .fn-keys { display: flex; gap: 8px; margin-top: 10px; }
+  .fn-keys button {
+    flex: 1; font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em;
+    background: var(--dk-well); color: var(--dk-text);
+    border: 1px solid var(--dk-line); border-bottom-width: 3px;
+    padding: 9px 0 8px; cursor: pointer;
+    transition: transform 0.08s ease, border-bottom-width 0.08s ease;
+  }
+  .fn-keys button:active { transform: translateY(2px); border-bottom-width: 1px; padding-bottom: 10px; }
+  .fn-keys button.hot { background: #2c231d; border-color: #7a3a1d; color: var(--dk-accent); }
+  .console-foot {
+    display: flex; justify-content: space-between; padding-top: 12px; margin-top: 12px;
+    border-top: 1px solid var(--dk-line);
+    font-size: 8px; letter-spacing: 0.2em; color: var(--dk-mute);
+  }
+
+  /* 任务板示意 */
+  .board { flex: 1; padding: 26px; opacity: 0.78; }
+  .board h3 { font-family: var(--serif); font-size: 20px; margin-bottom: 4px; }
+  .board > p { font-size: 13px; color: var(--muted); margin-bottom: 16px; }
+  .task {
+    background: var(--panel); border: 1px solid var(--line);
+    padding: 13px 16px; margin-bottom: 10px; max-width: 560px;
+  }
+  .task b { font-size: 14px; font-weight: 600; }
+  .task span { display: block; font-family: var(--mono); font-size: 10px; color: var(--muted); margin-top: 5px; }
+</style>
+</head>
+<body data-theme="paper">
+<div class="scene">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">缩</div>
+      <div>
+        <h1>Sortie Deck</h1>
+        <small>建缩小镇 · 共交付，无传话</small>
+      </div>
+    </div>
+    <nav class="topnav">
+      <button>作战图</button>
+      <button class="on">任务</button>
+      <button>知识库</button>
+      <button>角色工坊</button>
+    </nav>
+    <div class="topbar-right">
+      <div class="theme-dock">
+        <button class="theme-btn" id="themeBtn"><span class="led"></span>主题</button>
+
+        <!-- ═══ V3 设备控制台面板 ═══ -->
+        <div class="console desk" role="dialog" aria-label="主题设置">
+          <div class="console-head">
+            <span class="plate-name">FIELD <b>DECK</b> · TP-1</span>
+            <span class="screws"><i></i><i></i></span>
+          </div>
+
+          <!-- 通道选择: 纸 / 墨 -->
+          <div class="ch-zone" id="chZone">
+            <button class="ch-key" data-ch="paper" aria-pressed="true">
+              <span class="ch-tag">CH A</span>
+              <span class="ch-name">纸</span>
+              <span class="ch-meter"><i></i><i></i><i></i><i></i><i></i></span>
+            </button>
+            <button class="ch-key" data-ch="ink" aria-pressed="false">
+              <span class="ch-tag">CH B</span>
+              <span class="ch-name">墨</span>
+              <span class="ch-meter"><i></i><i></i><i></i><i></i><i></i></span>
+            </button>
+          </div>
+
+          <!-- 实体拨杆: 音效 / BGM -->
+          <div class="sw-zone">
+            <div class="lever-row on" id="rowSfx">
+              <span class="lever-led"></span>
+              <label class="lever">
+                <input type="checkbox" checked>
+                <span class="slot"></span><span class="stick"></span>
+              </label>
+              <span class="lbl">音效<small>SFX</small></span>
+              <span class="state">ON</span>
+            </div>
+            <div class="lever-row" id="rowBgm">
+              <span class="lever-led"></span>
+              <label class="lever">
+                <input type="checkbox">
+                <span class="slot"></span><span class="stick"></span>
+              </label>
+              <span class="lbl">背景音乐<small>BGM</small></span>
+              <span class="state">OFF</span>
+            </div>
+          </div>
+
+          <!-- 磁带舱: 壁纸 URL -->
+          <div class="bay-zone">
+            <div class="bay-label"><span>WALLPAPER IN</span><span>WEBP / URL</span></div>
+            <div class="bay">
+              <span class="tape"></span>
+              <input type="text" id="bgUrl" placeholder="装载壁纸链接…" value="https://… /backgrounds/dawn.webp">
+            </div>
+            <div class="fn-keys">
+              <button class="hot" id="bgApply">LOAD 载入</button>
+              <button id="bgUpload">TAPE 上传</button>
+              <button id="bgClear">EJECT 弹出</button>
+            </div>
+          </div>
+
+          <div class="console-foot">
+            <span>SORTIE DECK OS 2.0</span>
+            <span id="footState">CH A · PAPER</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="board">
+    <h3>任务板</h3>
+    <p>点「＋ 新开任务」进入建队页，或直接填写简要导入。</p>
+    <div class="task"><b>1111111</b><span>intake · 12 人在小队 · 集成中</span></div>
+    <div class="task"><b>继续</b><span>done · 12 人在小队 · 已 fulfill</span></div>
+  </main>
+</div>
+
+<script>
+  // 通道切换: A=纸 B=墨，文档区换主题，控制台本体保持石墨色
+  var keys = document.querySelectorAll(".ch-key");
+  var foot = document.getElementById("footState");
+  keys.forEach(function (k) {
+    k.addEventListener("click", function () {
+      keys.forEach(function (q) { q.setAttribute("aria-pressed", "false"); });
+      k.setAttribute("aria-pressed", "true");
+      var ink = k.dataset.ch === "ink";
+      document.body.dataset.theme = ink ? "ink" : "paper";
+      foot.textContent = ink ? "CH B · INK" : "CH A · PAPER";
+    });
+  });
+  // 拨杆行: LED + ON/OFF 状态字同步
+  [["rowSfx"], ["rowBgm"]].forEach(function (id) {
+    var row = document.getElementById(id[0]);
+    var sw = row.querySelector("input");
+    sw.addEventListener("change", function () {
+      row.classList.toggle("on", sw.checked);
+      row.querySelector(".state").textContent = sw.checked ? "ON" : "OFF";
+    });
+  });
+  // 载入壁纸: 演示用渐变占位
+  document.getElementById("bgApply").addEventListener("click", function () {
+    if (!document.getElementById("bgUrl").value.trim()) return;
+    document.querySelector(".board").style.background =
+      "linear-gradient(100deg, transparent 42%, rgba(255,107,53,0.07) 42% 64%, rgba(59,91,219,0.07) 64%)";
+  });
+  document.getElementById("bgClear").addEventListener("click", function () {
+    document.getElementById("bgUrl").value = "";
+    document.querySelector(".board").style.background = "";
+  });
+</script>
+</body>
+</html>
