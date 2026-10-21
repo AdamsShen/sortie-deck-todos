@@ -14,6 +14,7 @@ from the pipeline state). This executor:
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -22,16 +23,47 @@ from sortie_deck.models import CODING_ROLE_VALUES, ENG_BUILD_STAGES, StageContex
 _TOOLKIT_META_PROTOCOL = """Toolkit meta-tool (in-loop capability requests):
 If you are missing a capability (tool / MCP / skill), you may request it from the
 mission toolkit library instead of inventing one:
-1. Ask for candidates by returning this JSON inside your result meta:
-   {"toolkit_search": {"query": "<what you need, free text>", "kinds": ["tool", "mcp", "skill"]}}
+1. Ask for candidates: {"toolkit_search": {"query": "<free text>", "kinds": ["tool", "mcp", "skill"]}}
 2. The orchestrator replies with candidate summaries in your toolkit brief.
 3. To use one, declare: {"toolkit_pick": {"item_id": "<id from candidates>"}}
    Validated items are floated into your context (budget: 8 picks per stage).
-4. To run a script of a picked skill, declare:
-   {"skill_run": {"item_id": "<picked id>", "script": "scripts/x.py", "args": []}}
-   The item must be picked first in this stage; write-looking script names
-   require "confirmed": true. Budget: 4 skill runs per stage.
+   Picked MCP servers become callable via mcp_calls afterwards.
+4. To run a script of a picked skill: {"skill_run": {"item_id": "...", "script": "scripts/x.py", "args": []}}
+   The item must be picked first; write-looking script names require "confirmed": true.
+   Budget: 4 skill runs per stage.
+How to declare intents: put the JSON object(s) inside ONE ```toolkit_intent fenced
+block anywhere in your reply (a single object or an array of objects):
+```toolkit_intent
+{"toolkit_search": {"query": "postgres slow log"}}
+```
+The orchestrator parses the block and fulfils the intents; results arrive in your
+next toolkit brief. Omit the block when you need nothing.
 Disabled or policy-blocked items are never returned."""
+
+# 允许经回复文本解析的意图键（mcp_calls 是既有声明协议，顺路支持真实 harness）
+_TOOLKIT_INTENT_KEYS = frozenset({"toolkit_search", "toolkit_pick", "skill_run", "mcp_calls"})
+_TOOLKIT_INTENT_BLOCK_RE = re.compile(r"```toolkit_intent\s*(.*?)```", re.DOTALL)
+
+
+def _parse_toolkit_intents(text: str) -> dict[str, Any]:
+    """从 harness 回复文本提取元工具意图 → 可并入 StageResult.meta 的 dict。
+
+    协议约定：模型把意图 JSON 包在 ```toolkit_intent 围栏块里（单对象或数组）。
+    解析失败/无块时返回 {}（无意图 = meta 无键，与旧行为一致，零回归）；
+    同类意图多份时后写的覆盖先写的（模型一轮只应声明一次）。
+    """
+    intents: dict[str, Any] = {}
+    for block in _TOOLKIT_INTENT_BLOCK_RE.findall(text or ""):
+        try:
+            payload = json.loads(block.strip())
+        except ValueError:
+            continue
+        for row in payload if isinstance(payload, list) else [payload]:
+            if not isinstance(row, dict):
+                continue
+            for key in _TOOLKIT_INTENT_KEYS & row.keys():
+                intents[key] = row[key]
+    return intents
 
 
 def _toolkit_search_enabled() -> bool:
@@ -183,6 +215,9 @@ class HarnessStageExecutor:
             "files_written": _count_impl_files(workspace),
             "context_tokens": int(pack.get("token_estimate") or 0),
         }
+        # 意图解析层：回复文本里的 ```toolkit_intent 围栏 → StageResult.meta，
+        # 编排层（graph.run_toolkit_meta / _run_mcp_calls）据此兑现
+        meta.update(_parse_toolkit_intents(reply.text or ""))
         if needs_hitl:
             return StageResult(
                 status="needs_hitl",

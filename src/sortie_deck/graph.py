@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypedDict
@@ -19,6 +20,7 @@ from sortie_deck.loadout import (
     SKILL_OUTPUT_FLOAT_LIMIT,
     SKILL_RUN_BUDGET_PER_STAGE,
     pick_candidate,
+    probe_item,
     recall,
     summarize_candidates,
     unfreeze_item,
@@ -218,6 +220,8 @@ async def run_toolkit_meta(
                     notes.append(f"Toolkit pick `{item_id}` rejected: {reason}")
                 else:
                     record["floated"] = True
+                    # kind 供阶段节点回写 stage_toolkits 时过滤 mcp 条目
+                    record["kind"] = item.kind
                     floated.append(item.id)
                     notes.append(unfreeze_item(item))
             outcome.events.append(
@@ -245,6 +249,30 @@ async def run_toolkit_meta(
 
     outcome.brief_append = "\n".join(n for n in notes if n)
     return outcome
+
+
+def merge_picked_toolkits(
+    state: PipelineState, stage: str, records: list[dict[str, Any]]
+) -> dict[str, list[str]]:
+    """把本阶段 pick 上浮的 mcp 条目回写进 stage_toolkits（缺口闭环）。
+
+    背景：_run_mcp_calls 只为 stage_toolkits 里的条目建会话；pick 此前只更新
+    brief 文本，导致上浮的 mcp "看得见调不了"。本函数将 pick 成功（floated）
+    的 mcp item_id 去重追加进 state["stage_toolkits"][stage]，使后续 mcp_calls
+    可真实调用；tool/skill 不回写（前者已在 brief 有端点，后者走 skill_run）。
+    返回新映射，无 pick 时原样返回（避免无谓覆盖 state）。
+    """
+    picked = [
+        str(r.get("item_id"))
+        for r in records
+        if r.get("op") == "pick" and r.get("floated") and r.get("kind") == "mcp"
+    ]
+    if not picked:
+        return dict(state.get("stage_toolkits") or {})
+    stage_toolkits = dict(state.get("stage_toolkits") or {})
+    existing = list(stage_toolkits.get(stage) or [])
+    stage_toolkits[stage] = existing + [i for i in picked if i not in existing]
+    return stage_toolkits
 
 
 async def _handle_skill_run(
@@ -335,6 +363,98 @@ async def _handle_skill_run(
     outcome.records.append(record)
 
 
+@dataclass
+class StageRecallOutcome:
+    """阶段入口主动召回的结果（run_stage_recall 的返回值）。
+
+    brief_append 并入阶段 brief 与 toolkit_briefs["stage:{stage}"]；
+    mcp_ids 回写 stage_toolkits（mcp_calls 可真实建会话调用）、skill_ids 并入
+    toolkit_floats（满足 skill_run 的先 pick 校验）、tool_ids 仅并入 toolkit_ids
+    （tool 无执行通道，端点文本已在 brief）。
+    """
+
+    brief_append: str = ""
+    tool_ids: list[str] = field(default_factory=list)
+    mcp_ids: list[str] = field(default_factory=list)
+    skill_ids: list[str] = field(default_factory=list)
+
+    @property
+    def item_ids(self) -> list[str]:
+        return [*self.tool_ids, *self.mcp_ids, *self.skill_ids]
+
+
+async def run_stage_recall(
+    store: Any,
+    *,
+    stage: str,
+    queries: list[str],
+    bound_ids: set[str] | None = None,
+    floated_ids: set[str] | None = None,
+    allowed_ids: set[str] | None = None,
+    min_score: float = 0.2,
+    switch: bool = True,
+) -> StageRecallOutcome:
+    """阶段入口主动召回：多路 recall → 合并取最高分 → 阈值 → 去重 → 探活 → 上浮。
+
+    为什么要多路短查询而不是拼一条长查询：loadout._score 按查询词元数归一
+    （分数 = 命中权重 / 查询词元数），长查询会稀释每个条目的得分——
+    "角色+阶段+标签+brief" 拼一起后纯文本匹配只有 ~0.08，全部被阈值卡死。
+    拆成聚焦短查询（角色+阶段 / 阶段标签 / brief 摘要各一路）后，单路词元少、
+    分数有区分度；同条目多路命中取最高分。
+
+    输入: store（工具箱存储）、queries（聚焦短查询列表，可为空），
+          bound_ids（已绑定条目，重叠则用已有工具——跳过）、floated_ids（已上浮条目，
+          跳过）、allowed_ids（org_policy 白名单硬过滤）、min_score（合并后分数低于即
+          丢弃，"无需则不调用"的实现）、switch（总开关 loadout_stage_recall）。
+    输出: StageRecallOutcome；开关关闭 / 无召回 / 全部低于阈值时各字段为空。
+    """
+    outcome = StageRecallOutcome()
+    if not switch or store is None:
+        return outcome
+    merged: dict[str, tuple[Any, float]] = {}
+    for query in queries:
+        if not str(query or "").strip():
+            continue
+        try:
+            rows = recall(store, query=query, limit=SEARCH_TOP_K, allowed_ids=allowed_ids)
+        except Exception as exc:  # noqa: BLE001 — 单路召回失败降级跳过，不中断阶段
+            logging.getLogger(__name__).warning(
+                "stage recall failed (stage=%s query=%r): %s", stage, query[:80], exc
+            )
+            continue
+        for item, score in rows:
+            if item.id not in merged or score > merged[item.id][1]:
+                merged[item.id] = (item, score)
+    exclude = set(bound_ids or set()) | set(floated_ids or set())
+    notes: list[str] = []
+    for item, score in sorted(merged.values(), key=lambda pair: pair[1], reverse=True):
+        if score < min_score:
+            continue
+        if item.id in exclude:
+            # 已绑定/已上浮的条目优先保留既有形态，不重复注入
+            continue
+        status, detail = await probe_item(item)
+        if status not in {"ok", "skipped"}:
+            # 注入调不上的工具比不注入更糟（模型会浪费轮次去调），探活失败直接丢弃
+            logging.getLogger(__name__).info(
+                "stage recall: drop %s (%s) probe %s: %s", item.name, item.id, status, detail
+            )
+            continue
+        if item.kind == "mcp":
+            outcome.mcp_ids.append(item.id)
+        elif item.kind == "skill":
+            outcome.skill_ids.append(item.id)
+        else:
+            outcome.tool_ids.append(item.id)
+        notes.append(unfreeze_item(item))
+    if notes:
+        outcome.brief_append = (
+            "Proactively recalled toolkit items for this stage (role/stage match):\n"
+            + "\n".join(notes)
+        )
+    return outcome
+
+
 class PipelineState(TypedDict, total=False):
     initiative_id: str
     thread_id: str
@@ -365,6 +485,8 @@ class PipelineState(TypedDict, total=False):
     toolkit_floats: dict[str, list[str]]
     # skill_run 意图：每阶段脚本执行次数（预算 SKILL_RUN_BUDGET_PER_STAGE）
     skill_run_budget: dict[str, int]
+    # 阶段入口主动召回幂等标记：每阶段只召回一次（重试/HITL 重入命中即跳过）
+    stage_recall_done: dict[str, bool]
     # Frozen plan fingerprint — lets a resume detect an edited pipeline
     plan_digest: str
     # Node the current step routes to (agent handoff / manager join decision)
@@ -795,6 +917,67 @@ def build_graph_from_template(
         except Exception:  # noqa: BLE001 — absent host simply means a single-shot executor
             return None
 
+    async def _stage_proactive_recall(
+        state: PipelineState, stage: str, role: RoleId, cfg: dict[str, Any]
+    ) -> StageRecallOutcome:
+        """阶段入口主动召回（模式 1.5）：编排层直接 recall 并注入，不经模型。
+
+        查询 = 角色 + 阶段名 + 阶段标签 + 任务 brief 摘要；召回结果经分数阈值、
+        去重（已有绑定/上浮优先）、探活后注入。幂等由 state["stage_recall_done"]
+        保证：每阶段只召回一次，重试/HITL 重入命中即跳过。
+        fail-soft：开关关闭 / store 缺失 / 任何异常都返回空结果，不中断阶段。
+        """
+        from sortie_deck.settings import settings as _settings
+
+        if bool((state.get("stage_recall_done") or {}).get(stage)):
+            return StageRecallOutcome()
+        try:
+            from sortie_deck.orchestrator import _toolkit_store, get_orchestrator
+
+            store = _toolkit_store
+            policy = None
+            try:
+                policy = get_orchestrator().org_policy
+            except Exception:  # noqa: BLE001 — 无策略时不过滤
+                policy = None
+            allowed = (
+                set(policy.allowed_toolkit_ids)
+                if policy and policy.allowed_toolkit_ids
+                else None
+            )
+            role_toolkits = state.get("role_toolkits") or {}
+            stage_toolkits_map = state.get("stage_toolkits") or {}
+            floats_map = state.get("toolkit_floats") or {}
+            bound = set(stage_toolkits_map.get(stage) or []) | set(
+                role_toolkits.get(role.value) or []
+            )
+            floated = set(floats_map.get(stage) or [])
+            # 多路聚焦短查询：角色+阶段 / 阶段标签 / 任务 brief 摘要各一路——
+            # 长查询会稀释 _score 的归一化得分（见 run_stage_recall docstring）
+            brief_snippet = (state.get("brief") or "").strip()[:300]
+            queries = [
+                " ".join(p for p in (role.value, stage) if p),
+                " ".join(
+                    p
+                    for p in (str(cfg.get("label") or ""), str(cfg.get("label_en") or ""))
+                    if p
+                ),
+                brief_snippet,
+            ]
+            return await run_stage_recall(
+                store,
+                stage=stage,
+                queries=queries,
+                bound_ids=bound,
+                floated_ids=floated,
+                allowed_ids=allowed,
+                min_score=float(getattr(_settings, "loadout_recall_min_score", 0.2)),
+                switch=bool(getattr(_settings, "loadout_stage_recall", False)),
+            )
+        except Exception as exc:  # noqa: BLE001 — 主动召回失败不影响阶段
+            logging.getLogger(__name__).warning("stage recall failed (stage=%s): %s", stage, exc)
+            return StageRecallOutcome()
+
     async def run_stage(state: PipelineState, stage: str) -> PipelineState:
         if state.get("stopped"):
             return {**state, "status": "stopped", "stage": stage}
@@ -825,8 +1008,18 @@ def build_graph_from_template(
             or toolkit_briefs.get(f"role:{role.value}")
             or ""
         )
+
+        # 阶段入口主动召回（模式 1.5）：编排层直接 recall，结果并入绑定集与 brief。
+        # 重叠去重在 run_stage_recall 内完成（已有绑定/上浮的条目跳过，用已有工具）。
+        recall_out = await _stage_proactive_recall(state, stage, role, cfg)
+        if recall_out.brief_append:
+            toolkit_brief = f"{toolkit_brief}\n\n{recall_out.brief_append}".strip()
         if toolkit_brief and toolkit_brief not in persona:
             persona = f"{persona}\n\n{toolkit_brief}"
+        if recall_out.item_ids:
+            toolkit_ids = toolkit_ids + [
+                i for i in recall_out.item_ids if i not in toolkit_ids
+            ]
 
         # Agent-driven upstream/downstream consult before executing the node
         consult_artifacts: dict[str, str] = {}
@@ -994,11 +1187,9 @@ def build_graph_from_template(
         else:
             result = await _execute_with_timeout()
 
-        mcp_artifacts, mcp_results = await _run_mcp_calls(
-            state, stage, toolkit_ids, (result.meta or {}).get("mcp_calls")
-        )
-
-        # In-loop 元工具意图：executor 声明 toolkit_search / toolkit_pick，编排层兑现
+        # In-loop 元工具意图：executor 声明 toolkit_search / toolkit_pick，编排层兑现。
+        # 先于 _run_mcp_calls 执行：本回合 pick 的 mcp 条目立刻并入调用集合，
+        # 模型"点名 → 调用"可以在同一段回复里闭环。
         async def _stage_toolkit_meta() -> ToolkitMetaOutcome:
             try:
                 from sortie_deck.orchestrator import _toolkit_store, get_orchestrator
@@ -1031,6 +1222,20 @@ def build_graph_from_template(
             )
 
         toolkit_meta_out = await _stage_toolkit_meta()
+        # pick 上浮的 mcp 条目并入本回合调用集合 + 回写 stage_toolkits（方案 3.2 闭环：
+        # 上浮后经 McpToolInvoker 可真实调用，后续阶段也持续可用）
+        picked_mcp_ids = [
+            str(r.get("item_id"))
+            for r in toolkit_meta_out.records
+            if r.get("op") == "pick" and r.get("floated") and r.get("kind") == "mcp"
+        ]
+        mcp_toolkit_ids = list(toolkit_ids) + [
+            i for i in picked_mcp_ids if i not in toolkit_ids
+        ]
+        mcp_artifacts, mcp_results = await _run_mcp_calls(
+            state, stage, mcp_toolkit_ids, (result.meta or {}).get("mcp_calls")
+        )
+        stage_toolkits = merge_picked_toolkits(state, stage, toolkit_meta_out.records)
         meta_artifacts: dict[str, str] = {}
         if toolkit_meta_out.records:
             meta_artifacts["toolkit_meta.json"] = json.dumps(
@@ -1166,6 +1371,39 @@ def build_graph_from_template(
         if executed_runs:
             skill_budget[stage] = int(skill_budget.get(stage, 0)) + executed_runs
 
+        # 阶段入口主动召回状态推进：skill 并入 floats（skill_run 免 pick）、
+        # mcp 回写 stage_toolkits（mcp_calls 可真实调用）、幂等标记置位、
+        # 上浮文本并入 toolkit_briefs["stage:{stage}"]（重入时 brief 不丢失）
+        recall_done = dict(state.get("stage_recall_done") or {})
+        recall_done[stage] = True
+        if recall_out.skill_ids:
+            existing_floats = list(floats_map.get(stage) or [])
+            floats_map[stage] = existing_floats + [
+                i for i in recall_out.skill_ids if i not in existing_floats
+            ]
+        if recall_out.mcp_ids:
+            existing_st = list(stage_toolkits.get(stage) or [])
+            stage_toolkits = {
+                **stage_toolkits,
+                stage: existing_st + [i for i in recall_out.mcp_ids if i not in existing_st],
+            }
+        if recall_out.item_ids:
+            events.append(
+                {
+                    "stage": stage,
+                    "role": role.value,
+                    "kind": "toolkit_meta",
+                    "message": (
+                        f"stage recall: {len(recall_out.item_ids)} item(s) proactively loaded"
+                    ),
+                    "data": {
+                        "tool": recall_out.tool_ids,
+                        "mcp": recall_out.mcp_ids,
+                        "skill": recall_out.skill_ids,
+                    },
+                }
+            )
+
         return {
             **state,
             "stage": stage,
@@ -1178,19 +1416,26 @@ def build_graph_from_template(
                 # 仅当本阶段发生了上浮才更新 briefs，避免每步无谓覆盖
                 dict(state.get("toolkit_briefs") or {}) | (
                     {
-                        f"stage:{stage}": (
-                            (dict(state.get("toolkit_briefs") or {}).get(f"stage:{stage}") or "")
-                            + "\n\n"
-                            + toolkit_meta_out.brief_append
-                        ).strip()
+                        f"stage:{stage}": "\n\n".join(
+                            part
+                            for part in (
+                                (dict(state.get("toolkit_briefs") or {}).get(f"stage:{stage}") or ""),
+                                recall_out.brief_append,
+                                toolkit_meta_out.brief_append,
+                            )
+                            if part
+                        )
                     }
-                    if toolkit_meta_out.brief_append
+                    if (recall_out.brief_append or toolkit_meta_out.brief_append)
                     else {}
                 )
             ),
             "toolkit_pick_budget": pick_budget,
             "toolkit_floats": floats_map,
             "skill_run_budget": skill_budget,
+            "stage_recall_done": recall_done,
+            # pick 上浮的 mcp 回写：后续阶段的 mcp_calls 才能真实建会话调用
+            "stage_toolkits": stage_toolkits,
             # consumed by this node's conditional edge; cleared on every entry
             "handoff_target": None,
             # on_approval 回写标记：仅当 HITL 放行重入时置 True，消费后即清

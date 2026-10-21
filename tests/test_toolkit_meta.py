@@ -113,3 +113,111 @@ async def test_switch_disabled_noop(store: ToolkitStore, monkeypatch: pytest.Mon
 async def test_meta_none_is_noop(store: ToolkitStore) -> None:
     out = await run_toolkit_meta(store, stage="s", meta=None)
     assert out.brief_append == "" and out.events == [] and out.records == []
+
+
+# --- skill_run 意图 -----------------------------------------------------------
+
+
+def _skill(store: ToolkitStore, **overrides: Any):
+    kwargs: dict[str, Any] = {
+        "kind": "skill",
+        "name": "check-acceptance",
+        "summary": "校验 acceptance 结构",
+        "executable": True,
+        "scripts": [
+            {
+                "path": "scripts/hello.py",
+                "language": "py",
+                "content": "print('run-ok')",
+            }
+        ],
+    }
+    kwargs.update(overrides)
+    return _add(store, **kwargs)
+
+
+@pytest.mark.asyncio()
+async def test_skill_run_success(store: ToolkitStore, tmp_path: Path) -> None:
+    item = _skill(store)
+    out = await run_toolkit_meta(
+        store,
+        stage="qa",
+        meta={"skill_run": {"item_id": item.id, "script": "scripts/hello.py"}},
+        floated=[item.id],  # 已 pick 过才允许执行
+        workspace_dir=str(tmp_path),
+    )
+    assert "run-ok" in out.brief_append
+    record = out.records[0]
+    assert record["op"] == "skill_run" and record["executed"] is True
+    assert record["ok"] is True and record["exit_code"] == 0
+
+
+@pytest.mark.asyncio()
+async def test_skill_run_requires_prior_pick(store: ToolkitStore, tmp_path: Path) -> None:
+    item = _skill(store)
+    out = await run_toolkit_meta(
+        store,
+        stage="qa",
+        meta={"skill_run": {"item_id": item.id, "script": "scripts/hello.py"}},
+        floated=[],  # 未 pick
+        workspace_dir=str(tmp_path),
+    )
+    assert "pick the item first" in out.brief_append
+    assert "executed" not in out.records[0]
+
+
+@pytest.mark.asyncio()
+async def test_skill_run_budget_exhausted(store: ToolkitStore, tmp_path: Path) -> None:
+    item = _skill(store)
+    out = await run_toolkit_meta(
+        store,
+        stage="qa",
+        meta={"skill_run": {"item_id": item.id, "script": "scripts/hello.py"}},
+        floated=[item.id],
+        skill_used=4,
+        workspace_dir=str(tmp_path),
+    )
+    assert "budget exhausted" in out.brief_append
+    assert "executed" not in out.records[0]
+
+
+@pytest.mark.asyncio()
+async def test_skill_run_write_script_needs_confirm(
+    store: ToolkitStore, tmp_path: Path
+) -> None:
+    item = _skill(
+        store,
+        scripts=[
+            {
+                "path": "scripts/delete_all.py",
+                "language": "py",
+                "content": "print('would delete')",
+            }
+        ],
+    )
+    out = await run_toolkit_meta(
+        store,
+        stage="qa",
+        meta={"skill_run": {"item_id": item.id, "script": "scripts/delete_all.py"}},
+        floated=[item.id],
+        workspace_dir=str(tmp_path),
+    )
+    assert "looks like a write" in out.brief_append
+    assert "executed" not in out.records[0]
+
+    # confirmed=true 放行
+    out2 = await run_toolkit_meta(
+        store,
+        stage="qa",
+        meta={
+            "skill_run": {
+                "item_id": item.id,
+                "script": "scripts/delete_all.py",
+                "confirmed": True,
+            }
+        },
+        floated=[item.id],
+        workspace_dir=str(tmp_path),
+    )
+    assert "would delete" in out2.brief_append
+    assert out2.records[0]["ok"] is True
