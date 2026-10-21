@@ -64,8 +64,9 @@ MemoryEntry
 （id + 作用域 + 类型 + summary）。每次写入 / 删除后由后端从 entries
 重新拼装生成，**纯文件操作不调 LLM**；索引是派生物，不作为数据源。
 
-> 现状标注：`summary` 字段与索引文件为**已确认待实现**项，当前 entries
-> 尚无 summary，注入使用 content 全文。
+> 现状标注：`summary` 字段与索引文件已实现；`context_block` 已支持
+> brief 相关性打分 + 新近度衰减排序。`memory_search` / `memory_read`
+> 内置工具为**已确认待实现**项（阶段二）。
 
 ## 4. 注入架构（双触发）
 
@@ -93,9 +94,10 @@ MemoryEntry
 | `harness_providers/executor.py` | `Layered memory brief` 段拼入 stage prompt |
 | 房间讨论 `orchestrator.py` | 讨论回复注入发言者 user 域记忆 |
 
-> 现状标注：当前 `context_block` 为「list 顺序取前 N 条 + 6000 字符硬截断」，
-> 无相关性排序；4.1 / 4.2 的检索绑定与工具检索为**已确认待实现**项
-> （`context_block` 打分改造 + `memory_read` 工具 + 前端记忆面板）。
+> 现状标注：当前 `context_block` 为「检索打分（关键词 + 新近度）排序 +
+> 6000 字符硬截断」；4.1 的检索绑定已实现（Plan-time 绑定写
+> `ini.meta["memory_ids"]`），4.2 的工具检索为**已确认待实现**项
+> （`memory_search` / `memory_read` 工具 + 前端记忆面板）。
 
 ## 5. 使用方式（记忆库页）
 
@@ -131,11 +133,16 @@ MemoryEntry
 |------|------|------|
 | 已完成 | 作用域模型（全局约定 / 我的三种目标）+ 权限校验 | ✅ |
 | 已完成 | 记忆库看板 UI（卡片网格 / 弹窗写入 / 撤销删除 / 仅管理员） | ✅ |
-| 待实施 | `summary` 字段（写入时 LLM 生成 + 截断降级）与索引文件重建 | ⏳ |
-| 待实施 | `context_block` 检索打分（brief 相关性排序）+ 绑定 ids 写入任务 meta | ⏳ |
-| 待实施 | 任务详情页「记忆」面板（绑定索引 + 执行中读取记录） | ⏳ |
-| 待实施 | `memory_search` / `memory_read` 内置工具与加载护栏 | ⏳ |
+| 已完成 | `summary` 字段（写入时 LLM 生成 + 截断降级）与索引文件重建 | ✅ |
+| 已完成 | `context_block` 检索打分（brief 相关性排序）+ 绑定 ids 写入任务 meta | ✅ |
+| 已完成 | 记忆治理阶段一：角色分层摘要 / 反思沉淀（程序性记忆）/ 新近度衰减 / 冲突检测失效（mem0 决策回读 + 本地规则兜底）/ 并行分支仲裁 | ✅ 2026-10-21 |
+| 已完成 | 条目记忆检索切换 WeKnora（混合检索 + rerank + graph，`TDT_MEMORY_RETRIEVAL=weknora`，镜像回映射 + 本地可见性过滤 + 三级降级） | ✅ 2026-10-21 |
+| 已完成 | `memory_search` / `memory_read` 内置元工具（in-loop 声明-兑现，预算 + 隐私护栏，读取记 usage.log） | ✅ 2026-10-21 |
+| 已完成 | Plan-time 绑定并入 mem0 命中（`CompositeMemory.context_candidates` 内容互含回映射前置） | ✅ 2026-10-21 |
+| 已完成 | 质量评估脚本 `scripts/memory_eval.py`（local 基线命中率约 38%，weknora 对比待服务联调） | ✅ 2026-10-21 |
 | 远期 | 记忆升级为长文档时，索引展开价值最大化；TTL 清理 | ⏳ |
+
+> 治理机制全链路说明见 `docs/记忆体系整体策略.md`（写入/管理/读取时机）。
 
 ## 9. 依赖
 
