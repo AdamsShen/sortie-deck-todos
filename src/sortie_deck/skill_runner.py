@@ -109,7 +109,7 @@ async def run_skill_script(
     timed_out = False
     try:
         stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         timed_out = True
         proc.kill()
         stdout_b, stderr_b = await proc.communicate()

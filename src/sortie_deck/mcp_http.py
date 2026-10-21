@@ -22,9 +22,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
-from typing import Any, AsyncIterator, Iterable, Iterator
+from collections.abc import AsyncIterator, Iterable, Iterator
+from typing import Any
 from urllib.parse import urljoin
 
 import httpx
@@ -258,15 +260,20 @@ class HttpMcpSession(_HttpSessionBase):
             )
 
     async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
-        result = await self._post(
-            {
-                "jsonrpc": "2.0",
-                "id": self._next_id,
-                "method": "tools/call",
-                "params": {"name": name, "arguments": arguments or {}},
-            },
-            expect_response=True,
-        )
+        try:
+            result = await self._post(
+                {
+                    "jsonrpc": "2.0",
+                    "id": self._next_id,
+                    "method": "tools/call",
+                    "params": {"name": name, "arguments": arguments or {}},
+                },
+                expect_response=True,
+            )
+        except Exception as exc:
+            # 调用失败即标记 dead：池下次借出会逐出重建，而非复用坏会话
+            self._fail(f"call {name} failed: {exc}")
+            raise
         self._next_id += 1
         self.log.append(f"call {name}")
         return result
@@ -276,12 +283,11 @@ class HttpMcpSession(_HttpSessionBase):
             return
         self._closed = True
         if self._client is not None and self._session_id:
-            try:  # 尽力终止服务端会话，失败不影响回收
+            # 尽力终止服务端会话，失败不影响回收
+            with contextlib.suppress(Exception):
                 await self._client.delete(
                     self.item.url, headers=self._headers(), timeout=self._connect_timeout
                 )
-            except Exception:  # noqa: BLE001 — best effort
-                pass
         if self._client is not None:
             await self._client.aclose()
         self._client = None
@@ -307,7 +313,7 @@ class SseMcpSession(_HttpSessionBase):
         self._reader_task = asyncio.create_task(self._read_stream(), name="mcp-sse-reader")
         try:
             await asyncio.wait_for(self._endpoint_ready.wait(), timeout=self._connect_timeout)
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             raise RuntimeError(
                 f"mcp sse: endpoint event not received within {self._connect_timeout}s"
             ) from exc
@@ -387,7 +393,12 @@ class SseMcpSession(_HttpSessionBase):
         await self._post({"jsonrpc": "2.0", "method": method})
 
     async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
-        result = await self._rpc("tools/call", {"name": name, "arguments": arguments or {}})
+        try:
+            result = await self._rpc("tools/call", {"name": name, "arguments": arguments or {}})
+        except Exception as exc:
+            # 调用失败即标记 dead：池下次借出会逐出重建，而非复用坏会话
+            self._fail(f"call {name} failed: {exc}")
+            raise
         self.log.append(f"call {name}")
         return result
 
@@ -397,16 +408,14 @@ class SseMcpSession(_HttpSessionBase):
         self._closed = True
         if self._reader_task is not None:
             self._reader_task.cancel()
-            try:
+            # 回收路径吞掉一切异常（含 CancelledError）
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._reader_task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001 — 回收路径吞异常
-                pass
             self._reader_task = None
         if self._client is not None and self._post_url:
-            try:  # 尽力通知服务端关闭，失败不影响回收
+            # 尽力通知服务端关闭，失败不影响回收
+            with contextlib.suppress(Exception):
                 await self._client.delete(self._post_url, timeout=self._connect_timeout)
-            except Exception:  # noqa: BLE001 — best effort
-                pass
         if self._client is not None:
             await self._client.aclose()
         self._client = None

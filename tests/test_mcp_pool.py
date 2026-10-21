@@ -6,13 +6,13 @@
 
 from __future__ import annotations
 
-import json
 import sys
 import textwrap
 from pathlib import Path
 
 import pytest
 
+import sortie_deck.mcp_runtime as mcp_runtime
 from sortie_deck.mcp_runtime import McpSessionPool, config_fingerprint
 from sortie_deck.toolkit import CreateToolkitRequest, ToolkitItem, ToolkitStore
 
@@ -201,3 +201,113 @@ async def test_stateful_exempts_idle_recycle(tmp_path: Path) -> None:
     await pool.release_task("task-a")
     await pool.release_task("task-zz")
     assert pool.stats()["instances"] == 0
+
+
+# --- http/sse 共享桶（无状态会话跨任务复用） ----------------------------------
+
+
+class _FakeHttpSession:
+    """替身 http/sse 会话：验证池的分派/共享/重建逻辑，不起真服务器。"""
+
+    def __init__(self, item: ToolkitItem) -> None:
+        self.item = item
+        self.started = 0
+        self.closed = False
+        self.alive = True
+        self._proc = None  # 无进程：_close_sync_safe 应跳过
+
+    async def start(self) -> None:
+        self.started += 1
+
+    async def call_tool(self, name: str, arguments: dict | None = None) -> dict:
+        return {}
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+@pytest.fixture()
+def http_store(tmp_path: Path) -> ToolkitStore:
+    return ToolkitStore(tmp_path / "toolkit-http.json")
+
+
+def _http_item(
+    store: ToolkitStore, *, name: str = "http-mcp", stateful: bool = False
+) -> ToolkitItem:
+    return store.create(
+        CreateToolkitRequest(
+            kind="mcp",
+            name=name,
+            summary="remote server",
+            transport="http",
+            url="http://127.0.0.1:9/mcp",
+            stateful=stateful,
+        ),
+        author_id="tester",
+        author_name="Tester",
+    )
+
+
+@pytest.fixture()
+def fake_factory(monkeypatch: pytest.MonkeyPatch) -> list[_FakeHttpSession]:
+    created: list[_FakeHttpSession] = []
+
+    def _factory(item: ToolkitItem) -> _FakeHttpSession:
+        session = _FakeHttpSession(item)
+        created.append(session)
+        return session
+
+    monkeypatch.setattr(mcp_runtime, "_create_session", _factory)
+    return created
+
+
+@pytest.mark.asyncio()
+async def test_http_shared_bucket_reused_across_tasks(
+    http_store: ToolkitStore, pool: McpSessionPool, fake_factory: list[_FakeHttpSession]
+) -> None:
+    item = _http_item(http_store)
+    s1 = await pool.acquire(item, "task-a")
+    s2 = await pool.acquire(item, "task-b")
+    assert s1 is s2, "无状态 http 会话进共享桶：不同任务复用同一会话"
+    assert len(fake_factory) == 1
+
+    # stateful 的 http server 仍按任务隔离，防跨任务状态泄露
+    sitem = _http_item(http_store, name="stateful-http", stateful=True)
+    m1 = await pool.acquire(sitem, "task-a")
+    m2 = await pool.acquire(sitem, "task-b")
+    assert m1 is not m2
+    assert len(fake_factory) == 3
+    for s in (s2, m1, m2):
+        await pool.release(s)
+    await pool.release_task("task-a")
+    await pool.release_task("task-b")
+
+
+@pytest.mark.asyncio()
+async def test_http_shared_survives_task_end(
+    http_store: ToolkitStore, pool: McpSessionPool, fake_factory: list[_FakeHttpSession]
+) -> None:
+    item = _http_item(http_store)
+    s1 = await pool.acquire(item, "task-a")
+    await pool.release(s1)
+    await pool.release_task("task-a")
+    # 任务结束只回收该任务的实例；共享桶由空闲 TTL 管，不随任务消失
+    s2 = await pool.acquire(item, "task-b")
+    assert s2 is s1
+    assert len(fake_factory) == 1
+    await pool.release(s2)
+
+
+@pytest.mark.asyncio()
+async def test_http_dead_instance_rebuilt(
+    http_store: ToolkitStore, pool: McpSessionPool, fake_factory: list[_FakeHttpSession]
+) -> None:
+    item = _http_item(http_store)
+    s1 = await pool.acquire(item, "task-a")
+    s1.alive = False  # 模拟 server 半路挂掉
+    await pool.release(s1)
+    s2 = await pool.acquire(item, "task-a")
+    assert s2 is not s1, "死实例先逐出再重建"
+    assert len(fake_factory) == 2
+    assert s1.closed
+    await pool.release(s2)

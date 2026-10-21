@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
@@ -281,10 +282,8 @@ class McpSessionPool:
         """
         proc = getattr(entry.session, "_proc", None)
         if proc is not None and proc.returncode is None:
-            try:
+            with contextlib.suppress(ProcessLookupError):
                 proc.terminate()
-            except ProcessLookupError:
-                pass
 
     async def _evict_entry(self, key: tuple[str, str, str], entry: _PoolEntry) -> None:
         self._entries.pop(key, None)
