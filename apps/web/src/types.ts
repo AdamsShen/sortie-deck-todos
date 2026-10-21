@@ -407,6 +407,10 @@ export interface MemoryEntry {
   summary?: string;
   /** 简介生成状态：pending=生成中 / done=已生成 / failed=失败可重试；空串为旧数据 */
   summary_status?: "" | "pending" | "done" | "failed";
+  /** 记忆治理状态：active=生效 / superseded=被取代 / expired=过期（失效不删除） */
+  status?: "active" | "superseded" | "expired";
+  /** 取代本条的新记忆 id（superseded 时的演变链指针） */
+  superseded_by?: string;
   tags: string[];
   source?: string;
   author_id?: string;

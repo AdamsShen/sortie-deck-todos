@@ -86,6 +86,11 @@ def bind_catalogs(
         _toolkit_store = toolkit
 
 
+def get_memory_store() -> MemoryStore | None:
+    """共享记忆库实例（API lifespan 绑定；未绑定时 None，调用方自行兜底）。"""
+    return _memory_store
+
+
 def mission_guardrails(ini: Initiative) -> Any:
     """Guardrails for one mission (budget + wait graph + causal chain)."""
     from sortie_deck.guardrails import guardrails_from_meta
@@ -93,30 +98,39 @@ def mission_guardrails(ini: Initiative) -> Any:
     return guardrails_from_meta(ini.meta)
 
 
-def mission_memory_brief(*, initiative_id: str, stage: str, user_id: str | None = None) -> str:
+def mission_memory_brief(
+    *,
+    initiative_id: str,
+    stage: str,
+    user_id: str | None = None,
+    role: str | None = None,
+) -> str:
     """Layered memory brief for one stage of one mission.
 
     Stage-scoped entries (sub-room conclusions) only surface for the stage that
     owns them, so sibling parallel branches are not polluted.
+    ``role``：当前 stage 角色值（如 "eng"），用于把 agent 作用域的角色 lesson
+    （反思沉淀，scope_id=角色值）并入候选集。
     """
     if _memory_store is None:
         return ""
     # user 域记忆跟随任务创建者：stage 执行链路没有"当前操作账号"，用 created_by 兜底
     query = None
-    if not user_id:
-        try:
-            ini = get_orchestrator().get(initiative_id)
-            user_id = (getattr(ini, "created_by", None) or "") or None
-        except Exception:  # noqa: BLE001 — memory must never break a stage run
-            user_id = None
     try:
+        ini = get_orchestrator().get(initiative_id)
+        if not user_id:
+            user_id = (getattr(ini, "created_by", None) or "") or None
         # 检索打分用任务 brief+title：stage 注入也保持相关性排序
         if query is None:
-            ini = get_orchestrator().get(initiative_id)
             query = f"{ini.title}\n{ini.brief}"
+        # agent 作用域：已发布角色 id（agt_）+ 角色值（反思沉淀按角色值挂载）
+        agent_ids = [r.id for r in (ini.roles or [])]
+        if role:
+            agent_ids.append(role)
         return _memory_store.context_block(
             user_id=user_id,
             mission_id=initiative_id,
+            agent_ids=agent_ids,
             stage=stage,
             query=query,
         )

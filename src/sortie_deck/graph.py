@@ -251,6 +251,125 @@ async def run_toolkit_meta(
     return outcome
 
 
+def _record_memory_usage(initiative_id: str, mem_id: str) -> None:
+    """memory_read 取用记录追加进任务 usage.log（任务详情「记忆」面板数据源）。"""
+    try:
+        from sortie_deck.mission_memory import get_mission_memory
+
+        log = get_mission_memory().usage_log(initiative_id)
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with log.open("a", encoding="utf-8") as fh:
+            fh.write(f"{mem_id}\n")
+    except Exception:  # noqa: BLE001 — 使用记录只是增强
+        pass
+
+
+async def run_memory_meta(
+    memory_store: Any,
+    *,
+    stage: str,
+    meta: dict[str, Any] | None,
+    initiative_id: str,
+    created_by: str | None = None,
+    used_reads: int = 0,
+) -> ToolkitMetaOutcome:
+    """处理 executor 声明的记忆元工具意图（memory_search / memory_read）。
+
+    与 run_toolkit_meta 同一模式：executor 只在 StageResult.meta 里声明意图，
+    检索 / 权限 / 预算全部在编排层兑现；结果经 brief_append 并入下阶段 brief，
+    读取 ids 记入任务 usage.log（面板可见）。永不抛异常、不中断阶段。
+
+    意图结构（StageResult.meta）：
+      {"memory_search": {"query": "..."}}   自由文本检索记忆简介行
+      {"memory_read": {"id": "mem_xxx"}}    读全文（截断），预算受限
+    """
+    from sortie_deck.settings import settings as _settings
+
+    outcome = ToolkitMetaOutcome()
+    if not bool(getattr(_settings, "memory_tools", False)):
+        return outcome
+    if not isinstance(meta, dict) or memory_store is None:
+        return outcome
+    notes: list[str] = []
+
+    search_intent = meta.get("memory_search")
+    if isinstance(search_intent, dict) and str(search_intent.get("query") or "").strip():
+        query = str(search_intent.get("query")).strip()
+        try:
+            entries = memory_store.context_candidates(
+                query=query, mission_id=initiative_id, limit=6
+            )
+        except Exception as exc:  # noqa: BLE001 — 检索失败回空，不中断阶段
+            logger.warning("memory_search 失败(忽略): stage=%s: %s", stage, exc)
+            entries = []
+        lines = [f"- [{e.kind}|{e.id}] {e.display_summary()}" for e in entries]
+        if lines:
+            notes.append(
+                "Memory search results (read by id when needed):\n" + "\n".join(lines)
+            )
+        else:
+            notes.append(f"Memory search for `{query}` found nothing.")
+        outcome.events.append(
+            {
+                "stage": stage,
+                "kind": "memory_meta",
+                "message": f"memory_search: {query}",
+                "data": {"hits": [e.id for e in entries]},
+            }
+        )
+        outcome.records.append(
+            {"op": "memory_search", "stage": stage, "query": query, "hits": [e.id for e in entries]}
+        )
+
+    read_intent = meta.get("memory_read")
+    if isinstance(read_intent, dict):
+        mem_id = str(read_intent.get("id") or "").strip()
+        if mem_id:
+            record: dict[str, Any] = {"op": "memory_read", "stage": stage, "id": mem_id}
+            budget = int(getattr(_settings, "memory_read_budget_per_stage", 4))
+            max_chars = int(getattr(_settings, "memory_read_max_chars", 2000))
+            if used_reads >= budget:
+                record["reason"] = "read budget exhausted"
+                notes.append(
+                    f"Memory read budget exhausted ({budget} per stage) — continue with what you have."
+                )
+            else:
+                try:
+                    entry = memory_store.get(mem_id)
+                except KeyError:
+                    entry = None
+                if entry is None:
+                    record["reason"] = "not found"
+                    notes.append(f"Memory `{mem_id}` not found.")
+                elif (
+                    entry.scope == "user"
+                    and created_by
+                    and entry.scope_id != created_by
+                    and entry.author_id != created_by
+                ):
+                    # user 域隐私护栏：任务内只能读创建者本人的个人记忆
+                    record["reason"] = "private memory denied"
+                    notes.append(f"Memory `{mem_id}` is private and not readable in this mission.")
+                else:
+                    record["read"] = True
+                    notes.append(
+                        f"Memory `{mem_id}` full content:\n{entry.content[:max_chars]}"
+                    )
+                    _record_memory_usage(initiative_id, mem_id)
+            outcome.events.append(
+                {
+                    "stage": stage,
+                    "kind": "memory_meta",
+                    "message": f"memory_read: {mem_id}",
+                    "data": dict(record),
+                }
+            )
+            outcome.records.append(record)
+
+    outcome.brief_append = "\n".join(n for n in notes if n)
+    return outcome
+
+
 def merge_picked_toolkits(
     state: PipelineState, stage: str, records: list[dict[str, Any]]
 ) -> dict[str, list[str]]:
@@ -483,6 +602,8 @@ class PipelineState(TypedDict, total=False):
     # In-loop 元工具状态：每阶段 pick 预算计数 + 已上浮条目（去重）
     toolkit_pick_budget: dict[str, int]
     toolkit_floats: dict[str, list[str]]
+    # 内置记忆元工具：每阶段 memory_read 预算计数
+    memory_read_budget: dict[str, int]
     # skill_run 意图：每阶段脚本执行次数（预算 SKILL_RUN_BUDGET_PER_STAGE）
     skill_run_budget: dict[str, int]
     # 阶段入口主动召回幂等标记：每阶段只召回一次（重试/HITL 重入命中即跳过）
@@ -1124,7 +1245,11 @@ def build_graph_from_template(
         try:
             from sortie_deck.orchestrator import mission_memory_brief
 
-            memory_brief = mission_memory_brief(initiative_id=state["initiative_id"], stage=stage)
+            memory_brief = mission_memory_brief(
+                initiative_id=state["initiative_id"],
+                stage=stage,
+                role=str(getattr(role, "value", role)),
+            )
         except Exception:  # noqa: BLE001 — memory is an enhancement, not a dependency
             memory_brief = ""
         contract = load_agent_contract(role.value)
@@ -1222,6 +1347,37 @@ def build_graph_from_template(
             )
 
         toolkit_meta_out = await _stage_toolkit_meta()
+
+        # 内置记忆元工具（memory_search / memory_read）：与 toolkit 元工具同一
+        # 声明-兑现模式；读取 ids 记入任务 usage.log（面板可见），预算按阶段累计
+        memory_read_used = int((state.get("memory_read_budget") or {}).get(stage, 0))
+
+        async def _stage_memory_meta() -> ToolkitMetaOutcome:
+            try:
+                from sortie_deck.orchestrator import get_memory_store, get_orchestrator
+
+                mem_store = get_memory_store()
+                created_by = None
+                try:
+                    ini = get_orchestrator().get(state["initiative_id"])
+                    created_by = getattr(ini, "created_by", None)
+                except Exception:  # noqa: BLE001 — 无任务上下文时按无归属处理
+                    created_by = None
+            except Exception:  # noqa: BLE001 — 记忆元工具失败不影响阶段
+                return ToolkitMetaOutcome()
+            return await run_memory_meta(
+                mem_store,
+                stage=stage,
+                meta=result.meta,
+                initiative_id=state["initiative_id"],
+                created_by=created_by,
+                used_reads=memory_read_used,
+            )
+
+        memory_meta_out = await _stage_memory_meta()
+        if memory_meta_out.records:
+            # 并入 toolkit 元工具审计流，随 toolkit_meta.json 一起落产物
+            toolkit_meta_out.records.extend(memory_meta_out.records)
         # pick 上浮的 mcp 条目并入本回合调用集合 + 回写 stage_toolkits（方案 3.2 闭环：
         # 上浮后经 McpToolInvoker 可真实调用，后续阶段也持续可用）
         picked_mcp_ids = [
@@ -1288,6 +1444,7 @@ def build_graph_from_template(
         # Sub-room conclusions are surfaced for observability; the transcript is not.
         events.extend(subroom_events)
         events.extend(toolkit_meta_out.events)
+        events.extend(memory_meta_out.events)
 
         # 工具使用事件：timeline ← events 同步后，任务详情前端按阶段实时展示
         # "本阶段绑定了哪些 tool/mcp/skill、实际调用了哪些 MCP 工具、检索/上浮了什么"。
@@ -1356,6 +1513,14 @@ def build_graph_from_template(
         pick_budget = dict(state.get("toolkit_pick_budget") or {})
         floats_map = dict(state.get("toolkit_floats") or {})
         skill_budget = dict(state.get("skill_run_budget") or {})
+        # memory_read 预算回写：按本阶段实际处理的读取次数累计（含被拒的，
+        # 防止模型刷预算）
+        memory_budget = dict(state.get("memory_read_budget") or {})
+        memory_reads_done = sum(
+            1 for r in memory_meta_out.records if r.get("op") == "memory_read"
+        )
+        if memory_reads_done:
+            memory_budget[stage] = memory_read_used + memory_reads_done
         if any(r.get("op") == "pick" and r.get("floated") for r in toolkit_meta_out.records):
             pick_budget[stage] = int(pick_budget.get(stage, 0)) + 1
         new_floats = [
@@ -1422,17 +1587,23 @@ def build_graph_from_template(
                                 (dict(state.get("toolkit_briefs") or {}).get(f"stage:{stage}") or ""),
                                 recall_out.brief_append,
                                 toolkit_meta_out.brief_append,
+                                memory_meta_out.brief_append,
                             )
                             if part
                         )
                     }
-                    if (recall_out.brief_append or toolkit_meta_out.brief_append)
+                    if (
+                        recall_out.brief_append
+                        or toolkit_meta_out.brief_append
+                        or memory_meta_out.brief_append
+                    )
                     else {}
                 )
             ),
             "toolkit_pick_budget": pick_budget,
             "toolkit_floats": floats_map,
             "skill_run_budget": skill_budget,
+            "memory_read_budget": memory_budget,
             "stage_recall_done": recall_done,
             # pick 上浮的 mcp 回写：后续阶段的 mcp_calls 才能真实建会话调用
             "stage_toolkits": stage_toolkits,

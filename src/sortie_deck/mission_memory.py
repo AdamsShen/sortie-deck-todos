@@ -17,6 +17,7 @@ providers (mem0/RAG layer on top, see ``memory.py`` / ``knowledge_gateway``).
 from __future__ import annotations
 
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,11 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from sortie_deck.models import Initiative, new_id, utc_now
+
+logger = logging.getLogger(__name__)
+
+# 协调/规划类角色值：滚动总结走 LLM 提炼要点；其余执行类角色降级为增量流水
+_COORDINATOR_ROLES = frozenset({"product", "ops"})
 
 # Rough token estimate: ~4 chars per token for mixed CJK/latin text.
 _CHARS_PER_TOKEN = 4
@@ -349,3 +355,41 @@ def write_memory_pack(
         (mdir / "MEMORY_INDEX.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     except Exception:  # noqa: BLE001 — memory must never break a stage run
         return
+
+
+async def build_stage_summary(*, stage: str, role: str, reply_text: str, harness: str) -> str:
+    """角色分层 stage 摘要：协调角色用 LLM 提炼要点，执行角色降级为增量流水。
+
+    业界做法（多智能体记忆综述）：协调器写高层决策/结论/风险，执行者只写增量，
+    避免 append_memory 无条件流水账把滚动总结冲成噪音。
+
+    输入：stage 阶段名 / role 角色值（如 "eng"）/ reply_text harness 回复全文 / harness 名。
+    输出：一段追加进 memory.md 的文本（时间戳头由 append_memory 负责）。
+    任何失败降级为旧的截断流水，绝不抛出（记忆是增强不是依赖）。
+    """
+    from sortie_deck.settings import settings
+
+    text = (reply_text or "").strip()
+    # 降级形态：与旧行为一致的截断流水，保证无 LLM / 执行角色场景零回归
+    fallback = f"Stage `{stage}` ({role}) via `{harness}`: {text[:600] or 'no output'}"
+    if not settings.memory_stage_summary_llm or not text or role not in _COORDINATOR_ROLES:
+        return fallback
+    try:
+        from sortie_deck.llm import LlmClient
+
+        client = LlmClient(timeout=15.0)
+        if not client.enabled:
+            return fallback
+        summary = await client.chat_text(
+            system=(
+                "你是任务记忆摘要器。从给定 stage 回复中提炼要点式 markdown，"
+                "只保留：做出的决策、关键结论、遗留风险。每条一行，最多 5 行，不新增内容。"
+            ),
+            user=f"stage={stage}\nrole={role}\n回复：\n{text[:4000]}",
+            temperature=0.1,
+        )
+        if summary.strip():
+            return f"Stage `{stage}` ({role}) via `{harness}` 要点：\n{summary.strip()}"
+    except Exception:  # noqa: BLE001 — 摘要是增强项，失败回退截断流水
+        logger.warning("stage 分层摘要生成失败，降级流水: stage=%s role=%s", stage, role)
+    return fallback

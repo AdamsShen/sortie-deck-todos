@@ -305,9 +305,9 @@ def test_composite_memory_merges_mem0(tmp_path):
             super().__init__(base_url="http://mem0.invalid", api_key=None, user_prefix="t")
             self.seeded = ["Customer wants SSO first."]
 
-        def add(self, content, *, initiative_id, tags=None):
+        def add(self, content, *, initiative_id, tags=None, kind=None):
             self.seeded.append(content)
-            return True
+            return "ADD"
 
         def search(self, query, *, initiative_id, limit=8):
             return [m for m in self.seeded if "SSO" in m][:limit]

@@ -821,11 +821,16 @@ async def list_memory(
     scope: str | None = Query(default=None),
     scope_id: str | None = Query(default=None),
     q: str | None = Query(default=None),
+    include_inactive: bool = Query(default=False),
     user: PublicUser = Depends(require_user),
 ) -> list[dict[str, Any]]:
+    # include_inactive：显式查看 superseded/expired 条目（演变追溯），默认仅生效条目
     return [
         m.model_dump(mode="json")
-        for m in get_memory().list(scope=scope, scope_id=scope_id, q=q, user_id=user.id)
+        for m in get_memory().list(
+            scope=scope, scope_id=scope_id, q=q, user_id=user.id,
+            include_inactive=include_inactive,
+        )
     ]
 
 

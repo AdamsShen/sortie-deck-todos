@@ -31,7 +31,6 @@ import { categoryLabel, statusLabel, t, type I18nKey } from "./i18n";
 import { lsGet, lsRemove, lsSet } from "./storage";
 import {
   BG_STORAGE_KEY,
-  BACKGROUND_PRESETS,
   THEMES,
   THEME_STORAGE_KEY,
   loadBackground,
@@ -503,6 +502,9 @@ export default function App() {
     </div>
   );
 
+  // 当前主题的展示名，用于面板页脚状态（themeControls 内复用）
+  const currentTheme = THEMES.find((t) => t.id === theme);
+
   const themeControls = (
     <div className="theme-dock">
       <button
@@ -522,65 +524,123 @@ export default function App() {
         <span className="op-chip-txt">{tr("theme")}</span>
       </button>
       {themeOpen && (
-        <div className="theme-panel">
-          <div className="theme-swatches">
-            {THEMES.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                className={`theme-swatch ${theme === item.id ? "on" : ""}`}
-                onClick={() => {
-                  playSfx("toggle");
-                  setTheme(item.id);
-                }}
-              >
-                {lang === "zh" ? item.labelZh : item.labelEn}
-              </button>
-            ))}
+        <div className="theme-panel" role="dialog" aria-label={tr("appearance")}>
+          <div className="ap-head">
+            <h2>{tr("appearance")}</h2>
+            <span>{tr("appearanceLive")}</span>
           </div>
-          <div className="theme-swatches bg-presets">
-            {BACKGROUND_PRESETS.map((bg) => (
-              <button
-                key={bg.id}
-                type="button"
-                className={`theme-swatch bg-thumb ${bgUrl === bg.src ? "on" : ""}`}
-                style={{ backgroundImage: `url(${bg.src})` }}
-                onClick={() => {
-                  playSfx("whoosh");
-                  setBgUrl(bg.src);
-                  setBgDraft(bg.src);
-                }}
-                title={lang === "zh" ? bg.labelZh : bg.labelEn}
-              >
-                <span>{lang === "zh" ? bg.labelZh : bg.labelEn}</span>
-              </button>
-            ))}
+          <div className="ap-group">
+            <div className="g-label">{tr("themeGroup")}</div>
+            <div className="theme-cards">
+              {THEMES.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className="tcard"
+                  data-mini={item.id}
+                  aria-pressed={theme === item.id}
+                  onClick={() => {
+                    playSfx("toggle");
+                    setTheme(item.id);
+                  }}
+                >
+                  <span className="tcard-view" aria-hidden="true">
+                    <span className="tv-bar">
+                      <i />
+                      <i />
+                      <i />
+                    </span>
+                    <span className="tv-title" />
+                    <span className="tv-line" />
+                    <span className="tv-card">
+                      <span className="tv-line" style={{ width: "70%" }} />
+                      <span className="tv-line" style={{ width: "45%" }} />
+                    </span>
+                  </span>
+                  <span className="tcard-meta">
+                    {lang === "zh" ? item.labelZh : item.labelEn}
+                    {item.id === "paper" && <em>{tr("themeDefault")}</em>}
+                  </span>
+                </button>
+              ))}
+            </div>
           </div>
-          <label>
-            <span>{tr("themeBgUrl")}</span>
-            <input
-              type="text"
-              value={bgDraft}
-              placeholder="https://… 或 /backgrounds/*.webp"
-              onChange={(e) => setBgDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  applyBgUrl();
-                }
-              }}
-            />
-          </label>
-          <div className="theme-panel-actions">
-            <button type="button" className="btn primary" onClick={applyBgUrl}>
-              {tr("themeBg")}
-            </button>
-            <button type="button" className="btn ghost" onClick={() => fileRef.current?.click()}>
-              {tr("themeBgUpload")}
-            </button>
-            <button type="button" className="btn ghost" onClick={clearBg}>
-              {tr("themeBgClear")}
-            </button>
+          <div className="ap-group">
+            <div className="g-label">{tr("wallpaperGroup")}</div>
+            <div className="wall-row">
+              <input
+                type="text"
+                value={bgDraft}
+                placeholder={tr("bgUrlPlaceholder")}
+                onChange={(e) => setBgDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    applyBgUrl();
+                  }
+                }}
+              />
+              <button type="button" className="primary" onClick={applyBgUrl}>
+                {tr("bgApply")}
+              </button>
+            </div>
+            <div className="wall-links">
+              <button type="button" onClick={() => fileRef.current?.click()}>
+                {tr("bgUploadLink")}
+              </button>
+              <button type="button" onClick={clearBg}>
+                {tr("bgClearLink")}
+              </button>
+            </div>
+          </div>
+          <div className="ap-group">
+            <div className="g-label">{tr("soundGroup")}</div>
+            <div className="snd-list">
+              <label className="snd-item">
+                <span className="name">
+                  {tr("sfxName")}
+                  <small>{tr("sfxHint")}</small>
+                </span>
+                <span className="pill">
+                  <input
+                    type="checkbox"
+                    checked={!sfxMuted}
+                    onChange={(e) => {
+                      unlockSfx();
+                      const on = e.target.checked;
+                      setSfxMuted(!on);
+                      setSfxMutedState(!on);
+                      if (on) playSfx("toggle");
+                    }}
+                  />
+                  <span className="tk" />
+                  <span className="kn" />
+                </span>
+              </label>
+              <label className="snd-item">
+                <span className="name">
+                  {tr("bgmName")}
+                  <small>{tr("bgmHint")}</small>
+                </span>
+                <span className="pill">
+                  <input
+                    type="checkbox"
+                    checked={!bgmMuted}
+                    onChange={(e) => {
+                      unlockSfx();
+                      startBgm();
+                      const on = e.target.checked;
+                      setBgmMuted(!on);
+                      setBgmMutedState(!on);
+                      if (on) playSfx("ok");
+                      else playSfx("toggle");
+                    }}
+                  />
+                  <span className="tk" />
+                  <span className="kn" />
+                </span>
+              </label>
+            </div>
           </div>
           <input
             ref={fileRef}
@@ -589,36 +649,10 @@ export default function App() {
             hidden
             onChange={(e) => onBgFile(e.target.files?.[0])}
           />
-          <label className="theme-toggle">
-            <input
-              type="checkbox"
-              checked={!sfxMuted}
-              onChange={(e) => {
-                unlockSfx();
-                const on = e.target.checked;
-                setSfxMuted(!on);
-                setSfxMutedState(!on);
-                if (on) playSfx("toggle");
-              }}
-            />
-            {tr("themeSfx")}
-          </label>
-          <label className="theme-toggle">
-            <input
-              type="checkbox"
-              checked={!bgmMuted}
-              onChange={(e) => {
-                unlockSfx();
-                startBgm();
-                const on = e.target.checked;
-                setBgmMuted(!on);
-                setBgmMutedState(!on);
-                if (on) playSfx("ok");
-                else playSfx("toggle");
-              }}
-            />
-            {tr("themeBgm")}
-          </label>
+          <div className="ap-foot">
+            <span>{tr("themeLocalNote")}</span>
+            <span>{currentTheme ? (lang === "zh" ? currentTheme.labelZh : currentTheme.labelEn) : ""}</span>
+          </div>
         </div>
       )}
     </div>
@@ -1839,6 +1873,18 @@ export default function App() {
     document.addEventListener("click", close);
     return () => document.removeEventListener("click", close);
   }, [openMenuId]);
+
+  // 主题面板：点击面板外部时收起；触发按钮与面板同在 .theme-dock 内，点其内部不收起
+  useEffect(() => {
+    if (!themeOpen) return;
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Element | null;
+      if (t && t.closest(".theme-dock")) return;
+      setThemeOpen(false);
+    };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [themeOpen]);
 
   // V4 弹窗/抽屉：Esc 逐层关闭
   useEffect(() => {
@@ -3939,6 +3985,10 @@ export default function App() {
                 </button>
                 <div className="mem-card-top">
                   <span className="kind-tag">{tr(memKindLabel[m.kind])}</span>
+                  {/* 治理态条目（superseded/expired）角标：失效不删除，可点详情追溯演变链 */}
+                  {m.status && m.status !== "active" && (
+                    <span className="mem-status-badge">{tr("memInactive")}</span>
+                  )}
                   <span className="mem-card-scope">{memTargetLabel(m)}</span>
                 </div>
                 <p className="memory-quote">

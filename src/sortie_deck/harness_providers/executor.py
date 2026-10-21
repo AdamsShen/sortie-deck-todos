@@ -13,7 +13,9 @@ from the pipeline state). This executor:
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Any
@@ -40,9 +42,24 @@ The orchestrator parses the block and fulfils the intents; results arrive in you
 next toolkit brief. Omit the block when you need nothing.
 Disabled or policy-blocked items are never returned."""
 
-# 允许经回复文本解析的意图键（mcp_calls 是既有声明协议，顺路支持真实 harness）
-_TOOLKIT_INTENT_KEYS = frozenset({"toolkit_search", "toolkit_pick", "skill_run", "mcp_calls"})
+_MEMORY_META_PROTOCOL = """Memory tools (in-loop):
+You may search or read the shared memory library mid-stage by declaring intents in
+the SAME ```toolkit_intent fenced block:
+{"memory_search": {"query": "<free text>"}}   → matching memory brief lines arrive in your next brief
+{"memory_read": {"id": "mem_xxx"}}            → full content (truncated) arrives in your next brief
+Budget: memory reads are capped per stage — search first, read only what you need."""
+
+# 允许经回复文本解析的意图键（mcp_calls 是既有声明协议，顺路支持真实 harness；
+# memory_search/memory_read 由编排层 run_memory_meta 兑现）
+_TOOLKIT_INTENT_KEYS = frozenset(
+    {"toolkit_search", "toolkit_pick", "skill_run", "mcp_calls", "memory_search", "memory_read"}
+)
 _TOOLKIT_INTENT_BLOCK_RE = re.compile(r"```toolkit_intent\s*(.*?)```", re.DOTALL)
+
+logger = logging.getLogger(__name__)
+
+# 反思触发下限：回复太短（如纯确认语）没有沉淀价值，跳过 LLM 反思
+_REFLECT_MIN_REPLY_CHARS = 200
 
 
 def _parse_toolkit_intents(text: str) -> dict[str, Any]:
@@ -72,6 +89,16 @@ def _toolkit_search_enabled() -> bool:
         from sortie_deck.settings import settings
 
         return bool(getattr(settings, "toolkit_search", False))
+    except Exception:  # noqa: BLE001 — settings 不可用时按关闭处理
+        return False
+
+
+def _memory_tools_enabled() -> bool:
+    """内置记忆元工具开关（memory_search / memory_read）。"""
+    try:
+        from sortie_deck.settings import settings
+
+        return bool(getattr(settings, "memory_tools", False))
     except Exception:  # noqa: BLE001 — settings 不可用时按关闭处理
         return False
 
@@ -158,7 +185,7 @@ class HarnessStageExecutor:
 
     async def _run_harness(self, ctx: StageContext, harness: str) -> StageResult:
         from sortie_deck.harness_providers.base import get_harness_registry
-        from sortie_deck.mission_memory import get_mission_memory
+        from sortie_deck.mission_memory import build_stage_summary, get_mission_memory
         from sortie_deck.plugins.coding import (
             _count_impl_files,
             clone_repos,
@@ -191,11 +218,22 @@ class HarnessStageExecutor:
             reply=reply.text,
             provider=harness,
         )
-        mm.append_memory(
-            ctx.initiative_id,
-            f"Stage `{ctx.stage}` ({ctx.role}) via `{harness}`: {reply.text[:600] or reply.status}",
+        # 角色分层摘要：协调角色 LLM 提炼决策/结论/风险，执行角色降级为增量流水
+        # （替代旧的 reply 前 600 字符无条件流水账，见 docs/plans/2026-10-21-memory-governance.md #2）
+        stage_summary = await build_stage_summary(
+            stage=ctx.stage,
+            role=str(getattr(ctx.role, "value", ctx.role)),
+            reply_text=reply.text,
+            harness=harness,
         )
+        mm.append_memory(ctx.initiative_id, stage_summary)
         await mm.maybe_summarize(ctx.initiative_id)
+        # 程序性记忆反思沉淀：fire-and-forget，不阻塞 stage 返回（失败静默）
+        if (
+            reply.status == "ok"
+            and len((reply.text or "").strip()) >= _REFLECT_MIN_REPLY_CHARS
+        ):
+            asyncio.create_task(self._reflect_to_memory(ctx, reply.text))
 
         log_lines = [f"harness={harness}", f"session={session.native_id or session.id}"]
         log_lines.extend(repo_log)
@@ -238,6 +276,68 @@ class HarnessStageExecutor:
             proposed_next=("qa_verify" if ok and str(getattr(ctx.role, "value", ctx.role)) in CODING_ROLE_VALUES else None),
             meta=meta,
         )
+
+    async def _reflect_to_memory(self, ctx: StageContext, reply_text: str) -> None:
+        """反思沉淀（程序性记忆）：从本次 stage 经验生成 agent 作用域 lesson。
+
+        业界对应 AgentCore "procedural" / LangMem 反思式自我改进——同角色做同类
+        stage 时经 agent 作用域注入链路自动复用。fire-and-forget 调用，任何失败
+        静默（记忆是增强不是依赖）；同角色 lesson 超过配置上限时淘汰最旧。
+        """
+        from sortie_deck.memory import CreateMemoryRequest, enforce_agent_lesson_cap
+        from sortie_deck.settings import settings
+
+        role = str(getattr(ctx.role, "value", ctx.role))
+        if not settings.memory_reflect_enabled:
+            return
+        try:
+            from sortie_deck.api.app import get_memory
+            from sortie_deck.llm import LlmClient
+
+            client = LlmClient(timeout=15.0)
+            if not client.enabled:
+                return
+            lesson = await client.chat_text(
+                system=(
+                    "你是执行经验沉淀器。根据本次 stage 的角色与回复，提炼一条可复用的"
+                    "程序性经验（下次同角色做同类工作时应该怎么做/避免什么）。"
+                    "输出一行不超过 120 字的具体经验，不要空话。"
+                ),
+                user=f"stage={ctx.stage}\nrole={role}\n回复：\n{reply_text[:4000]}",
+                temperature=0.1,
+            )
+            if not lesson.strip():
+                return
+            store = get_memory()
+            entry = store.create(
+                CreateMemoryRequest(
+                    scope="agent",
+                    scope_id=role,
+                    kind="lesson",
+                    content=lesson.strip(),
+                    tags=[f"stage:{ctx.stage}", "procedural"],
+                    source="reflection",
+                ),
+                author_id="system",
+                author_name="反思沉淀",
+            )
+            removed = enforce_agent_lesson_cap(store, settings.memory_reflect_agent_lesson_cap)
+            logger.info(
+                "反思沉淀完成: initiative=%s stage=%s role=%s entry=%s evicted=%s",
+                ctx.initiative_id,
+                ctx.stage,
+                role,
+                entry.id,
+                removed,
+            )
+        except Exception:  # noqa: BLE001 — 反思是增强项，绝不阻塞或污染 stage 结果
+            logger.warning(
+                "反思沉淀失败(忽略): initiative=%s stage=%s role=%s",
+                ctx.initiative_id,
+                ctx.stage,
+                role,
+                exc_info=True,
+            )
 
     # --- context -----------------------------------------------------------------
 
@@ -321,6 +421,8 @@ class HarnessStageExecutor:
         # 意图经 StageResult.meta 透传，本段只是说明书；关闭开关时不注入。
         if _toolkit_search_enabled():
             sections.append(_TOOLKIT_META_PROTOCOL)
+        if _memory_tools_enabled():
+            sections.append(_MEMORY_META_PROTOCOL)
         if repo_section:
             sections.append(repo_section.strip())
         artifact_index = list(pack.get("artifact_index") or [])

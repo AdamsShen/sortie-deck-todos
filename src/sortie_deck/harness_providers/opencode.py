@@ -34,7 +34,7 @@ class OpenCodeProvider:
             resp = httpx.get(
                 f"{settings.opencode_base_url.rstrip('/')}/project",
                 headers=self._headers(),
-                timeout=settings.mem0_timeout,
+                timeout=settings.opencode_http_timeout,
             )
             if resp.status_code < 500:
                 return ProbeStatus(

@@ -54,11 +54,38 @@ class Settings(BaseSettings):
     mem0_api_key: str | None = None
     mem0_user_prefix: str = "sortie"
     mem0_timeout: float = 5.0
+    # --- memory governance（记忆治理，见 docs/plans/2026-10-21-memory-governance.md）---
+    # 滚动总结的角色分层摘要：协调角色用 LLM 提炼决策/结论/风险，执行角色留增量；
+    # false 或无 LLM 时降级为旧的截断流水
+    memory_stage_summary_llm: bool = True
+    # 反思沉淀（程序性记忆）：stage 成功后异步生成同角色可复用的 lesson；
+    # agent 作用域 lesson 数量上限，超限按 updated_at 淘汰最旧，防无限堆积
+    memory_reflect_enabled: bool = True
+    memory_reflect_agent_lesson_cap: int = 20
+    # 新近度加权：打分时对最近 N 天内更新的记忆额外加分（线性衰减到 0）
+    memory_recency_bonus_days: float = 3.0
+    # 冲突检测阈值（本地规则兜底）：同 scope/scope_id/kind 且分词重合度 ≥ 该值
+    # 视为同主题，旧条目标记 superseded（失效不删除，bi-temporal 思路）
+    memory_conflict_threshold: float = 0.8
+    # 条目记忆检索路径：local（默认，关键词打分+新近度）| weknora（混合检索+rerank，
+    # graph 模式走图谱扩展，失败逐级降级 hybrid → 本地打分，见 docs/plans/
+    # 2026-10-21-memory-weknora-retrieval.md）
+    memory_retrieval: str = "local"
+    # 记忆镜像专用 WeKnora 知识库 id；缺省回落主库 TDT_WEKNORA_KB_ID
+    weknora_memory_kb_id: str | None = None
+    # 内置记忆元工具（memory_search / memory_read）：Agent 在 stage 回复里声明
+    # 意图，编排层兑现后经下阶段 brief 回传结果
+    memory_tools: bool = True
+    # 单阶段 memory_read 预算与单条全文截断（防上下文堆积）
+    memory_read_budget_per_stage: int = 4
+    memory_read_max_chars: int = 2000
     # OpenCode server (deployed alongside the app in the cloud, started via
     # `opencode serve`). The provider talks HTTP to it — never a local CLI.
     opencode_base_url: str | None = None
     opencode_api_key: str | None = None
     opencode_timeout: float = 600.0
+    # opencode 探测请求超时（probe 走轻量 GET，独立于 send 的长超时）
+    opencode_http_timeout: float = 5.0
     # --- mission-scoped RAG namespace ----------------------------------------
     # Auto-index key stage artifacts into the knowledge base under the
     # initiative's namespace (tags `ini:<id>`, WeKnora folder `<prefix>/<id>`).
