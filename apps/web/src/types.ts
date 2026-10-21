@@ -148,6 +148,8 @@ export interface ToolkitItem {
   featured?: boolean;
   enabled: boolean;
   source?: string;
+  /** 上下文负载策略：always=常驻（每轮注入，计入预算）/ defer=按需（tool_search 检索后上浮） */
+  load?: "always" | "defer";
   author_id?: string;
   author_name?: string;
   created_at?: string;
@@ -163,6 +165,35 @@ export const TOOLKIT_CATEGORIES: ToolkitCategory[] = [
   "browser",
   "office",
 ];
+
+/** 市场精选技能（GET /api/market/skills） */
+export interface MarketSkill {
+  key: string;
+  name: string;
+  summary: string;
+  src: string;
+  category: string;
+  tags: string;
+  installed?: boolean;
+}
+
+/** MCP 连接测试结果（POST /api/toolkit/mcp/test） */
+export interface McpTestResult {
+  ok: boolean;
+  tools?: string[];
+  error?: string;
+  log?: string[];
+}
+
+/** skill-install 优化草稿（POST /api/toolkit/optimize_skill） */
+export interface SkillDraft {
+  draft_id: string;
+  name: string;
+  category: string;
+  original: string;
+  optimized: string;
+  backend: string;
+}
 
 export interface PublicUser {
   id: string;

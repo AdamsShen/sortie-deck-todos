@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Sortie Deck 工具箱 · Stripe 市场感版</title>
+<style>
+  :root{
+    --bg:#f6f9fc; --bg2:#edf1f7; --panel:#ffffff; --panel2:#f8fafd;
+    --line:#e3e8ee; --line2:#cbd2dc;
+    --ink:#1a1f36; --mut:#697386;
+    --green:#0e9f6e; --green-bg:#dff2e9;
+    --blue:#3b5bdb; --blue-lt:#6e8be8;
+    --red:#c9503a;
+    --serif:"Songti SC","Noto Serif SC",Georgia,serif;
+    --sans:-apple-system,"PingFang SC",system-ui,sans-serif;
+    --mono:ui-monospace,"SF Mono",Menlo,monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    font:15px/1.65 var(--sans);color:var(--ink);background:var(--bg);
+    background-image:
+      linear-gradient(rgba(26,31,54,0.025) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(26,31,54,0.025) 1px,transparent 1px);
+    background-size:28px 28px;
+    -webkit-font-smoothing:antialiased;
+  }
+  button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+  input{font:inherit;color:inherit}
+
+  /* ---------- 顶部导航 ---------- */
+  .topnav{display:flex;align-items:center;gap:28px;background:var(--panel);border-bottom:1px solid var(--line);padding:0 32px;height:56px;position:sticky;top:0;z-index:50}
+  .brand{display:flex;align-items:center;gap:10px}
+  .brand .logo{width:30px;height:30px;border-radius:7px;background:var(--ink);color:#fff;display:grid;place-items:center;font:600 11px var(--mono);letter-spacing:.5px}
+  .brand b{font-family:var(--serif);font-size:17px;letter-spacing:.2px}
+  .brand small{display:block;font-size:10px;color:var(--mut);letter-spacing:.4px}
+  .topnav nav{display:flex;gap:2px;flex:1}
+  .topnav nav a{padding:6px 12px;border-radius:7px;font-size:13.5px;color:var(--mut);text-decoration:none}
+  .topnav nav a.on{color:var(--ink);background:var(--bg2);font-weight:600}
+  .topnav nav a:hover{color:var(--ink)}
+
+  .wrap{max-width:1280px;margin:0 auto;padding:34px 32px 80px}
+
+  /* ---------- 页头 ---------- */
+  .pagehead{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;margin-bottom:26px}
+  .crumb{font:600 11px var(--mono);color:var(--blue);letter-spacing:1.5px;margin-bottom:8px}
+  h1{font-family:var(--serif);font-size:30px;font-weight:600;letter-spacing:.5px;line-height:1.2}
+  .lede{color:var(--mut);font-size:15px;margin-top:8px;max-width:60ch}
+  .budget{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 16px;min-width:230px}
+  .budget .row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
+  .budget .t{font-size:12px;color:var(--mut)}
+  .budget .v{font:600 14px var(--mono)}
+  .budget .v em{font-style:normal;color:var(--mut);font-weight:400}
+  .budget .bar{height:4px;background:var(--bg2);border-radius:2px;overflow:hidden}
+  .budget .bar i{display:block;height:100%;background:var(--blue);border-radius:2px;transition:width .4s}
+  .budget.over .bar i{background:var(--red)}
+
+  /* ---------- 分段控件 ---------- */
+  .seg{display:inline-flex;background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:3px;margin-bottom:20px}
+  .seg button{padding:7px 24px;border-radius:7px;font-size:14px;color:var(--mut);transition:.15s}
+  .seg button.on{background:var(--panel);color:var(--ink);font-weight:600;box-shadow:0 1px 3px rgba(26,31,54,.14)}
+  .seg button .n{font:400 11px var(--mono);color:var(--mut);margin-left:6px}
+
+  /* ---------- 发现带 ---------- */
+  .band{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:20px 22px;margin-bottom:22px}
+  .band-head{display:flex;justify-content:space-between;align-items:flex-start;gap:24px;margin-bottom:14px}
+  .band-head h2{font-family:var(--serif);font-size:19px;font-weight:600}
+  .band-head p{color:var(--mut);font-size:13.5px;margin-top:4px;max-width:60ch}
+  .market-row{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
+  .mkt-card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:8px}
+  .mkt-top{display:flex;align-items:center;gap:10px}
+  .mkt-top .name{font:600 14px var(--mono);flex:1}
+  .mkt-desc{font-size:13px;color:var(--mut);line-height:1.5;flex:1}
+  .mkt-foot{display:flex;align-items:center;justify-content:space-between}
+  .install-bar{height:4px;background:var(--bg2);border-radius:2px;overflow:hidden;margin-top:4px}
+  .install-bar i{display:block;height:100%;width:0;background:var(--blue);border-radius:2px;transition:width .3s}
+  .pct{font:500 11px var(--mono);color:var(--blue)}
+
+  .urlinstall{display:flex;gap:8px;align-items:center;margin-top:16px;padding-top:14px;border-top:1px dashed var(--line2)}
+  .urlinstall label{font-size:12px;color:var(--mut);white-space:nowrap}
+  .urlinstall input{flex:1;max-width:420px;border:1px solid var(--line2);border-radius:8px;padding:7px 12px;font:13px var(--mono);background:var(--panel)}
+  .urlinstall input:focus{outline:2px solid rgba(59,91,219,.25);border-color:var(--blue)}
+  .urlinstall .prog{flex:1;max-width:260px}
+
+  .hl-chips{display:flex;gap:10px;margin:4px 0 16px;flex-wrap:wrap}
+  .hl-chip{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 14px;font-size:13px}
+  .hl-chip b{display:block;font-size:13px}
+  .hl-chip span{color:var(--mut);font-size:12px}
+
+  /* ---------- 分类 chips ---------- */
+  .chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px}
+  .chip{border:1px solid var(--line2);border-radius:999px;padding:5px 14px;font-size:13px;color:var(--mut);background:var(--panel);transition:.15s}
+  .chip:hover{color:var(--ink);border-color:var(--ink)}
+  .chip.on{background:var(--ink);border-color:var(--ink);color:#fff}
+  .chip .c{font:400 11px var(--mono);opacity:.7;margin-left:4px}
+
+  /* ---------- 条目卡片 ---------- */
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px}
+  .card{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px;transition:box-shadow .15s,border-color .15s}
+  .card:hover{box-shadow:0 2px 10px rgba(26,31,54,.07)}
+  .card.off{opacity:.55}
+  .card.confirming{border-color:var(--red)}
+  .card-head{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+  .mono-badge{width:30px;height:30px;border-radius:7px;display:grid;place-items:center;font:600 11px var(--mono);flex:none}
+  .tone-blue{background:rgba(59,91,219,.10);color:var(--blue)}
+  .tone-green{background:rgba(14,159,110,.12);color:var(--green)}
+  .tone-gray{background:var(--bg2);color:var(--mut)}
+  .card-name{font:600 15px var(--mono);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dots{width:26px;height:26px;border-radius:6px;color:var(--mut);font-size:16px;line-height:1;flex:none}
+  .dots:hover{background:var(--bg2);color:var(--ink)}
+  .menu{position:absolute;right:12px;top:44px;background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:0 6px 20px rgba(26,31,54,.14);min-width:148px;padding:4px;z-index:20}
+  .menu button{display:block;width:100%;text-align:left;padding:7px 12px;font-size:13px;border-radius:6px;color:var(--ink)}
+  .menu button:hover{background:var(--bg2)}
+  .menu button.danger{color:var(--red)}
+  .menu button.danger:hover{background:rgba(201,80,58,.08)}
+  .meta{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px}
+  .tag{font-size:11.5px;padding:2px 8px;border-radius:5px;background:var(--bg2);color:var(--mut)}
+  .tag.cat{background:transparent;border:1px solid var(--line)}
+  .tag.always{background:rgba(59,91,219,.10);color:var(--blue)}
+  .tag.ver{font-family:var(--mono);font-size:10.5px}
+  .tag.update{background:rgba(59,91,219,.10);color:var(--blue)}
+  .tag.src{background:var(--green-bg);color:var(--green)}
+  .desc{font-size:13px;color:var(--mut);line-height:1.55;margin-bottom:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .endpoint{font:12px var(--mono);color:var(--mut);background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:4px 8px;margin-bottom:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .card-foot{display:flex;align-items:center;justify-content:space-between}
+  .card-foot .grow{flex:1}
+  .grant{font-size:12px;color:var(--blue);border:1px solid var(--line2);border-radius:6px;padding:3px 10px}
+  .grant:hover{border-color:var(--blue)}
+
+  /* 状态徽标：点 + 文字 */
+  .st{display:inline-flex;align-items:center;gap:6px;font-size:12.5px}
+  .st i{width:7px;height:7px;border-radius:50%;flex:none}
+  .st.ok{color:var(--green)} .st.ok i{background:var(--green)}
+  .st.pend{color:var(--blue)} .st.pend i{background:var(--blue-lt)}
+  .st.down{color:var(--red)} .st.down i{background:var(--red)}
+  .st.off{color:var(--mut)} .st.off i{background:var(--line2)}
+
+  /* 进度条（列表内安装中） */
+  .progress{height:4px;background:var(--bg2);border-radius:2px;overflow:hidden;flex:1}
+  .progress i{display:block;height:100%;background:var(--blue);border-radius:2px}
+
+  /* 删除确认条 */
+  .confirm-bar{position:absolute;left:0;right:0;bottom:0;background:rgba(201,80,58,.06);border-top:1px solid rgba(201,80,58,.3);border-radius:0 0 10px 10px;padding:8px 14px;display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--red)}
+  .confirm-bar .btn-mini{font-size:12px;padding:3px 10px;border-radius:6px}
+  .confirm-bar .yes{background:var(--red);color:#fff}
+  .confirm-bar .no{color:var(--mut)}
+  .card.confirming{padding-bottom:44px}
+
+  .empty{grid-column:1/-1;text-align:center;color:var(--mut);padding:48px 0;font-size:14px}
+
+  /* ---------- 按钮 ---------- */
+  .btn{display:inline-flex;align-items:center;gap:6px;border-radius:8px;padding:7px 16px;font-size:13.5px;font-weight:500;transition:.15s;border:1px solid transparent}
+  .btn.primary{background:var(--blue);color:#fff}
+  .btn.primary:hover{background:#3350c4}
+  .btn.primary:disabled{background:var(--line2);cursor:not-allowed}
+  .btn.secondary{border-color:var(--line2);color:var(--ink);background:var(--panel)}
+  .btn.secondary:hover{border-color:var(--ink)}
+  .btn.ghost{color:var(--mut)}
+  .btn.ghost:hover{color:var(--ink)}
+  .btn.done{background:var(--green-bg);color:var(--green);cursor:default}
+
+  /* ---------- 抽屉 ---------- */
+  .overlay{position:fixed;inset:0;background:rgba(26,31,54,.32);opacity:0;pointer-events:none;transition:.2s;z-index:90}
+  .overlay.open{opacity:1;pointer-events:auto}
+  .drawer{position:fixed;top:0;right:0;bottom:0;width:480px;background:var(--panel);border-left:1px solid var(--line);box-shadow:-12px 0 40px rgba(26,31,54,.12);transform:translateX(100%);transition:transform .25s ease;z-index:100;display:flex;flex-direction:column}
+  .drawer.open{transform:none}
+  .drawer-head{padding:22px 26px 16px;border-bottom:1px solid var(--line)}
+  .drawer-head h2{font-family:var(--serif);font-size:20px;font-weight:600}
+  .drawer-head p{font-size:13px;color:var(--mut);margin-top:4px}
+  .drawer-x{position:absolute;top:18px;right:20px;width:28px;height:28px;border-radius:6px;color:var(--mut);font-size:18px}
+  .drawer-x:hover{background:var(--bg2);color:var(--ink)}
+  .drawer-body{flex:1;overflow-y:auto;padding:22px 26px}
+  .fgroup{margin-bottom:20px}
+  .flabel{display:block;font-size:12px;color:var(--mut);margin-bottom:6px;letter-spacing:.3px}
+  .finput{width:100%;border:1px solid var(--line2);border-radius:8px;padding:9px 12px;font-size:13.5px;background:var(--panel)}
+  .finput.mono{font:13px var(--mono)}
+  .finput:focus{outline:2px solid rgba(59,91,219,.25);border-color:var(--blue)}
+  .fhint{font-size:12px;color:var(--mut);margin-top:6px}
+  .transport{display:grid;grid-template-columns:1fr 1fr 1fr;border:1px solid var(--line2);border-radius:10px;overflow:hidden}
+  .transport button{padding:10px 10px 9px;text-align:left;border-right:1px solid var(--line);background:var(--panel);transition:.15s}
+  .transport button:last-child{border-right:none}
+  .transport .tt{font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:5px}
+  .transport .td{font-size:10.5px;color:var(--mut);line-height:1.4;margin-top:3px}
+  .transport button.on{background:rgba(59,91,219,.06);box-shadow:inset 0 0 0 2px var(--blue)}
+  .tbadge{font-size:9.5px;background:var(--green-bg);color:var(--green);border-radius:4px;padding:1px 5px;font-weight:500}
+  .authseg{display:inline-flex;background:var(--bg2);border:1px solid var(--line);border-radius:8px;padding:3px;margin-bottom:10px}
+  .authseg button{padding:5px 14px;border-radius:5px;font-size:12.5px;color:var(--mut)}
+  .authseg button.on{background:var(--panel);color:var(--ink);font-weight:600;box-shadow:0 1px 2px rgba(26,31,54,.12)}
+  .oauthbtn{border:1px solid var(--line2);border-radius:8px;padding:8px 14px;font-size:13px}
+  .oauthbtn:hover{border-color:var(--blue);color:var(--blue)}
+  .oauthbtn.ok{border-color:var(--green);color:var(--green);cursor:default}
+  .drawer-foot{padding:16px 26px;border-top:1px solid var(--line);display:flex;align-items:center;gap:12px}
+  .test-status{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;flex:1}
+  .test-status i{width:7px;height:7px;border-radius:50%;flex:none}
+  .test-status.testing{color:var(--blue)} .test-status.testing i{background:var(--blue-lt);animation:pulse 1s infinite}
+  .test-status.good{color:var(--green)} .test-status.good i{background:var(--green)}
+  .test-status.bad{color:var(--red)} .test-status.bad i{background:var(--red)}
+  @keyframes pulse{50%{opacity:.3}}
+
+  /* ---------- toast ---------- */
+  .toast{position:fixed;bottom:28px;left:50%;transform:translate(-50%,10px);background:var(--ink);color:#fff;font-size:13px;padding:9px 18px;border-radius:8px;opacity:0;transition:.25s;z-index:200;pointer-events:none}
+  .toast.show{opacity:1;transform:translate(-50%,0)}
+</style>
+</head>
+<body>
+
+<header class="topnav">
+  <div class="brand">
+    <div class="logo">SD</div>
+    <div><b>Sortie Deck</b><small>前线小队 · 共交付 · 无传话</small></div>
+  </div>
+  <nav>
+    <a href="#">作战面</a><a href="#">任务</a><a href="#">知识库</a><a href="#">记忆</a>
+    <a href="#">角色工厂</a><a class="on" href="#">工具箱</a><a href="#">角色频道</a>
+    <a href="#">小队</a><a href="#">决策中心</a><a href="#">管理</a>
+  </nav>
+</header>
+
+<main class="wrap">
+  <div class="pagehead">
+    <div>
+      <div class="crumb">TOOLBOX · 能力仓库</div>
+      <h1>Sortie Deck 工具箱</h1>
+      <p class="lede">技能浏览器：Tools · Skills · 连接器，供小队与 Agent 挂载。常驻条目每轮注入上下文，按需条目经 tool_search 检索后上浮。</p>
+    </div>
+    <div class="budget" id="budget">
+      <div class="row"><span class="t">常驻预算（上下文成本）</span><span class="v"><b id="bNow">0</b><em> / 建议上限 12</em></span></div>
+      <div class="bar"><i id="bBar" style="width:0%"></i></div>
+    </div>
+  </div>
+
+  <div class="seg" id="tabs">
+    <button data-tab="tool" class="on">工具<span class="n" id="cnt-tool"></span></button>
+    <button data-tab="skill">技能<span class="n" id="cnt-skill"></span></button>
+    <button data-tab="mcp">连接器<span class="n" id="cnt-mcp"></span></button>
+  </div>
+
+  <div id="band"></div>
+  <div class="chips" id="chips"></div>
+  <div class="grid" id="grid"></div>
+</main>
+
+<!-- 连接器抽屉 -->
+<div class="overlay" id="overlay"></div>
+<aside class="drawer" id="drawer">
+  <button class="drawer-x" id="drawerX">×</button>
+  <div class="drawer-head">
+    <h2>添加连接器</h2>
+    <p>接入外部 MCP 服务。本地进程走 stdio，云端服务走 SSE 或 Streamable HTTP。</p>
+  </div>
+  <div class="drawer-body">
+    <div class="fgroup">
+      <label class="flabel">名称</label>
+      <input class="finput mono" id="fName" placeholder="my-mcp">
+    </div>
+    <div class="fgroup">
+      <label class="flabel">传输方式 Transport</label>
+      <div class="transport" id="transport">
+        <button data-t="stdio" class="on"><span class="tt">stdio</span><span class="td">本地进程，命令行启动，零网络依赖</span></button>
+        <button data-t="sse"><span class="tt">SSE</span><span class="td">云端 MCP，事件流推送，配置简单</span></button>
+        <button data-t="http"><span class="tt">Streamable HTTP <span class="tbadge">推荐</span></span><span class="td">云端 MCP，支持鉴权与 OAuth</span></button>
+      </div>
+    </div>
+    <div class="fgroup" id="grpCmd">
+      <label class="flabel">启动命令 Command</label>
+      <input class="finput mono" id="fCmd" placeholder="npx -y @modelcontextprotocol/server-…">
+      <div class="fhint">在本机以子进程方式拉起，随小队会话启停。</div>
+    </div>
+    <div id="grpRemote">
+      <div class="fgroup">
+        <label class="flabel">端点 URL</label>
+        <input class="finput mono" id="fUrl" placeholder="https://…">
+      </div>
+      <div class="fgroup">
+        <label class="flabel">鉴权方式</label>
+        <div class="authseg" id="authseg">
+          <button data-a="bearer" class="on">Bearer Token</button>
+          <button data-a="oauth">OAuth</button>
+        </div>
+        <div id="authBearer">
+          <input class="finput mono" id="fToken" placeholder="Bearer token · sk-…">
+        </div>
+        <div id="authOauth" style="display:none">
+          <button class="oauthbtn" id="oauthBtn">发起 OAuth 授权</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="drawer-foot">
+    <span class="test-status" id="testStatus" style="display:none"><i></i><span id="testText"></span></span>
+    <button class="btn secondary" id="testBtn">测试连接</button>
+    <button class="btn ghost" id="cancelBtn">取消</button>
+    <button class="btn primary" id="submitBtn" disabled>添加连接</button>
+  </div>
+</aside>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ================= 数据 ================= */
+const CATS = ["工程研发","产品设计","质量测试","运维发布","知识资料","浏览器自动化","办公协作"];
+
+const tools = [
+  {id:"t1",kind:"tool",name:"web_search",mono:"ws",tone:"blue",runtime:"http",cat:"工程研发",load:"always",mounts:4,enabled:true,desc:"联网检索与网页摘要，注入搜索结果上下文"},
+  {id:"t2",kind:"tool",name:"code_runner",mono:"cr",tone:"blue",runtime:"cli",cat:"工程研发",load:"defer",mounts:2,enabled:true,desc:"沙箱执行代码片段，返回 stdout 与退出码"},
+  {id:"t3",kind:"tool",name:"image_gen",mono:"ig",tone:"green",runtime:"function",cat:"产品设计",load:"defer",mounts:3,enabled:true,desc:"文生图函数调用，支持尺寸与风格参数"},
+  {id:"t4",kind:"tool",name:"doc_export",mono:"de",tone:"gray",runtime:"plugin",cat:"办公协作",load:"defer",mounts:1,enabled:false,desc:"将任务产出导出为 docx / pdf 附件"},
+];
+
+const skills = [
+  {id:"s1",kind:"skill",name:"log-analyzer",mono:"la",tone:"blue",ver:"v1.2.0",src:"GitHub",cat:"工程研发",load:"always",mounts:2,enabled:true,update:"v1.3.0",desc:"SKILL.md + 3 个脚本：解析日志、聚类报错、定位回归"},
+  {id:"s2",kind:"skill",name:"ppt-builder",mono:"pb",tone:"green",ver:"v0.9.1",src:"市场",cat:"办公协作",load:"defer",mounts:1,enabled:true,desc:"从大纲生成汇报 PPT，含模板与图表脚本"},
+  {id:"s3",kind:"skill",name:"frontend-review",mono:"fr",tone:"blue",src:"GitHub",cat:"产品设计",load:"defer",mounts:0,enabled:true,installing:67,desc:"组件走查与设计还原度评审，安装中"},
+];
+
+/* 市场推荐带（技能 tab） */
+const market = [
+  {id:"mk1",name:"data-viz",mono:"dv",tone:"green",src:"市场",cat:"质量测试",desc:"将结构化数据渲染为图表与简报，市场本周下载第一",status:"idle",progress:0},
+  {id:"mk2",name:"api-tester",mono:"at",tone:"blue",src:"市场",cat:"质量测试",desc:"从 OpenAPI 规范生成接口用例与断言",status:"idle",progress:0},
+  {id:"mk3",name:"doc-summarizer",mono:"ds",tone:"blue",src:"GitHub",cat:"知识资料",desc:"长文档分节摘要，输出引用定位",status:"idle",progress:0},
+];
+
+const mcps = [
+  {id:"m1",kind:"mcp",name:"filesystem",mono:"fs",tone:"green",transport:"stdio",cmd:"npx -y @modelcontextprotocol/server-filesystem",cat:"知识资料",health:"ok",load:"always",mounts:5,enabled:true,desc:"仓库与文件夹读写，供知识检索使用"},
+  {id:"m2",kind:"mcp",name:"browser",mono:"br",tone:"blue",transport:"stdio",cmd:"npx -y @modelcontextprotocol/server-browser",cat:"浏览器自动化",health:"ok",load:"defer",mounts:3,enabled:true,desc:"无头浏览器驱动，页面巡检与截图"},
+  {id:"m3",kind:"mcp",name:"postgres-mcp",mono:"pg",tone:"blue",transport:"sse",url:"https://mcp.internal.xmly.dev/pg/sse",cat:"工程研发",health:"ok",load:"defer",mounts:2,enabled:true,desc:"内网只读库查询，SSE 长连接"},
+  {id:"m4",kind:"mcp",name:"github-mcp",mono:"gh",tone:"gray",transport:"http",url:"https://api.githubcopilot.com/mcp/",cat:"工程研发",health:"pending",load:"defer",mounts:0,enabled:true,desc:"仓库、PR 与 Issue 操作，等待 OAuth 授权"},
+  {id:"m5",kind:"mcp",name:"notion-mcp",mono:"no",tone:"gray",transport:"http",url:"https://mcp.notion.com/mcp",cat:"办公协作",health:"down",load:"defer",mounts:1,enabled:true,desc:"文档空间读写，连接已断开"},
+];
+
+const state = {tab:"tool", cat:"全部", openMenu:null};
+const $ = s => document.querySelector(s);
+const HEALTH = {ok:["ok","已连接"], pending:["pend","待授权"], down:["down","已断开"]};
+const T_LABEL = {stdio:"stdio", sse:"SSE", http:"Streamable HTTP"};
+
+function allItems(){ return [...tools,...skills,...mcps]; }
+function bucket(){ return state.tab==="tool"?tools : state.tab==="skill"?skills : mcps; }
+
+/* ================= 渲染 ================= */
+function updateCounts(){
+  $("#cnt-tool").textContent = tools.length;
+  $("#cnt-skill").textContent = skills.length + market.filter(m=>m.status==="done").length;
+  $("#cnt-mcp").textContent = mcps.length;
+}
+function updateBudget(){
+  const n = allItems().filter(i=>i.enabled && i.load==="always" && !i.installing).length;
+  $("#bNow").textContent = n;
+  $("#bBar").style.width = Math.min(100, n/12*100) + "%";
+  $("#budget").classList.toggle("over", n>12);
+}
+function toast(msg){
+  const t=$("#toast"); t.textContent=msg; t.classList.add("show");
+  clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove("show"),2200);
+}
+
+function chipsHTML(){
+  const list = bucket();
+  const cnt = c => c==="全部" ? list.length : list.filter(i=>i.cat===c).length;
+  return ["全部",...CATS].map(c=>
+    `<button class="chip ${state.cat===c?"on":""}" data-cat="${c}">${c}<span class="c">${cnt(c)}</span></button>`).join("");
+}
+
+function mktCardHTML(m){
+  let foot;
+  if(m.status==="idle") foot = `<button class="btn primary" data-minstall="${m.id}">安装</button>`;
+  else if(m.status==="installing") foot = `<div class="grow"><div class="install-bar"><i style="width:${m.progress}%"></i></div><div class="pct" style="margin-top:4px">安装中 ${m.progress}%</div></div>`;
+  else foot = `<span class="st ok"><i></i>已安装</span>`;
+  return `<div class="mkt-card" data-mid="${m.id}">
+    <div class="mkt-top">
+      <div class="mono-badge tone-${m.tone}">${m.mono}</div>
+      <span class="name">${m.name}</span>
+      <span class="tag src">${m.src}</span>
+    </div>
+    <div class="mkt-desc">${m.desc}</div>
+    <div class="mkt-foot">${foot}<span class="tag cat">${m.cat}</span></div>
+  </div>`;
+}
+
+function bandHTML(){
+  if(state.tab==="tool") return `
+    <div class="band">
+      <div class="band-head">
+        <div><h2>工具库</h2><p>CLI、HTTP、函数与插件四类运行时，按 endpoint 挂载到小队。工具经 tool_search 按需上浮，常驻需控制预算。</p></div>
+        <button class="btn primary" onclick="toast('演示原型：工具注册表单与连接器抽屉同构，此处略')">添加工具</button>
+      </div>
+    </div>`;
+  if(state.tab==="skill") return `
+    <div class="band">
+      <div class="band-head">
+        <div><h2>市场推荐</h2><p>来自技能市场与 GitHub 的高分技能，一键安装后自动挂载为按需条目。</p></div>
+      </div>
+      <div class="market-row">${market.map(mktCardHTML).join("")}</div>
+      <div class="urlinstall">
+        <label>从外网安装</label>
+        <input id="urlInput" placeholder="https://github.com/org/skill-repo 或 SKILL.md 直链">
+        <button class="btn secondary" id="urlBtn">安装</button>
+        <div class="prog" id="urlProg" style="display:none"><div class="install-bar"><i id="urlBar"></i></div><div class="pct" id="urlPct" style="margin-top:4px">0%</div></div>
+      </div>
+    </div>`;
+  return `
+    <div class="band">
+      <div class="band-head">
+        <div><h2>连接新的外部服务</h2><p>通过 MCP 协议把外部系统能力挂进小队。云端服务推荐 Streamable HTTP：支持鉴权 header 与 OAuth，连接健康可持续观测。</p></div>
+        <button class="btn primary" id="addMcpBtn">添加连接器</button>
+      </div>
+      <div class="hl-chips">
+        <div class="hl-chip"><b>SSE · 事件流接入</b><span>适合只读查询类服务，配置一个 URL 即可</span></div>
+        <div class="hl-chip"><b>Streamable HTTP · 支持 OAuth <span class="tbadge">推荐</span></b><span>云端 MCP 首选，鉴权与续期由平台托管</span></div>
+        <div class="hl-chip"><b>stdio · 本地进程</b><span>在本机以命令行拉起，适合文件系统等本地资源</span></div>
+      </div>
+    </div>`;
+}
+
+function cardHTML(it){
+  const meta = [];
+  let badges = "", footExtra = "";
+  if(it.kind==="tool") badges = `<span class="tag">${it.runtime}</span>`;
+  if(it.kind==="skill"){
+    badges = `<span class="tag ver">${it.ver||""}</span><span class="tag src">${it.src}</span>`;
+    if(it.update) badges += `<span class="tag update">${it.update} 可更新</span>`;
+  }
+  if(it.kind==="mcp"){
+    badges = `<span class="tag">${T_LABEL[it.transport]}</span>`;
+  }
+  meta.push(badges);
+  meta.push(`<span class="tag cat">${it.cat}</span>`);
+  meta.push(it.load==="always" ? `<span class="tag always">常驻</span>` : `<span class="tag">按需</span>`);
+  meta.push(`<span class="tag">挂载 ${it.mounts} 个 Agent</span>`);
+
+  let mid = "";
+  if(it.kind==="mcp"){
+    const body = it.transport==="stdio" ? it.cmd : it.url;
+    mid = `<div class="endpoint">${body}</div>`;
+  }
+  let foot = "";
+  if(it.installing!=null){
+    foot = `<div class="grow"><div class="progress"><i style="width:${it.installing}%"></i></div></div>
+            <span class="pct">安装中 ${it.installing}%</span>`;
+  }else if(it.kind==="mcp"){
+    const [cls,txt] = HEALTH[it.health];
+    foot = `<span class="st ${cls}"><i></i>${txt}</span>`;
+    if(it.health==="pending") foot += `<button class="grant" data-grant="${it.id}">授权 OAuth</button>`;
+  }else{
+    foot = it.enabled
+      ? `<span class="st ok"><i></i>启用中</span>`
+      : `<span class="st off"><i></i>已停用</span>`;
+  }
+  const menu = state.openMenu===it.id ? `
+    <div class="menu">
+      <button data-act="toggle" data-id="${it.id}">${it.enabled?"停用":"启用"}</button>
+      <button data-act="edit" data-id="${it.id}">编辑</button>
+      <button class="danger" data-act="del" data-id="${it.id}">删除</button>
+    </div>` : "";
+  const confirmBar = it.confirming ? `
+    <div class="confirm-bar">
+      <span>确认删除？该操作不可撤销</span>
+      <span class="grow" style="flex:1"></span>
+      <button class="btn-mini no" data-act="delno" data-id="${it.id}">取消</button>
+      <button class="btn-mini yes" data-act="delyes" data-id="${it.id}">删除</button>
+    </div>` : "";
+  return `<div class="card ${it.enabled?"":"off"} ${it.confirming?"confirming":""}" data-card="${it.id}">
+    <div class="card-head">
+      <div class="mono-badge tone-${it.tone}">${it.mono}</div>
+      <span class="card-name">${it.name}</span>
+      <button class="dots" data-menu="${it.id}">…</button>
+    </div>
+    <div class="meta">${meta.join("")}</div>
+    <div class="desc">${it.desc}</div>
+    ${mid}
+    <div class="card-foot">${foot}</div>
+    ${menu}${confirmBar}
+  </div>`;
+}
+
+function render(){
+  document.querySelectorAll("#tabs button").forEach(b=>b.classList.toggle("on",b.dataset.tab===state.tab));
+  $("#band").innerHTML = bandHTML();
+  $("#chips").innerHTML = chipsHTML();
+  const list = bucket().filter(i=>state.cat==="全部"||i.cat===state.cat);
+  $("#grid").innerHTML = list.length ? list.map(cardHTML).join("")
+    : `<div class="empty">该分类下暂无条目——切换分类，或从上方发现带安装新的能力。</div>`;
+  updateCounts(); updateBudget();
+  if(state.tab==="skill"){ bindSkillBand(); }
+  if(state.tab==="mcp"){ $("#addMcpBtn").onclick=openDrawer; }
+}
+
+/* ================= 技能带交互 ================= */
+function bindSkillBand(){
+  document.querySelectorAll("[data-minstall]").forEach(b=>{
+    b.onclick = ()=>{
+      const m = market.find(x=>x.id===b.dataset.minstall);
+      if(m.status!=="idle") return;
+      m.status="installing"; m.progress=0;
+      const h = setInterval(()=>{
+        m.progress = Math.min(100, m.progress + 7 + Math.random()*10);
+        const card = document.querySelector(`[data-mid="${m.id}"] .mkt-foot`);
+        if(card) card.innerHTML = `<div class="grow"><div class="install-bar"><i style="width:${m.progress}%"></i></div><div class="pct" style="margin-top:4px">安装中 ${Math.floor(m.progress)}%</div></div><span class="tag cat">${m.cat}</span>`;
+        if(m.progress>=100){
+          clearInterval(h);
+          m.status="done";
+          skills.push({id:"sk-"+m.id,kind:"skill",name:m.name,mono:m.mono,tone:m.tone,ver:"v1.0.0",src:m.src,cat:m.cat,load:"defer",mounts:0,enabled:true,desc:m.desc+"（刚从市场安装）"});
+          render(); toast(`已安装 ${m.name}，出现在技能列表`);
+        }
+      },220);
+      render();
+    };
+  });
+  const ub = $("#urlBtn"), ui = $("#urlInput");
+  if(ub) ub.onclick = ()=>{
+    const url = ui.value.trim();
+    if(!/^https?:\/\/.+/.test(url)){ toast("请输入有效的 http(s) 外网地址"); return; }
+    ui.disabled=true; ub.disabled=true;
+    $("#urlProg").style.display="block";
+    let p=0;
+    const h=setInterval(()=>{
+      p=Math.min(100,p+8+Math.random()*12);
+      $("#urlBar").style.width=p+"%";
+      $("#urlPct").textContent=Math.floor(p)+"%";
+      if(p>=100){
+        clearInterval(h);
+        const name=(url.split("/").pop()||"remote-skill").replace(/\.(git|md|html)$/,"")||"remote-skill";
+        skills.push({id:"sk-url-"+Date.now(),kind:"skill",name,mono:name.slice(0,2).toLowerCase(),tone:"green",ver:"v0.1.0",src:"GitHub",cat:"工程研发",load:"defer",mounts:0,enabled:true,desc:"从外网 URL 安装："+url.slice(0,44)});
+        toast(`已从外网安装 ${name}`);
+        render();
+      }
+    },200);
+  };
+}
+
+/* ================= 卡片菜单 / 治理 ================= */
+document.addEventListener("click",e=>{
+  const menuBtn = e.target.closest("[data-menu]");
+  if(menuBtn){
+    state.openMenu = state.openMenu===menuBtn.dataset.menu ? null : menuBtn.dataset.menu;
+    render(); return;
+  }
+  const act = e.target.closest("[data-act]");
+  if(act){
+    const it = allItems().find(i=>i.id===act.dataset.id);
+    const a = act.dataset.act;
+    if(a==="toggle"){ it.enabled=!it.enabled; state.openMenu=null; render(); toast(it.enabled?"已启用 "+it.name:"已停用 "+it.name); }
+    if(a==="edit"){ state.openMenu=null; render(); toast("演示原型：编辑表单略"); }
+    if(a==="del"){ it.confirming=true; state.openMenu=null; render(); }
+    if(a==="delno"){ it.confirming=false; render(); }
+    if(a==="delyes"){
+      const arr = it.kind==="tool"?tools : it.kind==="skill"?skills : mcps;
+      arr.splice(arr.indexOf(it),1);
+      render(); toast("已删除 "+it.name);
+    }
+    return;
+  }
+  const grant = e.target.closest("[data-grant]");
+  if(grant){
+    const it = mcps.find(m=>m.id===grant.dataset.grant);
+    it.health="ok"; it.tone="green"; render(); toast(it.name+" OAuth 授权完成，已连接"); return;
+  }
+  if(!e.target.closest(".menu")) { if(state.openMenu){ state.openMenu=null; render(); } }
+});
+document.querySelectorAll("#tabs button").forEach(b=>{
+  b.onclick=()=>{ state.tab=b.dataset.tab; state.cat="全部"; state.openMenu=null; render(); };
+});
+$("#chips").addEventListener("click",e=>{
+  const c=e.target.closest(".chip"); if(c){ state.cat=c.dataset.cat; render(); }
+});
+
+/* ================= 连接器抽屉 ================= */
+const dState={transport:"stdio",auth:"bearer",oauth:false,tested:false};
+function openDrawer(){
+  $("#overlay").classList.add("open"); $("#drawer").classList.add("open");
+}
+function closeDrawer(){
+  $("#overlay").classList.remove("open"); $("#drawer").classList.remove("open");
+}
+function syncTransport(){
+  document.querySelectorAll("#transport button").forEach(b=>b.classList.toggle("on",b.dataset.t===dState.transport));
+  const remote = dState.transport!=="stdio";
+  $("#grpCmd").style.display = remote?"none":"block";
+  $("#grpRemote").style.display = remote?"block":"none";
+  resetTest();
+}
+function syncAuth(){
+  document.querySelectorAll("#authseg button").forEach(b=>b.classList.toggle("on",b.dataset.a===dState.auth));
+  $("#authBearer").style.display = dState.auth==="bearer"?"block":"none";
+  $("#authOauth").style.display = dState.auth==="oauth"?"block":"none";
+  resetTest();
+}
+function resetTest(){
+  dState.tested=false; $("#submitBtn").disabled=true;
+  $("#testStatus").style.display="none";
+}
+document.querySelectorAll("#transport button").forEach(b=>b.onclick=()=>{dState.transport=b.dataset.t; syncTransport();});
+document.querySelectorAll("#authseg button").forEach(b=>b.onclick=()=>{dState.auth=b.dataset.a; syncAuth();});
+$("#oauthBtn").onclick=()=>{
+  dState.oauth=true;
+  const b=$("#oauthBtn"); b.textContent="已授权 · 可测试连接"; b.classList.add("ok");
+};
+$("#testBtn").onclick=()=>{
+  const st=$("#testStatus"), tx=$("#testText");
+  st.style.display="inline-flex"; st.className="test-status testing"; tx.textContent="正在建立连接…";
+  $("#testBtn").disabled=true; $("#testBtn").textContent="测试中…";
+  setTimeout(()=>{
+    $("#testBtn").disabled=false; $("#testBtn").textContent="测试连接";
+    let ok=true, msg="";
+    if(dState.transport==="stdio"){
+      const c=$("#fCmd").value.trim();
+      if(!c){ok=false;msg="连接失败：未填写启动命令";}
+    }else{
+      const u=$("#fUrl").value.trim();
+      if(!/^https?:\/\/.+/.test(u)){ok=false;msg="连接失败：端点 URL 无效";}
+      else if(dState.auth==="bearer" && !$("#fToken").value.trim()){ok=false;msg="连接失败：未填写 Bearer Token";}
+      else if(dState.auth==="oauth" && !dState.oauth){ok=false;msg="连接失败：未完成 OAuth 授权";}
+    }
+    if(ok){
+      st.className="test-status good";
+      tx.textContent="连接成功 · 延迟 42ms · "+T_LABEL[dState.transport];
+      dState.tested=true; $("#submitBtn").disabled=false;
+    }else{
+      st.className="test-status bad"; tx.textContent=msg;
+    }
+  },1000);
+};
+$("#submitBtn").onclick=()=>{
+  const name=$("#fName").value.trim()||"new-mcp";
+  mcps.push({id:"m-"+Date.now(),kind:"mcp",name,mono:name.slice(0,2).toLowerCase(),tone:"green",
+    transport:dState.transport,
+    cmd:dState.transport==="stdio"?$("#fCmd").value.trim():"",
+    url:dState.transport!=="stdio"?$("#fUrl").value.trim():"",
+    cat:"工程研发",health:"ok",load:"defer",mounts:0,enabled:true,
+    desc:"新添加的 "+T_LABEL[dState.transport]+" 连接"});
+  $("#fName").value="";$("#fCmd").value="";$("#fUrl").value="";$("#fToken").value="";
+  dState.oauth=false;$("#oauthBtn").textContent="发起 OAuth 授权";$("#oauthBtn").classList.remove("ok");
+  closeDrawer(); state.tab="mcp"; state.cat="全部"; render();
+  toast("已添加并连接 "+name);
+};
+$("#cancelBtn").onclick=closeDrawer;
+$("#drawerX").onclick=closeDrawer;
+$("#overlay").onclick=closeDrawer;
+document.addEventListener("keydown",e=>{ if(e.key==="Escape") closeDrawer(); });
+
+/* ================= 启动 ================= */
+render();
+</script>
+</body>
+</html>

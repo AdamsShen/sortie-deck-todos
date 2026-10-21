@@ -1,0 +1,869 @@
+/* ==========================================================================
+   V4 工具箱 · 版式样式
+   颜色全部继承全局主题 token（paper 浅色 / ink 暗色自动适配），
+   本文件只补充主题缺失的派生色（半透明语义底色）。
+   ========================================================================== */
+.toolkit-market {
+  /* 语义色半透明底：monogram / 徽标 / 选中态用，两种主题下都成立 */
+  --copper-dim: color-mix(in srgb, var(--copper) 12%, transparent);
+  --signal-soft: color-mix(in srgb, var(--signal) 14%, transparent);
+  --danger-soft: color-mix(in srgb, var(--danger) 10%, transparent);
+  --ink-soft: color-mix(in srgb, var(--text) 8%, transparent);
+  background-color: var(--void);
+  background-image: linear-gradient(var(--grid-a) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-a) 1px, transparent 1px);
+  background-size: 28px 28px;
+  font-size: 15px;
+  line-height: 1.65;
+}
+.toolkit-market .kb-hint {
+  color: var(--muted);
+}
+/* 详情页标题与 V4 标题语言一致（衬线） */
+.toolkit-market .mission-title {
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: 22px;
+  letter-spacing: 0.4px;
+}
+.toolkit-market .eyebrow {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 1.2px;
+  color: var(--muted);
+}
+.toolkit-market .preview {
+  background: var(--panel-2);
+  border-color: var(--line);
+  color: var(--text);
+}
+.toolkit-market .btn {
+  font-family: var(--font);
+  border-radius: 8px;
+}
+.toolkit-market .btn.primary {
+  background: var(--copper);
+  border-color: var(--copper);
+  color: #fff;
+}
+.toolkit-market .btn.primary:hover {
+  background: #3350c4;
+}
+.toolkit-market .btn.ghost {
+  background: var(--panel);
+  border: 1px solid var(--line-hot);
+  color: var(--text);
+}
+.toolkit-market .btn.ghost:hover {
+  border-color: var(--text);
+}
+
+/* --- Hero（全宽通栏，与知识库页一致） --- */
+.tk-page {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 24px 28px 60px;
+}
+.tk-hero {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 26px;
+}
+.tk-eyebrow {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  color: var(--copper);
+  margin-bottom: 8px;
+}
+.tk-title {
+  font-family: var(--serif);
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  line-height: 1.2;
+  margin: 0 0 8px;
+}
+.tk-lede {
+  color: var(--muted);
+  max-width: 60ch;
+  margin: 0;
+}
+.tk-hero-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  min-width: 300px;
+}
+.tk-search {
+  width: 300px;
+  height: 36px;
+  border: 1px solid var(--line-hot);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 0 12px;
+  font-family: var(--font);
+  font-size: 13px;
+  color: var(--text);
+}
+.tk-search:focus {
+  outline: 2px solid var(--copper-dim);
+  border-color: var(--copper);
+}
+
+/* --- 预算 --- */
+.tk-budget {
+  width: 100%;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+}
+.tk-budget-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 8px;
+}
+.tk-budget-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+.tk-budget-val {
+  font-family: var(--mono);
+  font-size: 14px;
+}
+.tk-budget-val b {
+  font-weight: 600;
+}
+.tk-budget-val em {
+  font-style: normal;
+  color: var(--muted);
+  font-weight: 400;
+  margin-left: 6px;
+}
+.tk-budget-bar {
+  height: 4px;
+  background: var(--deep);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.tk-budget-bar i {
+  display: block;
+  height: 100%;
+  background: var(--copper);
+  transition: width 0.4s;
+}
+
+/* --- 大号分段 tab --- */
+.tk-seg-large {
+  display: inline-flex;
+  background: var(--deep);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 3px;
+  margin-bottom: 20px;
+}
+.tk-seg-large button {
+  border: none;
+  background: transparent;
+  padding: 8px 26px;
+  border-radius: 8px;
+  font-family: var(--font);
+  font-size: 14px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.tk-seg-large button.on {
+  background: var(--panel);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: 0 1px 3px var(--ink-soft);
+}
+.tk-seg-large button .n {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: 6px;
+}
+
+/* --- 发现带 --- */
+.tk-band {
+  display: block; /* 覆盖旧版 .tk-band 的 flex 布局：标题行 + 全宽内容行 */
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 20px 22px;
+  margin-bottom: 22px;
+}
+.tk-band-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 24px;
+  margin-bottom: 14px;
+}
+.tk-band-head > button,
+.tk-band-actions {
+  flex: none;
+}
+.tk-band-head > button {
+  white-space: nowrap;
+}
+.tk-band-actions {
+  display: flex;
+  gap: 8px;
+}
+.tk-band-title {
+  font-family: var(--serif);
+  font-size: 19px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.tk-band-desc {
+  color: var(--muted);
+  font-size: 13.5px;
+  margin: 0;
+  max-width: 60ch;
+}
+.tk-src-note {
+  display: block;
+  font-size: 12px;
+  margin-top: 4px;
+}
+.tk-market-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+}
+.tk-market-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tk-mkt-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.tk-mkg {
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--copper-dim);
+  color: var(--copper);
+}
+.tk-mkg.g {
+  background: var(--signal-dim);
+  color: var(--signal);
+}
+.tk-mkt-top strong {
+  font-family: var(--mono);
+  font-size: 14px;
+  flex: 1;
+}
+.tk-mkt-desc {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+  flex: 1;
+  margin: 0;
+}
+.tk-mkt-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.tk-tag {
+  font-size: 11.5px;
+  padding: 2px 8px;
+  border-radius: 5px;
+  background: var(--deep);
+  color: var(--muted);
+}
+.tk-tag.g {
+  background: var(--signal-dim);
+  color: var(--signal);
+}
+.tk-tag.c {
+  background: var(--copper-dim);
+  color: var(--copper);
+}
+.tk-tag.line {
+  background: transparent;
+  border: 1px solid var(--line);
+}
+
+/* 连接方式说明卡 */
+.tk-guide-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+.tk-guide {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+.tk-guide b {
+  display: block;
+  font-size: 13px;
+  margin-bottom: 2px;
+}
+.tk-guide span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* --- 分类 chips --- */
+.tk-chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+.tk-chip {
+  border: 1px solid var(--line-hot);
+  border-radius: 999px;
+  padding: 5px 14px;
+  font-size: 13px;
+  color: var(--muted);
+  background: var(--panel);
+  cursor: pointer;
+  font-family: var(--font);
+}
+.tk-chip:hover {
+  color: var(--text);
+  border-color: var(--text);
+}
+.tk-chip.on {
+  background: var(--copper);
+  border-color: var(--copper);
+  color: #fff;
+}
+.tk-chip .c {
+  font-family: var(--mono);
+  font-size: 11px;
+  opacity: 0.7;
+  margin-left: 4px;
+}
+
+/* --- 卡片网格 --- */
+.tk-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 14px;
+}
+.tk-card {
+  position: relative;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  transition: box-shadow 0.15s, border-color 0.15s;
+  cursor: pointer;
+}
+.tk-card:hover {
+  box-shadow: 0 2px 10px var(--ink-soft);
+}
+.tk-card.off {
+  opacity: 0.55;
+}
+.tk-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.tk-monogram {
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--copper-dim);
+  color: var(--copper);
+  flex: none;
+}
+.tk-monogram.g {
+  background: var(--signal-dim);
+  color: var(--signal);
+}
+.tk-monogram.r {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.tk-monogram.k {
+  background: var(--ink-soft);
+  color: var(--text);
+}
+.tk-card-name {
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 600;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tk-card-desc {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+  margin: 0 0 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tk-card-endpoint {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 8px;
+  margin-bottom: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tk-card-meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.tk-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.tk-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.tk-status i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--line-hot);
+  flex: none;
+}
+.tk-status.on {
+  color: var(--signal);
+}
+.tk-status.on i {
+  background: var(--signal);
+}
+.tk-status.pend {
+  color: var(--copper);
+}
+.tk-status.pend i {
+  background: var(--ice);
+}
+.tk-status.down {
+  color: var(--danger);
+}
+.tk-status.down i {
+  background: var(--danger);
+}
+.tk-more {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  flex: none;
+}
+.tk-more:hover {
+  background: var(--deep);
+  color: var(--text);
+}
+.tk-menu {
+  position: absolute;
+  right: 16px;
+  top: 48px;
+  z-index: 40;
+  min-width: 132px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+}
+.tk-menu button {
+  border: none;
+  background: none;
+  text-align: left;
+  padding: 7px 12px;
+  font-size: 13px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text);
+  font-family: var(--font);
+}
+.tk-menu button:hover {
+  background: var(--panel-2);
+}
+.tk-menu button.danger {
+  color: var(--danger);
+}
+.tk-menu button.danger:hover {
+  background: var(--danger-soft);
+}
+
+/* --- 抽屉（添加工具 / 添加连接器） --- */
+.tk-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 480px;
+  max-width: 92vw;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+  box-shadow: -12px 0 40px rgba(0, 0, 0, 0.3);
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  transform: translateX(100%);
+  transition: transform 0.25s ease;
+}
+.tk-drawer.open {
+  transform: none;
+}
+.tk-drawer-head {
+  padding: 22px 26px 16px;
+  border-bottom: 1px solid var(--line);
+  position: relative;
+}
+.tk-drawer-head h3 {
+  font-family: var(--serif);
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0 0 4px;
+}
+.tk-drawer-head p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.tk-drawer-x {
+  position: absolute;
+  top: 18px;
+  right: 20px;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 18px;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+.tk-drawer-x:hover {
+  background: var(--deep);
+  color: var(--text);
+}
+.tk-drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 22px 26px;
+}
+.tk-drawer-foot {
+  padding: 16px 26px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.tk-foot-spacer {
+  flex: 1;
+}
+
+/* 表单 */
+.tk-field {
+  margin-bottom: 20px;
+}
+.tk-field > label {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+  letter-spacing: 0.3px;
+}
+.tk-input {
+  width: 100%;
+  border: 1px solid var(--line-hot);
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-family: var(--font);
+  font-size: 13.5px;
+  background: var(--panel);
+  color: var(--text);
+}
+.tk-input.mono {
+  font-family: var(--mono);
+  font-size: 13px;
+}
+.tk-input:focus {
+  outline: 2px solid var(--copper-dim);
+  border-color: var(--copper);
+}
+.tk-hint {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 6px;
+}
+.tk-select-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border: 1px solid var(--line-hot);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.tk-select-cards.c3 {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+.tk-select-cards button {
+  padding: 10px;
+  text-align: left;
+  background: var(--panel);
+  border: none;
+  border-right: 1px solid var(--line);
+  cursor: pointer;
+  font-family: var(--font);
+}
+.tk-select-cards button:last-child {
+  border-right: none;
+}
+.tk-select-cards button.on {
+  background: var(--copper-dim);
+  box-shadow: inset 0 0 0 2px var(--copper);
+}
+.tk-select-cards .tt {
+  font-size: 12.5px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.tk-select-cards .td {
+  font-size: 10.5px;
+  color: var(--muted);
+  line-height: 1.4;
+  margin-top: 3px;
+}
+.tk-rec {
+  font-size: 9.5px;
+  background: var(--signal-dim);
+  color: var(--signal);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-weight: 500;
+}
+.tk-seg-inline {
+  display: inline-flex;
+  background: var(--deep);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 3px;
+}
+.tk-seg-inline button {
+  border: none;
+  background: none;
+  padding: 5px 14px;
+  border-radius: 5px;
+  font-size: 12.5px;
+  color: var(--muted);
+  cursor: pointer;
+  font-family: var(--font);
+}
+.tk-seg-inline button.on {
+  background: var(--panel);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: 0 1px 2px var(--ink-soft);
+}
+.tk-note {
+  font-size: 11.5px;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px dashed var(--line);
+  border-radius: 7px;
+  padding: 8px 10px;
+}
+.tk-test-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+}
+.tk-test-line i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--line-hot);
+}
+.tk-test-line.testing {
+  color: var(--copper);
+}
+.tk-test-line.testing i {
+  background: var(--ice);
+  animation: tk-pulse 1s infinite;
+}
+.tk-test-line.ok {
+  color: var(--signal);
+}
+.tk-test-line.ok i {
+  background: var(--signal);
+}
+.tk-test-line.fail {
+  color: var(--danger);
+}
+.tk-test-line.fail i {
+  background: var(--danger);
+}
+@keyframes tk-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/* --- 添加技能（居中 modal） --- */
+.tk-modal {
+  width: 560px;
+  max-width: 100%;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.35);
+}
+.tk-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  position: relative;
+  padding: 22px 26px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.tk-modal-head h3 {
+  font-family: var(--serif);
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0 0 4px;
+}
+.tk-modal-head p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.tk-modal-body {
+  padding: 22px 26px;
+}
+.tk-modal-foot {
+  padding: 16px 26px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.tk-x {
+  border: none;
+  background: none;
+  font-size: 18px;
+  cursor: pointer;
+  color: var(--muted);
+  line-height: 1;
+}
+.tk-x:hover {
+  color: var(--text);
+}
+.tk-modal-body .tk-field {
+  margin-bottom: 16px;
+}
+.tk-review-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.tk-review-pane {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+}
+.tk-review-pane.opt {
+  border-color: color-mix(in srgb, var(--copper) 45%, transparent);
+  background: color-mix(in srgb, var(--copper) 6%, transparent);
+}
+.tk-review-pane h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.tk-review-pane pre {
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 230px;
+  overflow: auto;
+  flex: 1;
+  margin: 0 0 10px;
+  background: var(--panel-2);
+  border-radius: 6px;
+  padding: 8px;
+}
+.tk-optimizing {
+  font-size: 12.5px;
+  color: var(--copper);
+  margin: 0;
+}
+.tk-modal-msg {
+  padding: 0 26px 8px;
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--danger);
+}
+.tk-empty {
+  grid-column: 1 / -1;
+  text-align: center;
+  color: var(--muted);
+  padding: 48px 0;
+  font-size: 14px;
+}

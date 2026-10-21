@@ -64,6 +64,9 @@ import type {
   ToolRuntime,
   McpTransport,
   SkillScript,
+  MarketSkill,
+  McpTestResult,
+  SkillDraft,
   UserRole,
   View,
   Visibility,
@@ -303,14 +306,50 @@ export default function App() {
     tags: "",
     featured: false,
     enabled: true,
+    load: "defer" as "always" | "defer",
     scripts: [] as SkillScript[],
   });
-  const [importOpen, setImportOpen] = useState(false);
-  const [importText, setImportText] = useState("");
-  const [importFilename, setImportFilename] = useState("");
-  const [importZipB64, setImportZipB64] = useState("");
-  const [importOverwrite, setImportOverwrite] = useState(true);
-  const importFileRef = useRef<HTMLInputElement | null>(null);
+  // --- V4 工具箱：发现带 / 弹窗 / 连接测试 / skill-install 优化 ---
+  const [marketSkills, setMarketSkills] = useState<MarketSkill[]>([]);
+  const [toolkitMounts, setToolkitMounts] = useState<Record<string, number>>({});
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [skillModalOpen, setSkillModalOpen] = useState(false);
+  const [skillMode, setSkillMode] = useState<"remote" | "local">("remote");
+  const [localMode, setLocalMode] = useState<"upload" | "write">("upload");
+  const [skillUrl, setSkillUrl] = useState("");
+  const [skillModalMsg, setSkillModalMsg] = useState("");
+  const [skillUpload, setSkillUpload] = useState<{ file: File; name: string } | null>(null);
+  const [writeForm, setWriteForm] = useState({ name: "", category: "engineering", body: "" });
+  const [optimizePhase, setOptimizePhase] = useState<"idle" | "running" | "review">("idle");
+  const [skillDraft, setSkillDraft] = useState<SkillDraft | null>(null);
+  const [toolModalOpen, setToolModalOpen] = useState(false);
+  const [toolForm, setToolForm] = useState({
+    name: "",
+    summary: "",
+    category: "engineering",
+    runtime: "cli" as ToolRuntime,
+    endpoint: "",
+    load: "defer" as "always" | "defer",
+  });
+  const [mcpModalOpen, setMcpModalOpen] = useState(false);
+  const [mcpForm, setMcpForm] = useState({
+    name: "",
+    transport: "stdio" as McpTransport,
+    url: "",
+    auth: "bearer" as "bearer" | "oauth",
+    token: "",
+    command: "",
+    category: "engineering",
+  });
+  const [mcpPkg, setMcpPkg] = useState<{ file: File | null; phase: "idle" | "importing" | "ready" }>({
+    file: null,
+    phase: "idle",
+  });
+  const [mcpTest, setMcpTest] = useState<{ state: "idle" | "testing" | "ok" | "fail"; msg: string }>({
+    state: "idle",
+    msg: "",
+  });
+  const [mcpItemTest, setMcpItemTest] = useState<{ id: string; state: string; msg: string } | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const avatarFileRef = useRef<HTMLInputElement | null>(null);
@@ -1735,6 +1774,30 @@ export default function App() {
     () => toolkitCatalog.filter((i) => i.enabled !== false),
     [toolkitCatalog]
   );
+  // 常驻预算：启用且 load=always 的条目数（每轮注入上下文的成本计数）
+  const toolkitAlwaysCount = useMemo(
+    () => toolkitCatalog.filter((i) => i.enabled !== false && i.load === "always").length,
+    [toolkitCatalog]
+  );
+  // 各 tab 条目数（大号分段 tab 上的计数）
+  const toolkitKindCounts = useMemo(
+    () => ({
+      tool: toolkitCatalog.filter((i) => i.kind === "tool").length,
+      skill: toolkitCatalog.filter((i) => i.kind === "skill").length,
+      mcp: toolkitCatalog.filter((i) => i.kind === "mcp").length,
+    }),
+    [toolkitCatalog]
+  );
+  // 当前 tab 下各功能分类的条目数（分类 chips 上的计数）
+  const toolkitCategoryCounts = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const item of toolkitCatalog) {
+      if (item.kind !== toolkitTab) continue;
+      const key = item.category || "";
+      out[key] = (out[key] || 0) + 1;
+    }
+    return out;
+  }, [toolkitCatalog, toolkitTab]);
 
   const refreshToolkitCatalog = useCallback(async () => {
     if (!token) return;
@@ -1743,7 +1806,7 @@ export default function App() {
   }, [token]);
 
   useEffect(() => {
-    if ((view === "tasks" || view === "agents") && token) {
+    if ((view === "tasks" || view === "agents" || view === "toolkit") && token) {
       refreshToolkitCatalog().catch((e) => setError(errMsg(e)));
     }
   }, [view, token, refreshToolkitCatalog]);
@@ -1760,8 +1823,35 @@ export default function App() {
   useEffect(() => {
     if (view === "toolkit" && token) {
       refreshToolkit().catch((e) => setError(errMsg(e)));
+      api<Record<string, number>>("/api/toolkit/mounts", { token })
+        .then(setToolkitMounts)
+        .catch(() => setToolkitMounts({}));
+      api<MarketSkill[]>("/api/market/skills", { token })
+        .then(setMarketSkills)
+        .catch(() => setMarketSkills([]));
     }
   }, [view, token, refreshToolkit]);
+
+  // 卡片「…」菜单：点击其他区域时收起
+  useEffect(() => {
+    if (!openMenuId) return;
+    const close = () => setOpenMenuId(null);
+    document.addEventListener("click", close);
+    return () => document.removeEventListener("click", close);
+  }, [openMenuId]);
+
+  // V4 弹窗/抽屉：Esc 逐层关闭
+  useEffect(() => {
+    const onKey = (e: Event) => {
+      const key = (e as globalThis.KeyboardEvent).key;
+      if (key !== "Escape") return;
+      if (mcpModalOpen) setMcpModalOpen(false);
+      else if (toolModalOpen) setToolModalOpen(false);
+      else if (skillModalOpen) closeSkillModal();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [mcpModalOpen, toolModalOpen, skillModalOpen]);
 
   const toolkitSelected = useMemo(
     () => toolkitItems.find((i) => i.id === toolkitSelectedId) || null,
@@ -1785,24 +1875,14 @@ export default function App() {
     return key ? tr(key) : cat;
   }
 
-  function startNewToolkit() {
-    setToolkitEditing(true);
-    setToolkitSelectedId(null);
-    setToolkitForm({
-      name: "",
-      summary: "",
-      runtime: "cli",
-      endpoint: "",
-      transport: "stdio",
-      command: "",
-      url: "",
-      body: "",
-      category: toolkitCategory || "engineering",
-      tags: "",
-      featured: false,
-      enabled: true,
-      scripts: [],
-    });
+  // 卡片 monogram 的色调：按类型/状态给语义色（工程蓝 / 市场绿 / 异常红 / 中性墨）
+  function toolkitMonogramTone(item: ToolkitItem): string {
+    if (item.kind === "mcp") {
+      if (item.enabled === false) return "r";
+      return item.transport === "http" || item.transport === "sse" ? "g" : "k";
+    }
+    if (item.kind === "skill") return "g";
+    return item.enabled === false ? "k" : "";
   }
 
   function startEditToolkit(item: ToolkitItem) {
@@ -1821,6 +1901,7 @@ export default function App() {
       tags: (item.tags || []).join(", "),
       featured: !!item.featured,
       enabled: item.enabled !== false,
+      load: item.load === "always" ? "always" : "defer",
       scripts: (item.scripts || []).map((s) => ({ ...s })),
     });
   }
@@ -1846,6 +1927,7 @@ export default function App() {
         .filter(Boolean),
       featured: toolkitForm.featured,
       enabled: toolkitForm.enabled,
+      load: toolkitForm.load,
     };
     try {
       const data = toolkitSelectedId
@@ -1867,60 +1949,6 @@ export default function App() {
     } finally {
       setBusy(false);
     }
-  }
-
-  async function runToolkitImport() {
-    if (toolkitTab !== "mcp" && toolkitTab !== "skill") return;
-    setBusy(true);
-    setError("");
-    try {
-      const data = await api<{ imported: number; items: ToolkitItem[] }>("/api/toolkit/import", {
-        token,
-        method: "POST",
-        body: JSON.stringify({
-          kind: toolkitTab,
-          content: importText,
-          filename: importFilename,
-          zip_base64: importZipB64,
-          overwrite: importOverwrite,
-        }),
-      });
-      setImportOpen(false);
-      setImportText("");
-      setImportFilename("");
-      setImportZipB64("");
-      await refreshToolkit();
-      if (data.items?.[0]) setToolkitSelectedId(data.items[0].id);
-    } catch (err) {
-      setError(errMsg(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function onToolkitImportFile(file: File | undefined) {
-    if (!file) return;
-    setImportFilename(file.name);
-    if (file.name.toLowerCase().endsWith(".zip")) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const buf = reader.result;
-        if (!(buf instanceof ArrayBuffer)) return;
-        const bytes = new Uint8Array(buf);
-        let binary = "";
-        for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i]!);
-        setImportZipB64(btoa(binary));
-        setImportText("");
-      };
-      reader.readAsArrayBuffer(file);
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      setImportZipB64("");
-      setImportText(typeof reader.result === "string" ? reader.result : "");
-    };
-    reader.readAsText(file);
   }
 
   function addToolkitScript() {
@@ -1961,6 +1989,312 @@ export default function App() {
       body: JSON.stringify({ enabled: !item.enabled }),
     });
     await refreshToolkit();
+  }
+
+  // ======================= V4 工具箱：安装 / 测试 / 优化 =======================
+
+  async function refreshToolkitAfterChange() {
+    await refreshToolkit();
+    await refreshToolkitCatalog();
+    api<MarketSkill[]>("/api/market/skills", { token }).then(setMarketSkills).catch(() => {});
+  }
+
+  function fileToBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = String(reader.result || "");
+        resolve(result.includes(",") ? result.split(",", 2)[1] : result);
+      };
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function installMarketSkill(key: string) {
+    setBusy(true);
+    try {
+      await api("/api/market/skills/install", {
+        token,
+        method: "POST",
+        body: JSON.stringify({ key }),
+      });
+      await refreshToolkitAfterChange();
+    } catch (err) {
+      setError(errMsg(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runInstallFromGithub() {
+    if (!/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+/.test(skillUrl.trim())) {
+      setSkillModalMsg(tr("tkSkillRemoteHint"));
+      return;
+    }
+    setSkillModalMsg(tr("tkTesting") === "Testing…" ? "Fetching from GitHub…" : "正在从 GitHub 拉取…");
+    setBusy(true);
+    try {
+      const item = await api<ToolkitItem>("/api/toolkit/install_skill", {
+        token,
+        method: "POST",
+        body: JSON.stringify({ url: skillUrl.trim() }),
+      });
+      closeSkillModal();
+      await refreshToolkitAfterChange();
+      setToolkitTab("skill");
+      setToolkitSelectedId(item.id);
+    } catch (err) {
+      setSkillModalMsg(errMsg(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runSkillUpload() {
+    if (!skillUpload) {
+      setSkillModalMsg(tr("tkSkillFileHint"));
+      return;
+    }
+    setSkillModalMsg(tr("tkTesting") === "Testing…" ? "Parsing file…" : "正在解析文件…");
+    setBusy(true);
+    try {
+      const isZip = skillUpload.file.name.toLowerCase().endsWith(".zip");
+      const body: Record<string, unknown> = {
+        kind: "skill",
+        filename: skillUpload.file.name,
+        overwrite: false,
+      };
+      if (isZip) body.zip_base64 = await fileToBase64(skillUpload.file);
+      else body.content = await skillUpload.file.text();
+      await api("/api/toolkit/import", { token, method: "POST", body: JSON.stringify(body) });
+      closeSkillModal();
+      await refreshToolkitAfterChange();
+    } catch (err) {
+      setSkillModalMsg(errMsg(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runOptimizeSkill() {
+    if (!writeForm.name.trim() || !writeForm.body.trim()) {
+      setSkillModalMsg(tr("tkTesting") === "Testing…" ? "Name and body are required" : "请填写技能名称与正文");
+      return;
+    }
+    setOptimizePhase("running");
+    setSkillModalMsg("");
+    try {
+      const draft = await api<SkillDraft>("/api/toolkit/optimize_skill", {
+        token,
+        method: "POST",
+        body: JSON.stringify({ name: writeForm.name.trim(), category: writeForm.category, body: writeForm.body.trim() }),
+      });
+      setSkillDraft(draft);
+      setOptimizePhase("review");
+    } catch (err) {
+      setOptimizePhase("idle");
+      setSkillModalMsg(errMsg(err));
+    }
+  }
+
+  async function confirmSkillDraft(keep: "original" | "optimized") {
+    if (!skillDraft) return;
+    setBusy(true);
+    try {
+      const item = await api<ToolkitItem>(`/api/toolkit/optimize_skill/${skillDraft.draft_id}/confirm`, {
+        token,
+        method: "POST",
+        body: JSON.stringify({ keep, load: "defer" }),
+      });
+      closeSkillModal();
+      await refreshToolkitAfterChange();
+      setToolkitTab("skill");
+      setToolkitSelectedId(item.id);
+    } catch (err) {
+      setSkillModalMsg(errMsg(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function closeSkillModal() {
+    setSkillModalOpen(false);
+    setSkillMode("remote");
+    setLocalMode("upload");
+    setSkillUrl("");
+    setSkillModalMsg("");
+    setSkillUpload(null);
+    setWriteForm({ name: "", category: "engineering", body: "" });
+    setOptimizePhase("idle");
+    setSkillDraft(null);
+  }
+
+  function openToolModal() {
+    setToolForm({ name: "", summary: "", category: "engineering", runtime: "cli", endpoint: "", load: "defer" });
+    setToolModalOpen(true);
+  }
+
+  async function submitToolModal(e: FormEvent) {
+    e.preventDefault();
+    if (!toolForm.name.trim() || !toolForm.endpoint.trim()) {
+      setError(tr("tkTesting") === "Testing…" ? "Name and endpoint are required" : "名称与接入点不能为空");
+      return;
+    }
+    setBusy(true);
+    try {
+      const item = await api<ToolkitItem>("/api/toolkit", {
+        token,
+        method: "POST",
+        body: JSON.stringify({
+          kind: "tool",
+          name: toolForm.name.trim(),
+          summary: toolForm.summary.trim(),
+          runtime: toolForm.runtime,
+          endpoint: toolForm.endpoint.trim(),
+          category: toolForm.category,
+          load: toolForm.load,
+        }),
+      });
+      setToolModalOpen(false);
+      await refreshToolkitAfterChange();
+      setToolkitTab("tool");
+      setToolkitSelectedId(item.id);
+    } catch (err) {
+      setError(errMsg(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function openMcpModal() {
+    setMcpForm({ name: "", transport: "stdio", url: "", auth: "bearer", token: "", command: "", category: "engineering" });
+    setMcpPkg({ file: null, phase: "idle" });
+    setMcpTest({ state: "idle", msg: "" });
+    setMcpModalOpen(true);
+  }
+
+  // stdio：仅支持 zip 包导入；先在本地暂存文件，提交时经 /api/toolkit/import 安装
+  async function pickMcpPkg(file: File | undefined) {
+    if (!file) return;
+    const slug = file.name.replace(/\.zip$/i, "").toLowerCase().replace(/[^a-z0-9-]+/g, "-");
+    setMcpPkg({ file, phase: "ready" });
+    setMcpForm((f) => ({
+      ...f,
+      name: f.name || slug,
+      command: `npx -y @modelcontextprotocol/server-${slug}`,
+    }));
+    setMcpTest({ state: "idle", msg: tr("tkPkgReady") });
+  }
+
+  async function runMcpTest() {
+    setMcpTest({ state: "testing", msg: tr("tkTesting") });
+    try {
+      const result = await api<McpTestResult>("/api/toolkit/mcp/test", {
+        token,
+        method: "POST",
+        body: JSON.stringify({
+          transport: mcpForm.transport,
+          url: mcpForm.url.trim(),
+          command: mcpForm.command.trim(),
+          config: mcpForm.auth === "bearer" && mcpForm.token.trim() ? { bearer_token: mcpForm.token.trim() } : {},
+        }),
+      });
+      if (result.ok) {
+        setMcpTest({ state: "ok", msg: `${tr("tkTestOk")} · ${(result.tools || []).length} tools` });
+      } else {
+        setMcpTest({ state: "fail", msg: `${tr("tkTestFail")}：${result.error || "unknown"}` });
+      }
+    } catch (err) {
+      setMcpTest({ state: "fail", msg: `${tr("tkTestFail")}：${errMsg(err)}` });
+    }
+  }
+
+  async function submitMcpModal(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      let item: ToolkitItem;
+      if (mcpForm.transport === "stdio") {
+        if (!mcpPkg.file) {
+          setError(tr("tkMcpStdioZipOnly"));
+          setBusy(false);
+          return;
+        }
+        // zip 导入即安装：后端落盘 mcp_packages 并生成 stdio 条目
+        const imported = await api<{ items: ToolkitItem[] }>("/api/toolkit/import", {
+          token,
+          method: "POST",
+          body: JSON.stringify({
+            kind: "mcp",
+            zip_base64: await fileToBase64(mcpPkg.file),
+            filename: mcpPkg.file.name,
+            overwrite: true,
+          }),
+        });
+        item = imported.items[0];
+        // 用户改过预填命令时回写
+        if (mcpForm.command.trim() && mcpForm.command.trim() !== item.command) {
+          item = await api<ToolkitItem>(`/api/toolkit/${item.id}`, {
+            token,
+            method: "PATCH",
+            body: JSON.stringify({ command: mcpForm.command.trim() }),
+          });
+        }
+      } else {
+        item = await api<ToolkitItem>("/api/toolkit", {
+          token,
+          method: "POST",
+          body: JSON.stringify({
+            kind: "mcp",
+            name: mcpForm.name.trim(),
+            transport: mcpForm.transport,
+            url: mcpForm.url.trim(),
+            category: mcpForm.category,
+            config:
+              mcpForm.auth === "bearer" && mcpForm.token.trim()
+                ? { bearer_token: mcpForm.token.trim() }
+                : {},
+          }),
+        });
+      }
+      setMcpModalOpen(false);
+      await refreshToolkitAfterChange();
+      setToolkitTab("mcp");
+      setToolkitSelectedId(item.id);
+    } catch (err) {
+      setError(errMsg(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // 详情页：对既有连接器发起连通性测试
+  async function testMcpItem(item: ToolkitItem) {
+    setMcpItemTest({ id: item.id, state: "testing", msg: tr("tkTesting") });
+    try {
+      const result = await api<McpTestResult>("/api/toolkit/mcp/test", {
+        token,
+        method: "POST",
+        body: JSON.stringify({
+          transport: item.transport || "stdio",
+          url: item.url || "",
+          command: item.command || "",
+          args: item.args || [],
+          env: item.env || {},
+          config: item.config || {},
+        }),
+      });
+      setMcpItemTest({
+        id: item.id,
+        state: result.ok ? "ok" : "fail",
+        msg: result.ok
+          ? `${tr("tkTestOk")} · ${(result.tools || []).length} tools`
+          : `${tr("tkTestFail")}：${result.error || "unknown"}`,
+      });
+    } catch (err) {
+      setMcpItemTest({ id: item.id, state: "fail", msg: `${tr("tkTestFail")}：${errMsg(err)}` });
+    }
   }
 
   async function createUser(e: FormEvent) {
@@ -4180,111 +4514,153 @@ export default function App() {
 
       {view === "toolkit" && (
         <div className="deck-body workbench toolkit-market">
-          <header className="toolkit-head">
-            <div>
-              <div className="panel-label">{tr("toolkitTitle")}</div>
-              <p className="kb-hint">{tr("toolkitHint")}</p>
-            </div>
-            <div className="toolkit-head-actions">
-              <input
-                className="toolkit-search"
-                type="search"
-                placeholder={tr("tkSearch")}
-                value={toolkitQuery}
-                onChange={(e) => setToolkitQuery(e.target.value)}
-              />
-              <button className="btn primary" type="button" onClick={startNewToolkit}>
-                {tr("newToolkit")}
-              </button>
-              {(toolkitTab === "mcp" || toolkitTab === "skill") && (
+          <div className="tk-page">
+            <header className="tk-hero">
+              <div className="tk-hero-main">
+                <div className="tk-eyebrow">TOOLBOX · {tr("tkCapabilityRepo")}</div>
+                <h1 className="tk-title">Sortie Deck {tr("toolkitTitle")}</h1>
+                <p className="tk-lede">{tr("tkHeroLede")}</p>
+              </div>
+              <div className="tk-hero-side">
+                <div className="tk-budget">
+                  <div className="tk-budget-top">
+                    <span className="tk-budget-label">{tr("tkBudget")}</span>
+                    <span className="tk-budget-val">
+                      <b>{toolkitAlwaysCount}</b>
+                      <em>{tr("tkBudgetCap")}</em>
+                    </span>
+                  </div>
+                  <div className="tk-budget-bar">
+                    <i style={{ width: `${Math.min(100, (toolkitAlwaysCount / 12) * 100)}%` }} />
+                  </div>
+                </div>
+                <input
+                  className="tk-search"
+                  type="search"
+                  placeholder={tr("tkSearch")}
+                  value={toolkitQuery}
+                  onChange={(e) => setToolkitQuery(e.target.value)}
+                />
+              </div>
+            </header>
+
+            <div className="tk-seg-large">
+              {(
+                [
+                  ["tool", "tabTools"],
+                  ["skill", "tabSkills"],
+                  ["mcp", "tabMcp"],
+                ] as const
+              ).map(([kind, label]) => (
                 <button
-                  className="btn ghost"
+                  key={kind}
                   type="button"
+                  className={toolkitTab === kind ? "on" : ""}
                   onClick={() => {
-                    setImportOpen((v) => !v);
-                    setImportText("");
-                    setImportZipB64("");
-                    setImportFilename("");
+                    setToolkitTab(kind);
+                    setToolkitEditing(false);
+                    setToolkitSelectedId(null);
+                    setOpenMenuId(null);
                   }}
                 >
-                  {tr("importToolkit")}
+                  {tr(label)}
+                  <span className="n">{toolkitKindCounts[kind]}</span>
                 </button>
-              )}
+              ))}
             </div>
-          </header>
 
-          <div className="filters toolkit-kind-tabs">
-            {(
-              [
-                ["tool", "tabTools"],
-                ["skill", "tabSkills"],
-                ["mcp", "tabMcp"],
-              ] as const
-            ).map(([kind, label]) => (
-              <button
-                key={kind}
-                type="button"
-                className={`filter ${toolkitTab === kind ? "on" : ""}`}
-                onClick={() => {
-                  setToolkitTab(kind);
-                  setToolkitEditing(false);
-                  setToolkitSelectedId(null);
-                }}
-              >
-                {tr(label)}
-              </button>
-            ))}
-          </div>
-
-          {importOpen && (toolkitTab === "mcp" || toolkitTab === "skill") && (
-            <div className="import-box toolkit-import">
-              <p className="kb-hint">
-                {toolkitTab === "mcp" ? tr("importHintMcp") : tr("importHintSkill")}
-              </p>
-              <textarea
-                className="kb-body"
-                placeholder={tr("importPaste")}
-                value={importText}
-                onChange={(e) => {
-                  setImportText(e.target.value);
-                  setImportZipB64("");
-                }}
-              />
-              <div className="theme-panel-actions">
-                <button type="button" className="btn ghost" onClick={() => importFileRef.current?.click()}>
-                  {tr("importFile")}
-                </button>
-                <label className="theme-toggle">
-                  <input
-                    type="checkbox"
-                    checked={importOverwrite}
-                    onChange={(e) => setImportOverwrite(e.target.checked)}
-                  />
-                  {tr("importOverwrite")}
-                </label>
-                <button
-                  type="button"
-                  className="btn primary"
-                  disabled={busy || (!importText.trim() && !importZipB64)}
-                  onClick={runToolkitImport}
-                >
-                  {tr("importRun")}
+          {/* ===== V4 发现带：按 tab 分工具库 / 市场推荐 / 连接引导 ===== */}
+          {toolkitTab === "tool" && (
+            <div className="tk-band">
+              <div className="tk-band-head">
+                <div>
+                  <div className="tk-band-title">{tr("tkToolsTitle")}</div>
+                  <p className="tk-band-desc">{tr("tkToolBandHint")}</p>
+                </div>
+                <button className="btn primary" type="button" onClick={openToolModal}>
+                  {tr("tkAddTool")}
                 </button>
               </div>
-              {importFilename && <p className="kb-meta">{importFilename}</p>}
-              <input
-                ref={importFileRef}
-                type="file"
-                accept={
-                  toolkitTab === "skill"
-                    ? ".md,.json,.zip,text/markdown,application/json,application/zip"
-                    : ".json,application/json,text/plain"
-                }
-                hidden
-                onChange={(e) => onToolkitImportFile(e.target.files?.[0])}
-              />
             </div>
           )}
+          {toolkitTab === "skill" && (
+            <div className="tk-band">
+              <div className="tk-band-head">
+                <div>
+                  <div className="tk-band-title">{tr("tkMarketSection")}</div>
+                  <p className="tk-band-desc">
+                    {tr("tkMarketHint")}
+                    <span className="tk-src-note">{tr("tkMarketSource")}</span>
+                  </p>
+                </div>
+                <button className="btn primary" type="button" onClick={() => setSkillModalOpen(true)}>
+                  {tr("tkAddSkill")}
+                </button>
+              </div>
+              <div className="tk-market-row">
+                {marketSkills.map((m) => (
+                  <div key={m.key} className="tk-market-card">
+                    <div className="tk-mkt-top">
+                      <span className={`tk-mkg${m.src === "GitHub" ? "" : " g"}`}>{m.name.slice(0, 2)}</span>
+                      <strong>{m.name}</strong>
+                      <span className={`tk-tag${m.src === "GitHub" ? "" : " g"}`}>{m.src}</span>
+                    </div>
+                    <p className="tk-mkt-desc">{m.summary}</p>
+                    <div className="tk-mkt-foot">
+                      {m.installed ? (
+                        <span className="tk-status on">
+                          <i />
+                          {tr("tkInstalled")}
+                        </span>
+                      ) : (
+                        <button
+                          className="btn primary"
+                          type="button"
+                          disabled={busy}
+                          onClick={() => installMarketSkill(m.key)}
+                        >
+                          {tr("tkInstall")}
+                        </button>
+                      )}
+                      {m.category && <span className="tk-tag line">{toolkitCategoryLabel(m.category)}</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {toolkitTab === "mcp" && (
+            <div className="tk-band">
+              <div className="tk-band-head">
+                <div>
+                  <div className="tk-band-title">{tr("tkMcpBandTitle")}</div>
+                  <p className="tk-band-desc">{tr("tkMcpBandHint")}</p>
+                </div>
+                <div className="tk-band-actions">
+                  <button className="btn primary" type="button" onClick={openMcpModal}>
+                    {tr("tkAddMcp")}
+                  </button>
+                </div>
+              </div>
+              <div className="tk-guide-row">
+                <div className="tk-guide">
+                  <b>{tr("tkGuideSseTitle")}</b>
+                  <span>{tr("tkGuideSseDesc")}</span>
+                </div>
+                <div className="tk-guide">
+                  <b>
+                    {tr("tkGuideHttpTitle")} <em className="tk-rec">推荐</em>
+                  </b>
+                  <span>{tr("tkGuideHttpDesc")}</span>
+                </div>
+                <div className="tk-guide">
+                  <b>{tr("tkGuideStdioTitle")}</b>
+                  <span>{tr("tkGuideStdioDesc")}</span>
+                </div>
+              </div>
+            </div>
+          )}
+
 
           <main className="main page-pad toolkit-main">
             {toolkitEditing ? (
@@ -4441,6 +4817,18 @@ export default function App() {
                   />
                   {tr("tkFeatured")}
                 </label>
+                <label>
+                  <span>{tr("tkLoadPolicy")}</span>
+                  <select
+                    value={toolkitForm.load}
+                    onChange={(e) =>
+                      setToolkitForm({ ...toolkitForm, load: e.target.value as "always" | "defer" })
+                    }
+                  >
+                    <option value="defer">{tr("tkLoadDeferHint")}</option>
+                    <option value="always">{tr("tkLoadAlwaysHint")}</option>
+                  </select>
+                </label>
                 <label className="theme-toggle">
                   <input
                     type="checkbox"
@@ -4486,6 +4874,18 @@ export default function App() {
                     <p className="kb-summary">{toolkitSelected.summary}</p>
                   </div>
                   <div className="topbar-actions">
+                    {toolkitSelected.kind === "mcp" && (
+                      <button
+                        className="btn ghost"
+                        type="button"
+                        disabled={mcpItemTest?.id === toolkitSelected.id && mcpItemTest.state === "testing"}
+                        onClick={() => testMcpItem(toolkitSelected)}
+                      >
+                        {mcpItemTest?.id === toolkitSelected.id && mcpItemTest.state === "testing"
+                          ? tr("tkTesting")
+                          : tr("tkTestConnection")}
+                      </button>
+                    )}
                     <button className="btn ghost" type="button" onClick={() => toggleToolkitEnabled(toolkitSelected)}>
                       {toolkitSelected.enabled ? tr("tkDisabled") : tr("tkEnabled")}
                     </button>
@@ -4528,97 +4928,601 @@ export default function App() {
                 <p className="kb-meta">
                   {(toolkitSelected.tags || []).join(" · ")} · {toolkitSelected.author_name}
                   {toolkitSelected.source ? ` · ${toolkitSelected.source}` : ""}
+                  {" · "}
+                  {toolkitSelected.load === "always" ? tr("tkAlways") : tr("tkDefer")}
+                  {" · "}
+                  {toolkitMounts[toolkitSelected.id] || 0} {tr("tkMountsSuffix")}
                 </p>
+                {mcpItemTest?.id === toolkitSelected.id && mcpItemTest.msg && (
+                  <p className={`kb-meta tk-test-msg ${mcpItemTest.state}`}>{mcpItemTest.msg}</p>
+                )}
               </article>
             ) : (
               <>
-                <div className="toolkit-cat-row">
+                <div className="tk-chips">
                   <button
                     type="button"
-                    className={`toolkit-cat ${!toolkitCategory ? "on" : ""}`}
+                    className={`tk-chip ${!toolkitCategory ? "on" : ""}`}
                     onClick={() => setToolkitCategory("")}
                   >
                     {tr("tkAllCategories")}
+                    <span className="c">{toolkitKindCounts[toolkitTab]}</span>
                   </button>
                   {TOOLKIT_CATEGORIES.map((cat) => (
                     <button
                       key={cat}
                       type="button"
-                      className={`toolkit-cat ${toolkitCategory === cat ? "on" : ""}`}
+                      className={`tk-chip ${toolkitCategory === cat ? "on" : ""}`}
                       onClick={() => setToolkitCategory(cat)}
                     >
                       {toolkitCategoryLabel(cat)}
+                      <span className="c">{toolkitCategoryCounts[cat] || 0}</span>
                     </button>
                   ))}
                 </div>
 
-                {!!toolkitFeatured.length && !toolkitCategory && !toolkitQuery.trim() && (
-                  <section className="toolkit-featured">
-                    <div className="panel-label">{tr("tkFeaturedSection")}</div>
-                    <div className="toolkit-featured-row">
-                      {toolkitFeatured.map((item) => (
-                        <button
-                          key={item.id}
-                          type="button"
-                          className="toolkit-feature-card"
-                          onClick={() => setToolkitSelectedId(item.id)}
+                <section className="tk-cards">
+                  {toolkitGridItems.map((item) => (
+                    <div
+                      key={item.id}
+                      role="button"
+                      tabIndex={0}
+                      className={`tk-card${item.enabled === false ? " off" : ""}`}
+                      onClick={() => setToolkitSelectedId(item.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") setToolkitSelectedId(item.id);
+                      }}
+                    >
+                      <div className="tk-card-head">
+                        <span className={`tk-monogram ${toolkitMonogramTone(item)}`}>
+                          {item.name.slice(0, 2)}
+                        </span>
+                        <span className="tk-card-name">{item.name}</span>
+                        <span
+                          className="tk-more"
+                          title={tr("tkMenuActions")}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOpenMenuId(openMenuId === item.id ? null : item.id);
+                          }}
                         >
-                          <span className="toolkit-card-kind">
-                            {tr(
-                              item.kind === "tool" ? "tabTools" : item.kind === "mcp" ? "tabMcp" : "tabSkills"
-                            )}
-                          </span>
-                          <strong>{item.name}</strong>
-                          <span className="toolkit-card-summary">{item.summary}</span>
-                          {item.category && (
-                            <span className="toolkit-card-cat">{toolkitCategoryLabel(item.category)}</span>
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                  </section>
-                )}
-
-                <section className="toolkit-catalog">
-                  <div className="panel-label">{tr("tkCatalog")}</div>
-                  <div className="toolkit-grid">
-                    {toolkitGridItems.map((item) => (
-                      <button
-                        key={item.id}
-                        type="button"
-                        className="toolkit-card"
-                        onClick={() => setToolkitSelectedId(item.id)}
-                      >
-                        <div className="toolkit-card-top">
-                          <span className={`toolkit-card-kind kind-${item.kind}`}>
-                            {tr(
-                              item.kind === "tool" ? "tabTools" : item.kind === "mcp" ? "tabMcp" : "tabSkills"
-                            )}
-                          </span>
-                          <span className={`st ${item.enabled ? "done" : "failed"}`}>
-                            {item.enabled ? tr("tkEnabled") : tr("tkDisabled")}
-                          </span>
+                          …
+                        </span>
+                        {openMenuId === item.id && (
+                          <div className="tk-menu" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setOpenMenuId(null);
+                                toggleToolkitEnabled(item);
+                              }}
+                            >
+                              {item.enabled ? tr("tkDisabled") : tr("tkEnabled")}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setOpenMenuId(null);
+                                startEditToolkit(item);
+                              }}
+                            >
+                              {tr("editDoc")}
+                            </button>
+                            <button
+                              type="button"
+                              className="danger"
+                              onClick={() => {
+                                setOpenMenuId(null);
+                                deleteToolkit(item.id);
+                              }}
+                            >
+                              {tr("delete")}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                      <p className="tk-card-desc">{item.summary}</p>
+                      {item.kind === "mcp" && (item.command || item.url) && (
+                        <div className="tk-card-endpoint">
+                          {item.command || item.url}
                         </div>
-                        <strong>{item.name}</strong>
-                        <span className="toolkit-card-summary">{item.summary}</span>
-                        <div className="toolkit-card-meta">
-                          {item.category && (
-                            <span className="toolkit-card-cat">{toolkitCategoryLabel(item.category)}</span>
-                          )}
-                          {(item.tags || []).slice(0, 3).map((tag) => (
-                            <span key={tag} className="toolkit-tag">
-                              {tag}
+                      )}
+                      <div className="tk-card-meta">
+                        <span className={`tk-tag${item.load === "always" ? " c" : ""}`}>
+                          {item.load === "always" ? tr("tkAlways") : tr("tkDefer")}
+                        </span>
+                        {item.kind === "mcp" && item.transport && (
+                          <span className="tk-tag line">{item.transport}</span>
+                        )}
+                        {item.kind === "tool" && item.runtime && (
+                          <span className="tk-tag line">{item.runtime}</span>
+                        )}
+                        {item.category && (
+                          <span className="tk-tag line">{toolkitCategoryLabel(item.category)}</span>
+                        )}
+                        <span className="tk-tag line">
+                          {toolkitMounts[item.id] || 0} {tr("tkMountsSuffix")}
+                        </span>
+                        {(item.tags || [])
+                          .filter((t) => t === "github" || t === "market" || t === "handwritten")
+                          .map((t) => (
+                            <span key={t} className="tk-tag g">
+                              {t === "github" ? "GitHub" : t === "market" ? tr("tkMarketSection") : tr("tkAddSkill")}
                             </span>
                           ))}
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                  {!toolkitItems.length && <div className="empty-queue">{tr("emptyToolkit")}</div>}
+                      </div>
+                      <div className="tk-card-foot">
+                        <span className={`tk-status ${item.enabled ? "on" : ""}`}>
+                          <i />
+                          {item.enabled ? tr("tkEnabled") : tr("tkDisabled")}
+                        </span>
+                        {item.source && <span className="tk-tag">{item.source}</span>}
+                      </div>
+                    </div>
+                  ))}
+                  {!toolkitGridItems.length && <div className="tk-empty">{tr("emptyToolkit")}</div>}
                 </section>
               </>
             )}
           </main>
+
+          {/* ===== V4 弹窗：添加技能（外网 / 本地上传 / 手写 MD + skill-install 对照） ===== */}
+          {skillModalOpen && (
+            <div className="tk-mask" onClick={closeSkillModal}>
+              <div className="tk-modal" onClick={(e) => e.stopPropagation()}>
+                <div className="tk-modal-head">
+                  <h3>{tr("tkAddSkill")}</h3>
+                  <button className="tk-x" type="button" onClick={closeSkillModal}>×</button>
+                </div>
+                <div className="tk-modal-body">
+                  <div className="tk-seg-inline" style={{ marginBottom: 16 }}>
+                    <button
+                      type="button"
+                      className={skillMode === "remote" ? "on" : ""}
+                      onClick={() => setSkillMode("remote")}
+                    >
+                      {tr("tkSkillModeRemote")}
+                    </button>
+                    <button
+                      type="button"
+                      className={skillMode === "local" ? "on" : ""}
+                      onClick={() => setSkillMode("local")}
+                    >
+                      {tr("tkSkillModeLocal")}
+                    </button>
+                  </div>
+                </div>
+                {skillMode === "remote" && (
+                  <div className="tk-modal-body">
+                    <div className="tk-field">
+                      <label htmlFor="tk-skill-url">{tr("tkSkillUrl")}</label>
+                      <input
+                        id="tk-skill-url"
+                        className="tk-input mono"
+                        value={skillUrl}
+                        onChange={(e) => setSkillUrl(e.target.value)}
+                        placeholder="https://github.com/org/skill-repo"
+                      />
+                      <div className="tk-hint">{tr("tkSkillRemoteHint")}</div>
+                    </div>
+                  </div>
+                )}
+                {skillMode === "local" && (
+                  <div className="tk-modal-body">
+                    <div className="tk-seg-inline" style={{ marginBottom: 16 }}>
+                      <button
+                        type="button"
+                        className={localMode === "upload" ? "on" : ""}
+                        onClick={() => setLocalMode("upload")}
+                      >
+                        {tr("tkLocalUpload")}
+                      </button>
+                      <button
+                        type="button"
+                        className={localMode === "write" ? "on" : ""}
+                        onClick={() => setLocalMode("write")}
+                      >
+                        {tr("tkLocalWrite")}
+                      </button>
+                    </div>
+                    {localMode === "upload" && (
+                      <>
+                        <div className="tk-field">
+                          <label htmlFor="tk-skill-file">{tr("tkPickFile")}</label>
+                          <input
+                            id="tk-skill-file"
+                            className="tk-input"
+                            type="file"
+                            accept=".zip,.md"
+                            onChange={(e) => {
+                              const f = e.target.files?.[0] || null;
+                              setSkillUpload(f ? { file: f, name: f.name.replace(/\.(zip|md)$/i, "") } : null);
+                            }}
+                          />
+                          <div className="tk-hint">{tr("tkSkillFileHint")}</div>
+                        </div>
+                        <div className="tk-field">
+                          <label htmlFor="tk-skill-upname">{tr("tkSkillUploadName")}</label>
+                          <input
+                            id="tk-skill-upname"
+                            className="tk-input"
+                            value={skillUpload?.name || ""}
+                            onChange={(e) =>
+                              setSkillUpload((prev) => (prev ? { ...prev, name: e.target.value } : prev))
+                            }
+                          />
+                        </div>
+                      </>
+                    )}
+                    {localMode === "write" && optimizePhase !== "review" && (
+                      <>
+                        <div className="tk-field">
+                          <label htmlFor="tk-write-name">{tr("tkName")}</label>
+                          <input
+                            id="tk-write-name"
+                            className="tk-input mono"
+                            value={writeForm.name}
+                            onChange={(e) => setWriteForm({ ...writeForm, name: e.target.value })}
+                          />
+                        </div>
+                        <div className="tk-field">
+                          <label htmlFor="tk-write-cat">{tr("tkCategory")}</label>
+                          <select
+                            id="tk-write-cat"
+                            className="tk-input"
+                            value={writeForm.category}
+                            onChange={(e) => setWriteForm({ ...writeForm, category: e.target.value })}
+                          >
+                            {TOOLKIT_CATEGORIES.map((cat) => (
+                              <option key={cat} value={cat}>
+                                {toolkitCategoryLabel(cat)}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="tk-field">
+                          <label htmlFor="tk-write-body">{tr("tkBody")}</label>
+                          <textarea
+                            id="tk-write-body"
+                            className="tk-input mono"
+                            rows={9}
+                            value={writeForm.body}
+                            onChange={(e) => setWriteForm({ ...writeForm, body: e.target.value })}
+                          />
+                        </div>
+                        {optimizePhase === "running" && (
+                          <p className="tk-optimizing">{tr("tkOptimizing")}{tr("tkOptimizeSteps")}</p>
+                        )}
+                      </>
+                    )}
+                    {localMode === "write" && optimizePhase === "review" && skillDraft && (
+                      <>
+                        <p className="kb-hint tk-review-hint">{tr("tkReviewHint")}</p>
+                        <div className="tk-review-grid">
+                          <div className="tk-review-pane">
+                            <h4>{tr("tkOriginal")}</h4>
+                            <pre>{skillDraft.original}</pre>
+                            <button className="btn ghost" type="button" onClick={() => confirmSkillDraft("original")}>
+                              {tr("tkUseVersion")}
+                            </button>
+                          </div>
+                          <div className="tk-review-pane opt">
+                            <h4>
+                              {tr("tkOptimized")} <em className="tk-rec-badge">{tr("tkSkillInstallRec")}</em>
+                            </h4>
+                            <pre>{skillDraft.optimized}</pre>
+                            <button className="btn primary" type="button" onClick={() => confirmSkillDraft("optimized")}>
+                              {tr("tkUseVersion")}
+                            </button>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+                {skillModalMsg && <p className="kb-meta tk-modal-msg">{skillModalMsg}</p>}
+                <div className="tk-modal-foot">
+                  <button className="btn ghost" type="button" onClick={closeSkillModal}>
+                    {tr("cancel")}
+                  </button>
+                  {skillMode === "remote" && (
+                    <button className="btn primary" type="button" disabled={busy} onClick={runInstallFromGithub}>
+                      {tr("tkInstall")}
+                    </button>
+                  )}
+                  {skillMode === "local" && localMode === "upload" && (
+                    <button className="btn primary" type="button" disabled={busy} onClick={runSkillUpload}>
+                      {tr("importRun")}
+                    </button>
+                  )}
+                  {skillMode === "local" && localMode === "write" && optimizePhase === "idle" && (
+                    <button className="btn primary" type="button" disabled={busy} onClick={runOptimizeSkill}>
+                      {tr("tkCreateSkill")}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ===== V4 抽屉：添加工具（右侧抽屉 + runtime 分段卡） ===== */}
+          {toolModalOpen && (
+            <div className="tk-mask" onClick={() => setToolModalOpen(false)}>
+              <form
+                className="tk-drawer open"
+                onClick={(e) => e.stopPropagation()}
+                onSubmit={submitToolModal}
+              >
+                <div className="tk-drawer-head">
+                  <h3>{tr("tkAddTool")}</h3>
+                  <p>{tr("tkToolDrawerHint")}</p>
+                  <button
+                    className="tk-drawer-x"
+                    type="button"
+                    onClick={() => setToolModalOpen(false)}
+                  >
+                    ×
+                  </button>
+                </div>
+                <div className="tk-drawer-body">
+                  <div className="tk-field">
+                    <label htmlFor="tk-tool-name">{tr("tkName")}</label>
+                    <input
+                      id="tk-tool-name"
+                      className="tk-input mono"
+                      value={toolForm.name}
+                      onChange={(e) => setToolForm({ ...toolForm, name: e.target.value })}
+                      required
+                    />
+                  </div>
+                  <div className="tk-field">
+                    <label htmlFor="tk-tool-summary">{tr("tkSummary")}</label>
+                    <input
+                      id="tk-tool-summary"
+                      className="tk-input"
+                      value={toolForm.summary}
+                      onChange={(e) => setToolForm({ ...toolForm, summary: e.target.value })}
+                    />
+                  </div>
+                  <div className="tk-field">
+                    <label htmlFor="tk-tool-cat">{tr("tkCategory")}</label>
+                    <select
+                      id="tk-tool-cat"
+                      className="tk-input"
+                      value={toolForm.category}
+                      onChange={(e) => setToolForm({ ...toolForm, category: e.target.value })}
+                    >
+                      {TOOLKIT_CATEGORIES.map((cat) => (
+                        <option key={cat} value={cat}>
+                          {toolkitCategoryLabel(cat)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="tk-field">
+                    <label>{tr("tkRuntime")}</label>
+                    <div className="tk-select-cards">
+                      {(
+                        [
+                          ["cli", tr("tkRuntimeCliDesc")],
+                          ["http", tr("tkRuntimeHttpDesc")],
+                          ["function", tr("tkRuntimeFunctionDesc")],
+                          ["plugin", tr("tkRuntimePluginDesc")],
+                        ] as const
+                      ).map(([value, desc]) => (
+                        <button
+                          key={value}
+                          type="button"
+                          className={toolForm.runtime === value ? "on" : ""}
+                          onClick={() => setToolForm({ ...toolForm, runtime: value })}
+                        >
+                          <span className="tt">{value}</span>
+                          <span className="td">{desc}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="tk-field">
+                    <label htmlFor="tk-tool-endpoint">{tr("tkEndpoint")}</label>
+                    <input
+                      id="tk-tool-endpoint"
+                      className="tk-input mono"
+                      value={toolForm.endpoint}
+                      onChange={(e) => setToolForm({ ...toolForm, endpoint: e.target.value })}
+                      placeholder="https://api.example.com/run"
+                      required
+                    />
+                    <div className="tk-hint">{tr("tkToolEndpointHint")}</div>
+                  </div>
+                  <div className="tk-field">
+                    <label htmlFor="tk-tool-load">{tr("tkLoadPolicy")}</label>
+                    <select
+                      id="tk-tool-load"
+                      className="tk-input"
+                      value={toolForm.load}
+                      onChange={(e) => setToolForm({ ...toolForm, load: e.target.value as "always" | "defer" })}
+                    >
+                      <option value="defer">{tr("tkLoadDeferHint")}</option>
+                      <option value="always">{tr("tkLoadAlwaysHint")}</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="tk-drawer-foot">
+                  <span className="tk-foot-spacer" />
+                  <button className="btn ghost" type="button" onClick={() => setToolModalOpen(false)}>
+                    {tr("cancel")}
+                  </button>
+                  <button className="btn primary" type="submit" disabled={busy}>
+                    {tr("tkAddTool")}
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
+          {/* ===== V4 抽屉：添加连接器（stdio 仅 zip 导入；SSE/HTTP 走 URL + 鉴权） ===== */}
+          {mcpModalOpen && (
+            <div className="tk-mask" onClick={() => setMcpModalOpen(false)}>
+              <form
+                className="tk-drawer open"
+                onClick={(e) => e.stopPropagation()}
+                onSubmit={submitMcpModal}
+              >
+                <div className="tk-drawer-head">
+                  <h3>{tr("tkAddMcp")}</h3>
+                  <p>{tr("tkMcpDrawerHint")}</p>
+                  <button
+                    className="tk-drawer-x"
+                    type="button"
+                    onClick={() => setMcpModalOpen(false)}
+                  >
+                    ×
+                  </button>
+                </div>
+                <div className="tk-drawer-body">
+                  {mcpForm.transport !== "stdio" && (
+                    <div className="tk-field">
+                      <label htmlFor="tk-mcp-name">{tr("tkName")}</label>
+                      <input
+                        id="tk-mcp-name"
+                        className="tk-input mono"
+                        value={mcpForm.name}
+                        onChange={(e) => setMcpForm({ ...mcpForm, name: e.target.value })}
+                        required
+                      />
+                    </div>
+                  )}
+                  <div className="tk-field">
+                    <label>{tr("tkTransport")}</label>
+                    <div className="tk-select-cards c3">
+                      {(
+                        [
+                          ["stdio", tr("tkTransportStdioDesc"), ""],
+                          ["sse", tr("tkTransportSseDesc"), ""],
+                          ["http", tr("tkTransportHttpDesc"), tr("tkRecommended")],
+                        ] as const
+                      ).map(([value, desc, badge]) => (
+                        <button
+                          key={value}
+                          type="button"
+                          className={mcpForm.transport === value ? "on" : ""}
+                          onClick={() => {
+                            setMcpForm({ ...mcpForm, transport: value });
+                            setMcpTest({ state: "idle", msg: "" });
+                            setMcpPkg({ file: null, phase: "idle" });
+                          }}
+                        >
+                          <span className="tt">
+                            {value === "http" ? "Streamable HTTP" : value}
+                            {badge ? <em className="tk-rec">{badge}</em> : null}
+                          </span>
+                          <span className="td">{desc}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {mcpForm.transport === "stdio" && (
+                    <>
+                      <div className="tk-field">
+                        <label htmlFor="tk-mcp-zip">{tr("tkPickZip")}</label>
+                        <input
+                          id="tk-mcp-zip"
+                          className="tk-input"
+                          type="file"
+                          accept=".zip"
+                          onChange={(e) => pickMcpPkg(e.target.files?.[0])}
+                        />
+                        <div className="tk-hint">{tr("tkMcpStdioZipOnly")}</div>
+                      </div>
+                      {mcpPkg.phase === "ready" && (
+                        <>
+                          <div className="tk-field">
+                            <label htmlFor="tk-mcp-cmd">{tr("tkCommand")}</label>
+                            <input
+                              id="tk-mcp-cmd"
+                              className="tk-input mono"
+                              value={mcpForm.command}
+                              onChange={(e) => setMcpForm({ ...mcpForm, command: e.target.value })}
+                            />
+                            <div className="tk-hint tk-pkg-ready">{tr("tkPkgReady")}</div>
+                          </div>
+                        </>
+                      )}
+                    </>
+                  )}
+                  {mcpForm.transport !== "stdio" && (
+                    <>
+                      <div className="tk-field">
+                        <label htmlFor="tk-mcp-url">{tr("tkUrl")}</label>
+                        <input
+                          id="tk-mcp-url"
+                          className="tk-input mono"
+                          value={mcpForm.url}
+                          onChange={(e) => setMcpForm({ ...mcpForm, url: e.target.value })}
+                          placeholder="https://…"
+                          required
+                        />
+                      </div>
+                      <div className="tk-field">
+                        <label>{tr("tkAuthMode")}</label>
+                        <div className="tk-seg-inline">
+                          <button
+                            type="button"
+                            className={mcpForm.auth === "bearer" ? "on" : ""}
+                            onClick={() => setMcpForm({ ...mcpForm, auth: "bearer" })}
+                          >
+                            {tr("tkAuthBearer")}
+                          </button>
+                          <button
+                            type="button"
+                            className={mcpForm.auth === "oauth" ? "on" : ""}
+                            onClick={() => setMcpForm({ ...mcpForm, auth: "oauth" })}
+                          >
+                            {tr("tkAuthOAuth")}
+                          </button>
+                        </div>
+                      </div>
+                      {mcpForm.auth === "bearer" && (
+                        <div className="tk-field">
+                          <label htmlFor="tk-mcp-token">{tr("tkAuthToken")}</label>
+                          <input
+                            id="tk-mcp-token"
+                            className="tk-input mono"
+                            type="password"
+                            value={mcpForm.token}
+                            onChange={(e) => setMcpForm({ ...mcpForm, token: e.target.value })}
+                          />
+                        </div>
+                      )}
+                    </>
+                  )}
+                  {mcpTest.msg && (
+                    <div className={`tk-test-line ${mcpTest.state}`}>
+                      <i />
+                      {mcpTest.msg}
+                    </div>
+                  )}
+                </div>
+                <div className="tk-drawer-foot">
+                  <button
+                    className="btn ghost"
+                    type="button"
+                    disabled={mcpTest.state === "testing"}
+                    onClick={runMcpTest}
+                  >
+                    {mcpTest.state === "testing" ? tr("tkTesting") : tr("tkTestConnection")}
+                  </button>
+                  <span className="tk-foot-spacer" />
+                  <button className="btn ghost" type="button" onClick={() => setMcpModalOpen(false)}>
+                    {tr("cancel")}
+                  </button>
+                  <button className="btn primary" type="submit" disabled={busy}>
+                    {tr("tkAddMcp")}
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
+          </div>
         </div>
       )}
 

@@ -3145,6 +3145,348 @@ textarea {
   border-color: color-mix(in srgb, var(--accent, #3dffa8) 40%, var(--line));
 }
 
+/* ===== V4 工具箱：发现带 / 预算 / 弹窗 / 市场卡 / 优化对照 ===== */
+.tk-budget {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  padding: 0.4rem 0.7rem;
+  min-width: 150px;
+}
+.tk-budget-label {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.tk-budget b {
+  font-size: 1rem;
+}
+.tk-budget-cap {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.tk-budget-bar {
+  flex: 1;
+  height: 3px;
+  background: var(--deep);
+  border-radius: 2px;
+  overflow: hidden;
+  align-self: center;
+}
+.tk-budget-bar i {
+  display: block;
+  height: 100%;
+  background: var(--copper);
+}
+
+.tk-band {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  padding: 0.9rem 1.1rem;
+  margin: 0 0 0.9rem;
+}
+.tk-band-title {
+  font-weight: 700;
+  margin-bottom: 0.2rem;
+}
+.tk-band-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+.tk-band-market {
+  flex-direction: column;
+}
+.tk-band-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  width: 100%;
+}
+.tk-src-note {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin-top: 0.2rem;
+}
+.tk-market-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 0.7rem;
+  width: 100%;
+}
+.tk-market-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: 0.8rem 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.tk-mkt-top {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.tk-mkg {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  background: var(--deep);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+.tk-mkt-desc {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+  line-height: 1.5;
+  flex: 1;
+}
+.tk-mkt-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.toolkit-card.off {
+  opacity: 0.55;
+}
+.tk-card-more {
+  margin-left: auto;
+  cursor: pointer;
+  padding: 0 0.3rem;
+  border-radius: 4px;
+  color: var(--muted);
+  font-weight: 700;
+  position: relative;
+}
+.tk-card-more:hover {
+  background: var(--deep);
+  color: var(--text);
+}
+.tk-menu {
+  position: absolute;
+  right: 0;
+  top: 1.6rem;
+  z-index: 30;
+  min-width: 120px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  padding: 0.25rem;
+  display: flex;
+  flex-direction: column;
+}
+.tk-menu button {
+  border: none;
+  background: none;
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.8rem;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text);
+}
+.tk-menu button:hover {
+  background: var(--panel-2);
+}
+.tk-menu button.danger {
+  color: var(--danger);
+}
+.tk-menu button.danger:hover {
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+.tk-load-always {
+  background: var(--copper);
+  color: #fff;
+  border-color: transparent;
+}
+
+.tk-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 6vh 1rem 2rem;
+  z-index: 80;
+  overflow: auto;
+}
+.tk-modal {
+  width: 560px;
+  max-width: 100%;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.2);
+}
+.tk-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.9rem 1.2rem 0.6rem;
+}
+.tk-modal-head h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+.tk-x {
+  border: none;
+  background: none;
+  font-size: 1.2rem;
+  cursor: pointer;
+  color: var(--muted);
+  line-height: 1;
+}
+.tk-x:hover {
+  color: var(--text);
+}
+.tk-modal-body {
+  padding: 0.4rem 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+.tk-modal-body label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.tk-modal-body label > span {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+.tk-modal-foot {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.8rem 1.2rem 1rem;
+  border-top: 1px solid var(--line);
+  margin-top: 0.6rem;
+}
+.tk-foot-spacer {
+  flex: 1;
+}
+.tk-seg {
+  display: inline-flex;
+  gap: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  margin: 0 1.2rem;
+}
+.tk-seg button {
+  flex: 1;
+  border: none;
+  background: var(--panel);
+  padding: 0.45rem 0.9rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+  cursor: pointer;
+  border-right: 1px solid var(--line);
+}
+.tk-seg button:last-child {
+  border-right: none;
+}
+.tk-seg button.on {
+  background: var(--ink, var(--text));
+  color: var(--panel);
+  font-weight: 600;
+}
+.tk-modal-msg {
+  padding: 0 1.2rem 0.4rem;
+  margin: 0;
+}
+.tk-optimizing {
+  font-size: 0.8rem;
+  color: var(--copper);
+  margin: 0;
+}
+.tk-review-hint {
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 0.5rem 0.7rem;
+}
+.tk-review-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.7rem;
+}
+.tk-review-pane {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.7rem 0.8rem;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+}
+.tk-review-pane.opt {
+  border-color: color-mix(in srgb, var(--copper) 45%, var(--line));
+  background: color-mix(in srgb, var(--copper) 5%, var(--panel));
+}
+.tk-review-pane h4 {
+  margin: 0 0 0.4rem;
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.tk-review-pane pre {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 230px;
+  overflow: auto;
+  flex: 1;
+  margin: 0 0 0.5rem;
+  background: var(--panel-2);
+  border-radius: 6px;
+  padding: 0.5rem;
+}
+.tk-rec-badge {
+  font-style: normal;
+  font-size: 0.62rem;
+  background: var(--signal);
+  color: #fff;
+  border-radius: 4px;
+  padding: 0.1rem 0.35rem;
+}
+.tk-test-msg {
+  margin: 0;
+  padding: 0.4rem 1.2rem;
+}
+.tk-test-msg.ok {
+  color: var(--signal);
+}
+.tk-test-msg.fail {
+  color: var(--danger);
+}
+.tk-test-msg.testing {
+  color: var(--copper);
+}
+.tk-pkg-ready {
+  color: var(--signal);
+}
+
 .loadout-slot {
   display: flex;
   flex-direction: column;

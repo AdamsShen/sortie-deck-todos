@@ -1,0 +1,1034 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Sortie Deck 工具箱 · Stripe 市场感版 v4</title>
+<style>
+  :root{
+    --bg:#f6f9fc; --bg2:#edf1f7; --panel:#ffffff; --panel2:#f8fafd;
+    --line:#e3e8ee; --line2:#cbd2dc;
+    --ink:#1a1f36; --mut:#697386;
+    --green:#0e9f6e; --green-bg:#dff2e9;
+    --blue:#3b5bdb; --blue-lt:#6e8be8;
+    --red:#c9503a;
+    --serif:"Songti SC","Noto Serif SC",Georgia,serif;
+    --sans:-apple-system,"PingFang SC",system-ui,sans-serif;
+    --mono:ui-monospace,"SF Mono",Menlo,monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    font:15px/1.65 var(--sans);color:var(--ink);background:var(--bg);
+    background-image:
+      linear-gradient(rgba(26,31,54,0.025) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(26,31,54,0.025) 1px,transparent 1px);
+    background-size:28px 28px;
+    -webkit-font-smoothing:antialiased;
+  }
+  button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+  input{font:inherit;color:inherit}
+
+  /* ---------- 顶部导航 ---------- */
+  .topnav{display:flex;align-items:center;gap:28px;background:var(--panel);border-bottom:1px solid var(--line);padding:0 32px;height:56px;position:sticky;top:0;z-index:50}
+  .brand{display:flex;align-items:center;gap:10px}
+  .brand .logo{width:30px;height:30px;border-radius:7px;background:var(--ink);color:#fff;display:grid;place-items:center;font:600 11px var(--mono);letter-spacing:.5px}
+  .brand b{font-family:var(--serif);font-size:17px;letter-spacing:.2px}
+  .brand small{display:block;font-size:10px;color:var(--mut);letter-spacing:.4px}
+  .topnav nav{display:flex;gap:2px;flex:1}
+  .topnav nav a{padding:6px 12px;border-radius:7px;font-size:13.5px;color:var(--mut);text-decoration:none}
+  .topnav nav a.on{color:var(--ink);background:var(--bg2);font-weight:600}
+  .topnav nav a:hover{color:var(--ink)}
+
+  .wrap{max-width:1280px;margin:0 auto;padding:34px 32px 80px}
+
+  /* ---------- 页头 ---------- */
+  .pagehead{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;margin-bottom:26px}
+  .crumb{font:600 11px var(--mono);color:var(--blue);letter-spacing:1.5px;margin-bottom:8px}
+  h1{font-family:var(--serif);font-size:30px;font-weight:600;letter-spacing:.5px;line-height:1.2}
+  .lede{color:var(--mut);font-size:15px;margin-top:8px;max-width:60ch}
+  .budget{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 16px;min-width:230px}
+  .budget .row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
+  .budget .t{font-size:12px;color:var(--mut)}
+  .budget .v{font:600 14px var(--mono)}
+  .budget .v em{font-style:normal;color:var(--mut);font-weight:400}
+  .budget .bar{height:4px;background:var(--bg2);border-radius:2px;overflow:hidden}
+  .budget .bar i{display:block;height:100%;background:var(--blue);border-radius:2px;transition:width .4s}
+  .budget.over .bar i{background:var(--red)}
+
+  /* ---------- 分段控件 ---------- */
+  .seg{display:inline-flex;background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:3px;margin-bottom:20px}
+  .seg button{padding:7px 24px;border-radius:7px;font-size:14px;color:var(--mut);transition:.15s}
+  .seg button.on{background:var(--panel);color:var(--ink);font-weight:600;box-shadow:0 1px 3px rgba(26,31,54,.14)}
+  .seg button .n{font:400 11px var(--mono);color:var(--mut);margin-left:6px}
+
+  /* ---------- 发现带 ---------- */
+  .band{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:20px 22px;margin-bottom:22px}
+  .band-head{display:flex;justify-content:space-between;align-items:flex-start;gap:24px;margin-bottom:14px}
+  .band-head h2{font-family:var(--serif);font-size:19px;font-weight:600}
+  .band-head p{color:var(--mut);font-size:13.5px;margin-top:4px;max-width:60ch}
+  .market-row{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
+  .mkt-card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:8px}
+  .mkt-top{display:flex;align-items:center;gap:10px}
+  .mkt-top .name{font:600 14px var(--mono);flex:1}
+  .mkt-desc{font-size:13px;color:var(--mut);line-height:1.5;flex:1}
+  .mkt-foot{display:flex;align-items:center;justify-content:space-between}
+  .install-bar{height:4px;background:var(--bg2);border-radius:2px;overflow:hidden;margin-top:4px}
+  .install-bar i{display:block;height:100%;width:0;background:var(--blue);border-radius:2px;transition:width .3s}
+  .pct{font:500 11px var(--mono);color:var(--blue)}
+
+  .urlinstall{display:flex;gap:8px;align-items:center;margin-top:16px;padding-top:14px;border-top:1px dashed var(--line2)}
+  .urlinstall label{font-size:12px;color:var(--mut);white-space:nowrap}
+  .urlinstall input{flex:1;max-width:420px;border:1px solid var(--line2);border-radius:8px;padding:7px 12px;font:13px var(--mono);background:var(--panel)}
+  .urlinstall input:focus{outline:2px solid rgba(59,91,219,.25);border-color:var(--blue)}
+  .urlinstall .prog{flex:1;max-width:260px}
+
+  .hl-chips{display:flex;gap:10px;margin:4px 0 16px;flex-wrap:wrap}
+  .hl-chip{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 14px;font-size:13px}
+  .hl-chip b{display:block;font-size:13px}
+  .hl-chip span{color:var(--mut);font-size:12px}
+
+  /* ---------- 分类 chips ---------- */
+  .chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px}
+  .chip{border:1px solid var(--line2);border-radius:999px;padding:5px 14px;font-size:13px;color:var(--mut);background:var(--panel);transition:.15s}
+  .chip:hover{color:var(--ink);border-color:var(--ink)}
+  .chip.on{background:var(--ink);border-color:var(--ink);color:#fff}
+  .chip .c{font:400 11px var(--mono);opacity:.7;margin-left:4px}
+
+  /* ---------- 条目卡片 ---------- */
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px}
+  .card{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px;transition:box-shadow .15s,border-color .15s}
+  .card:hover{box-shadow:0 2px 10px rgba(26,31,54,.07)}
+  .card.off{opacity:.55}
+  .card.confirming{border-color:var(--red)}
+  .card-head{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+  .mono-badge{width:30px;height:30px;border-radius:7px;display:grid;place-items:center;font:600 11px var(--mono);flex:none}
+  .tone-blue{background:rgba(59,91,219,.10);color:var(--blue)}
+  .tone-green{background:rgba(14,159,110,.12);color:var(--green)}
+  .tone-gray{background:var(--bg2);color:var(--mut)}
+  .card-name{font:600 15px var(--mono);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dots{width:26px;height:26px;border-radius:6px;color:var(--mut);font-size:16px;line-height:1;flex:none}
+  .dots:hover{background:var(--bg2);color:var(--ink)}
+  .menu{position:absolute;right:12px;top:44px;background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:0 6px 20px rgba(26,31,54,.14);min-width:148px;padding:4px;z-index:20}
+  .menu button{display:block;width:100%;text-align:left;padding:7px 12px;font-size:13px;border-radius:6px;color:var(--ink)}
+  .menu button:hover{background:var(--bg2)}
+  .menu button.danger{color:var(--red)}
+  .menu button.danger:hover{background:rgba(201,80,58,.08)}
+  .meta{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px}
+  .tag{font-size:11.5px;padding:2px 8px;border-radius:5px;background:var(--bg2);color:var(--mut)}
+  .tag.cat{background:transparent;border:1px solid var(--line)}
+  .tag.always{background:rgba(59,91,219,.10);color:var(--blue)}
+  .tag.ver{font-family:var(--mono);font-size:10.5px}
+  .tag.update{background:rgba(59,91,219,.10);color:var(--blue)}
+  .tag.src{background:var(--green-bg);color:var(--green)}
+  .desc{font-size:13px;color:var(--mut);line-height:1.55;margin-bottom:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .endpoint{font:12px var(--mono);color:var(--mut);background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:4px 8px;margin-bottom:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .card-foot{display:flex;align-items:center;justify-content:space-between}
+  .card-foot .grow{flex:1}
+  .grant{font-size:12px;color:var(--blue);border:1px solid var(--line2);border-radius:6px;padding:3px 10px}
+  .grant:hover{border-color:var(--blue)}
+
+  /* 状态徽标：点 + 文字 */
+  .st{display:inline-flex;align-items:center;gap:6px;font-size:12.5px}
+  .st i{width:7px;height:7px;border-radius:50%;flex:none}
+  .st.ok{color:var(--green)} .st.ok i{background:var(--green)}
+  .st.pend{color:var(--blue)} .st.pend i{background:var(--blue-lt)}
+  .st.down{color:var(--red)} .st.down i{background:var(--red)}
+  .st.off{color:var(--mut)} .st.off i{background:var(--line2)}
+
+  /* 进度条（列表内安装中） */
+  .progress{height:4px;background:var(--bg2);border-radius:2px;overflow:hidden;flex:1}
+  .progress i{display:block;height:100%;background:var(--blue);border-radius:2px}
+
+  /* 删除确认条 */
+  .confirm-bar{position:absolute;left:0;right:0;bottom:0;background:rgba(201,80,58,.06);border-top:1px solid rgba(201,80,58,.3);border-radius:0 0 10px 10px;padding:8px 14px;display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--red)}
+  .confirm-bar .btn-mini{font-size:12px;padding:3px 10px;border-radius:6px}
+  .confirm-bar .yes{background:var(--red);color:#fff}
+  .confirm-bar .no{color:var(--mut)}
+  .card.confirming{padding-bottom:44px}
+
+  .empty{grid-column:1/-1;text-align:center;color:var(--mut);padding:48px 0;font-size:14px}
+
+  /* ---------- 按钮 ---------- */
+  .btn{display:inline-flex;align-items:center;gap:6px;border-radius:8px;padding:7px 16px;font-size:13.5px;font-weight:500;transition:.15s;border:1px solid transparent}
+  .btn.primary{background:var(--blue);color:#fff}
+  .btn.primary:hover{background:#3350c4}
+  .btn.primary:disabled{background:var(--line2);cursor:not-allowed}
+  .btn.secondary{border-color:var(--line2);color:var(--ink);background:var(--panel)}
+  .btn.secondary:hover{border-color:var(--ink)}
+  .btn.ghost{color:var(--mut)}
+  .btn.ghost:hover{color:var(--ink)}
+  .btn.done{background:var(--green-bg);color:var(--green);cursor:default}
+
+  /* ---------- 抽屉 ---------- */
+  .overlay{position:fixed;inset:0;background:rgba(26,31,54,.32);opacity:0;pointer-events:none;transition:.2s;z-index:90}
+  .overlay.open{opacity:1;pointer-events:auto}
+  .drawer{position:fixed;top:0;right:0;bottom:0;width:480px;background:var(--panel);border-left:1px solid var(--line);box-shadow:-12px 0 40px rgba(26,31,54,.12);transform:translateX(100%);transition:transform .25s ease;z-index:100;display:flex;flex-direction:column}
+  .drawer.open{transform:none}
+  .drawer-head{padding:22px 26px 16px;border-bottom:1px solid var(--line)}
+  .drawer-head h2{font-family:var(--serif);font-size:20px;font-weight:600}
+  .drawer-head p{font-size:13px;color:var(--mut);margin-top:4px}
+  .drawer-x{position:absolute;top:18px;right:20px;width:28px;height:28px;border-radius:6px;color:var(--mut);font-size:18px}
+  .drawer-x:hover{background:var(--bg2);color:var(--ink)}
+  .drawer-body{flex:1;overflow-y:auto;padding:22px 26px}
+  .fgroup{margin-bottom:20px}
+  .flabel{display:block;font-size:12px;color:var(--mut);margin-bottom:6px;letter-spacing:.3px}
+  .finput{width:100%;border:1px solid var(--line2);border-radius:8px;padding:9px 12px;font-size:13.5px;background:var(--panel)}
+  .finput.mono{font:13px var(--mono)}
+  .finput:focus{outline:2px solid rgba(59,91,219,.25);border-color:var(--blue)}
+  .fhint{font-size:12px;color:var(--mut);margin-top:6px}
+  .transport{display:grid;grid-template-columns:1fr 1fr 1fr;border:1px solid var(--line2);border-radius:10px;overflow:hidden}
+  .transport button{padding:10px 10px 9px;text-align:left;border-right:1px solid var(--line);background:var(--panel);transition:.15s}
+  .transport button:last-child{border-right:none}
+  .transport .tt{font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:5px}
+  .transport .td{font-size:10.5px;color:var(--mut);line-height:1.4;margin-top:3px}
+  .transport button.on{background:rgba(59,91,219,.06);box-shadow:inset 0 0 0 2px var(--blue)}
+  .tbadge{font-size:9.5px;background:var(--green-bg);color:var(--green);border-radius:4px;padding:1px 5px;font-weight:500}
+  .authseg{display:inline-flex;background:var(--bg2);border:1px solid var(--line);border-radius:8px;padding:3px;margin-bottom:10px}
+  .authseg button{padding:5px 14px;border-radius:5px;font-size:12.5px;color:var(--mut)}
+  .authseg button.on{background:var(--panel);color:var(--ink);font-weight:600;box-shadow:0 1px 2px rgba(26,31,54,.12)}
+  .oauthbtn{border:1px solid var(--line2);border-radius:8px;padding:8px 14px;font-size:13px}
+  .oauthbtn:hover{border-color:var(--blue);color:var(--blue)}
+  .oauthbtn.ok{border-color:var(--green);color:var(--green);cursor:default}
+  .drawer-foot{padding:16px 26px;border-top:1px solid var(--line);display:flex;align-items:center;gap:12px}
+  .test-status{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;flex:1}
+  .test-status i{width:7px;height:7px;border-radius:50%;flex:none}
+  .test-status.testing{color:var(--blue)} .test-status.testing i{background:var(--blue-lt);animation:pulse 1s infinite}
+  .test-status.good{color:var(--green)} .test-status.good i{background:var(--green)}
+  .test-status.bad{color:var(--red)} .test-status.bad i{background:var(--red)}
+  @keyframes pulse{50%{opacity:.3}}
+
+  /* ---------- v4 新增：安装包行 / 居中 modal / 手写正文 ---------- */
+  .pkg-row{display:flex;gap:10px;align-items:center}
+  .modal-center{position:fixed;top:50%;left:50%;transform:translate(-50%,-48%) scale(.98);width:560px;max-height:84vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 24px 64px rgba(26,31,54,.2);z-index:100;opacity:0;pointer-events:none;transition:.2s}
+  .modal-center.open{opacity:1;pointer-events:auto;transform:translate(-50%,-50%) scale(1)}
+  textarea.finput{font:12.5px var(--mono);line-height:1.6;resize:vertical}
+  .src-note{display:block;font-size:12px;margin-top:4px;color:var(--mut)}
+  /* skill-install 优化对照 */
+  .review-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .review-pane{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--panel);display:flex;flex-direction:column}
+  .review-pane.opt{border-color:rgba(59,91,219,.4);background:rgba(59,91,219,.04)}
+  .review-pane h4{font-size:13px;margin:0 0 8px;display:flex;align-items:center;gap:6px}
+  .review-pane pre{font:11px/1.6 var(--mono);white-space:pre-wrap;word-break:break-word;max-height:230px;overflow:auto;color:var(--ink);flex:1;margin:0 0 10px}
+
+  /* ---------- toast ---------- */
+  .toast{position:fixed;bottom:28px;left:50%;transform:translate(-50%,10px);background:var(--ink);color:#fff;font-size:13px;padding:9px 18px;border-radius:8px;opacity:0;transition:.25s;z-index:200;pointer-events:none}
+  .toast.show{opacity:1;transform:translate(-50%,0)}
+</style>
+</head>
+<body>
+
+<header class="topnav">
+  <div class="brand">
+    <div class="logo">SD</div>
+    <div><b>Sortie Deck</b><small>前线小队 · 共交付 · 无传话</small></div>
+  </div>
+  <nav>
+    <a href="#">作战面</a><a href="#">任务</a><a href="#">知识库</a><a href="#">记忆</a>
+    <a href="#">角色工厂</a><a class="on" href="#">工具箱</a><a href="#">角色频道</a>
+    <a href="#">小队</a><a href="#">决策中心</a><a href="#">管理</a>
+  </nav>
+</header>
+
+<main class="wrap">
+  <div class="pagehead">
+    <div>
+      <div class="crumb">TOOLBOX · 能力仓库</div>
+      <h1>Sortie Deck 工具箱</h1>
+      <p class="lede">技能浏览器：Tools · Skills · 连接器，供小队与 Agent 挂载。常驻条目每轮注入上下文，按需条目经 tool_search 检索后上浮。</p>
+    </div>
+    <div class="budget" id="budget">
+      <div class="row"><span class="t">常驻预算（上下文成本）</span><span class="v"><b id="bNow">0</b><em> / 建议上限 12</em></span></div>
+      <div class="bar"><i id="bBar" style="width:0%"></i></div>
+    </div>
+  </div>
+
+  <div class="seg" id="tabs">
+    <button data-tab="tool" class="on">工具<span class="n" id="cnt-tool"></span></button>
+    <button data-tab="skill">技能<span class="n" id="cnt-skill"></span></button>
+    <button data-tab="mcp">连接器<span class="n" id="cnt-mcp"></span></button>
+  </div>
+
+  <div id="band"></div>
+  <div class="chips" id="chips"></div>
+  <div class="grid" id="grid"></div>
+</main>
+
+<!-- 连接器抽屉 -->
+<div class="overlay" id="overlay"></div>
+<aside class="drawer" id="drawer">
+  <button class="drawer-x" id="drawerX">×</button>
+  <div class="drawer-head">
+    <h2>添加连接器</h2>
+    <p>接入外部 MCP 服务。本地进程走 stdio，云端服务走 SSE 或 Streamable HTTP。</p>
+  </div>
+  <div class="drawer-body">
+    <div class="fgroup">
+      <label class="flabel">名称</label>
+      <input class="finput mono" id="fName" placeholder="my-mcp">
+    </div>
+    <div class="fgroup">
+      <label class="flabel">传输方式 Transport</label>
+      <div class="transport" id="transport">
+        <button data-t="stdio" class="on"><span class="tt">stdio</span><span class="td">本地进程，命令行启动，零网络依赖</span></button>
+        <button data-t="sse"><span class="tt">SSE</span><span class="td">云端 MCP，事件流推送，配置简单</span></button>
+        <button data-t="http"><span class="tt">Streamable HTTP <span class="tbadge">推荐</span></span><span class="td">云端 MCP，支持鉴权与 OAuth</span></button>
+      </div>
+    </div>
+    <div class="fgroup" id="grpPkg">
+      <label class="flabel">连接器安装包（.zip）</label>
+      <input type="file" id="fPkgFile" accept=".zip" hidden>
+      <div class="pkg-row">
+        <button class="btn secondary" id="pkgPick">选择 zip 安装包</button>
+        <span class="fhint" id="pkgName" style="margin:0">stdio 连接器仅支持导入压缩包方式安装</span>
+      </div>
+      <div class="pkg-progress" id="pkgProg" style="display:none;margin-top:10px">
+        <div class="install-bar"><i id="pkgBar"></i></div>
+        <div class="pct" id="pkgPct" style="margin-top:4px">安装包解压中 0%</div>
+      </div>
+    </div>
+    <div class="fgroup" id="grpCmd" style="display:none">
+      <label class="flabel">启动命令 Command</label>
+      <input class="finput mono" id="fCmd" placeholder="npx -y @modelcontextprotocol/server-…">
+      <div class="fhint">安装包就绪后自动生成，可修改。在本机以子进程方式拉起，随小队会话启停。</div>
+    </div>
+    <div id="grpRemote">
+      <div class="fgroup">
+        <label class="flabel">端点 URL</label>
+        <input class="finput mono" id="fUrl" placeholder="https://…">
+      </div>
+      <div class="fgroup">
+        <label class="flabel">鉴权方式</label>
+        <div class="authseg" id="authseg">
+          <button data-a="bearer" class="on">Bearer Token</button>
+          <button data-a="oauth">OAuth</button>
+        </div>
+        <div id="authBearer">
+          <input class="finput mono" id="fToken" placeholder="Bearer token · sk-…">
+        </div>
+        <div id="authOauth" style="display:none">
+          <button class="oauthbtn" id="oauthBtn">发起 OAuth 授权</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="drawer-foot">
+    <span class="test-status" id="testStatus" style="display:none"><i></i><span id="testText"></span></span>
+    <button class="btn secondary" id="testBtn">测试连接</button>
+    <button class="btn ghost" id="cancelBtn">取消</button>
+    <button class="btn primary" id="submitBtn" disabled>添加连接</button>
+  </div>
+</aside>
+
+<!-- 添加工具抽屉 -->
+<aside class="drawer" id="toolDrawer">
+  <button class="drawer-x" id="toolDrawerX">×</button>
+  <div class="drawer-head">
+    <h2>添加工具</h2>
+    <p>注册一个内部工具到工具箱，供小队与 Agent 挂载。</p>
+  </div>
+  <div class="drawer-body">
+    <div class="fgroup">
+      <label class="flabel">名称</label>
+      <input class="finput mono" id="tName" placeholder="如 pdf_parse">
+    </div>
+    <div class="fgroup">
+      <label class="flabel">摘要</label>
+      <input class="finput" id="tDesc" placeholder="一句话说明用途，将用于 tool_search 检索匹配">
+    </div>
+    <div class="fgroup">
+      <label class="flabel">功能分类</label>
+      <select class="finput" id="tCat"></select>
+    </div>
+    <div class="fgroup">
+      <label class="flabel">运行时 Runtime</label>
+      <div class="transport" id="runtime" style="grid-template-columns:1fr 1fr">
+        <button data-r="cli" class="on"><span class="tt">cli</span><span class="td">本地命令行可执行程序</span></button>
+        <button data-r="http"><span class="tt">http</span><span class="td">调用远程 HTTP 接口</span></button>
+        <button data-r="function"><span class="tt">function</span><span class="td">进程内函数直接调用</span></button>
+        <button data-r="plugin"><span class="tt">plugin</span><span class="td">以插件形式动态加载</span></button>
+      </div>
+    </div>
+    <div class="fgroup">
+      <label class="flabel">接入点 Endpoint</label>
+      <input class="finput mono" id="tEndpoint" placeholder="https://api.example.com/run 或 /usr/local/bin/tool">
+      <div class="fhint">cli 填可执行命令路径，http/function/plugin 填调用地址或标识。</div>
+    </div>
+    <div class="fgroup">
+      <label class="flabel">负载策略</label>
+      <div class="authseg" id="loadSeg">
+        <button data-l="defer" class="on">按需（tool_search 检索后上浮）</button>
+        <button data-l="always">常驻（每轮注入，计入预算）</button>
+      </div>
+    </div>
+  </div>
+  <div class="drawer-foot">
+    <span style="flex:1"></span>
+    <button class="btn ghost" id="tCancel">取消</button>
+    <button class="btn primary" id="tSubmit">添加工具</button>
+  </div>
+</aside>
+
+<!-- 添加技能弹窗（外网安装 / 本地上传 / 手写 MD） -->
+<div class="overlay" id="skillOverlay"></div>
+<div class="modal-center" id="skillModal">
+  <button class="drawer-x" id="skillX">×</button>
+  <div class="drawer-head">
+    <h2>添加技能</h2>
+    <p>支持从外网安装；也可在本地上传压缩包 / MD 文件，或直接手写 SKILL.md 创建。</p>
+  </div>
+  <div class="drawer-body">
+    <div class="authseg" id="skillModeSeg" style="margin-bottom:16px">
+      <button data-m="remote" class="on">从外网安装</button>
+      <button data-m="local">本地设置</button>
+    </div>
+
+    <div id="skillRemote">
+      <div class="fgroup">
+        <label class="flabel">技能包 URL / GitHub 仓库</label>
+        <input class="finput mono" id="sUrl" placeholder="https://github.com/org/skill-repo">
+        <div class="fhint">仅支持 GitHub 仓库地址（https://github.com/org/skill-repo），不支持 MD 直链。</div>
+      </div>
+      <div class="pkg-progress" id="sRemoteProg" style="display:none">
+        <div class="install-bar"><i id="sRemoteBar"></i></div>
+        <div class="pct" id="sRemotePct" style="margin-top:4px">拉取中 0%</div>
+      </div>
+    </div>
+
+    <div id="skillLocal" style="display:none">
+      <div class="authseg" id="localModeSeg" style="margin-bottom:16px">
+        <button data-lm="upload" class="on">上传压缩包 / MD 文件</button>
+        <button data-lm="write">手写 SKILL.md</button>
+      </div>
+
+      <div id="localUpload">
+        <div class="fgroup">
+          <label class="flabel">技能文件（.zip 或 .md）</label>
+          <input type="file" id="sFile" accept=".zip,.md" hidden>
+          <div class="pkg-row">
+            <button class="btn secondary" id="sFilePick">选择文件</button>
+            <span class="fhint" id="sFileName" style="margin:0">支持技能压缩包（含 SKILL.md + scripts）或单个 SKILL.md</span>
+          </div>
+        </div>
+        <div class="fgroup">
+          <label class="flabel">名称（可选，默认取文件名）</label>
+          <input class="finput mono" id="sUpName" placeholder="my-skill">
+        </div>
+        <div class="fgroup">
+          <label class="flabel">功能分类</label>
+          <select class="finput" id="sUpCat"></select>
+        </div>
+        <div class="pkg-progress" id="sUpProg" style="display:none">
+          <div class="install-bar"><i id="sUpBar"></i></div>
+          <div class="pct" id="sUpPct" style="margin-top:4px">解析中 0%</div>
+        </div>
+      </div>
+
+      <div id="localWrite" style="display:none">
+        <div id="writeForm">
+          <div class="fgroup">
+            <label class="flabel">技能名称</label>
+            <input class="finput mono" id="sWName" placeholder="my-skill">
+          </div>
+          <div class="fgroup">
+            <label class="flabel">功能分类</label>
+            <select class="finput" id="sWCat"></select>
+          </div>
+          <div class="fgroup">
+            <label class="flabel">SKILL.md 正文</label>
+            <textarea class="finput" id="sBody" rows="9" placeholder="---
+name: my-skill
+description: 一句话说明用途
+---
+## 用途
+…
+## 步骤
+…"></textarea>
+          </div>
+          <button class="btn primary" id="sCreate">创建技能</button>
+          <div class="pkg-progress" id="sOptProg" style="display:none;margin-top:12px">
+            <div class="install-bar"><i id="sOptBar" style="width:100%"></i></div>
+            <div class="pct" id="sOptText" style="margin-top:6px">调用 skill-install 分析正文…</div>
+          </div>
+        </div>
+
+        <div id="writeReview" style="display:none">
+          <div class="fhint" style="margin-bottom:10px">skill-install 优化完成。请选择保留的版本——确认后将仅保留所选版本，另一版本从服务器本地存储中删除。</div>
+          <div class="review-grid">
+            <div class="review-pane">
+              <h4>原版本</h4>
+              <pre id="origBody"></pre>
+              <button class="btn secondary" id="pickOrig">使用此版本</button>
+            </div>
+            <div class="review-pane opt">
+              <h4>优化后版本 <span class="tbadge">skill-install 推荐</span></h4>
+              <pre id="optBody"></pre>
+              <button class="btn primary" id="pickOpt">使用此版本</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="drawer-foot">
+    <span class="test-status" id="sStatus" style="display:none"><i></i><span id="sStatusText"></span></span>
+    <span style="flex:1"></span>
+    <button class="btn ghost" id="sCancel">取消</button>
+    <button class="btn primary" id="sGo">开始安装</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ================= 数据 ================= */
+const CATS = ["工程研发","产品设计","质量测试","运维发布","知识资料","浏览器自动化","办公协作"];
+
+const tools = [
+  {id:"t1",kind:"tool",name:"web_search",mono:"ws",tone:"blue",runtime:"http",cat:"工程研发",load:"always",mounts:4,enabled:true,desc:"联网检索与网页摘要，注入搜索结果上下文"},
+  {id:"t2",kind:"tool",name:"code_runner",mono:"cr",tone:"blue",runtime:"cli",cat:"工程研发",load:"defer",mounts:2,enabled:true,desc:"沙箱执行代码片段，返回 stdout 与退出码"},
+  {id:"t3",kind:"tool",name:"image_gen",mono:"ig",tone:"green",runtime:"function",cat:"产品设计",load:"defer",mounts:3,enabled:true,desc:"文生图函数调用，支持尺寸与风格参数"},
+  {id:"t4",kind:"tool",name:"doc_export",mono:"de",tone:"gray",runtime:"plugin",cat:"办公协作",load:"defer",mounts:1,enabled:false,desc:"将任务产出导出为 docx / pdf 附件"},
+];
+
+const skills = [
+  {id:"s1",kind:"skill",name:"log-analyzer",mono:"la",tone:"blue",ver:"v1.2.0",src:"GitHub",cat:"工程研发",load:"always",mounts:2,enabled:true,update:"v1.3.0",desc:"SKILL.md + 3 个脚本：解析日志、聚类报错、定位回归"},
+  {id:"s2",kind:"skill",name:"ppt-builder",mono:"pb",tone:"green",ver:"v0.9.1",src:"市场",cat:"办公协作",load:"defer",mounts:1,enabled:true,desc:"从大纲生成汇报 PPT，含模板与图表脚本"},
+  {id:"s3",kind:"skill",name:"frontend-review",mono:"fr",tone:"blue",src:"GitHub",cat:"产品设计",load:"defer",mounts:0,enabled:true,installing:67,desc:"组件走查与设计还原度评审，安装中"},
+];
+
+/* 市场推荐带（技能 tab） */
+const market = [
+  {id:"mk1",name:"data-viz",mono:"dv",tone:"green",src:"市场",cat:"质量测试",desc:"将结构化数据渲染为图表与简报，市场本周下载第一",status:"idle",progress:0},
+  {id:"mk2",name:"api-tester",mono:"at",tone:"blue",src:"市场",cat:"质量测试",desc:"从 OpenAPI 规范生成接口用例与断言",status:"idle",progress:0},
+  {id:"mk3",name:"doc-summarizer",mono:"ds",tone:"blue",src:"GitHub",cat:"知识资料",desc:"长文档分节摘要，输出引用定位",status:"idle",progress:0},
+];
+
+const mcps = [
+  {id:"m1",kind:"mcp",name:"filesystem",mono:"fs",tone:"green",transport:"stdio",cmd:"npx -y @modelcontextprotocol/server-filesystem",cat:"知识资料",health:"ok",load:"always",mounts:5,enabled:true,desc:"仓库与文件夹读写，供知识检索使用"},
+  {id:"m2",kind:"mcp",name:"browser",mono:"br",tone:"blue",transport:"stdio",cmd:"npx -y @modelcontextprotocol/server-browser",cat:"浏览器自动化",health:"ok",load:"defer",mounts:3,enabled:true,desc:"无头浏览器驱动，页面巡检与截图"},
+  {id:"m3",kind:"mcp",name:"postgres-mcp",mono:"pg",tone:"blue",transport:"sse",url:"https://mcp.internal.xmly.dev/pg/sse",cat:"工程研发",health:"ok",load:"defer",mounts:2,enabled:true,desc:"内网只读库查询，SSE 长连接"},
+  {id:"m4",kind:"mcp",name:"github-mcp",mono:"gh",tone:"gray",transport:"http",url:"https://api.githubcopilot.com/mcp/",cat:"工程研发",health:"pending",load:"defer",mounts:0,enabled:true,desc:"仓库、PR 与 Issue 操作，等待 OAuth 授权"},
+  {id:"m5",kind:"mcp",name:"notion-mcp",mono:"no",tone:"gray",transport:"http",url:"https://mcp.notion.com/mcp",cat:"办公协作",health:"down",load:"defer",mounts:1,enabled:true,desc:"文档空间读写，连接已断开"},
+];
+
+const state = {tab:"tool", cat:"全部", openMenu:null};
+const $ = s => document.querySelector(s);
+const HEALTH = {ok:["ok","已连接"], pending:["pend","待授权"], down:["down","已断开"]};
+const T_LABEL = {stdio:"stdio", sse:"SSE", http:"Streamable HTTP"};
+
+function allItems(){ return [...tools,...skills,...mcps]; }
+function bucket(){ return state.tab==="tool"?tools : state.tab==="skill"?skills : mcps; }
+
+/* ================= 渲染 ================= */
+function updateCounts(){
+  $("#cnt-tool").textContent = tools.length;
+  $("#cnt-skill").textContent = skills.length + market.filter(m=>m.status==="done").length;
+  $("#cnt-mcp").textContent = mcps.length;
+}
+function updateBudget(){
+  const n = allItems().filter(i=>i.enabled && i.load==="always" && !i.installing).length;
+  $("#bNow").textContent = n;
+  $("#bBar").style.width = Math.min(100, n/12*100) + "%";
+  $("#budget").classList.toggle("over", n>12);
+}
+function toast(msg){
+  const t=$("#toast"); t.textContent=msg; t.classList.add("show");
+  clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove("show"),2200);
+}
+
+function chipsHTML(){
+  const list = bucket();
+  const cnt = c => c==="全部" ? list.length : list.filter(i=>i.cat===c).length;
+  return ["全部",...CATS].map(c=>
+    `<button class="chip ${state.cat===c?"on":""}" data-cat="${c}">${c}<span class="c">${cnt(c)}</span></button>`).join("");
+}
+
+function mktCardHTML(m){
+  let foot;
+  if(m.status==="idle") foot = `<button class="btn primary" data-minstall="${m.id}">安装</button>`;
+  else if(m.status==="installing") foot = `<div class="grow"><div class="install-bar"><i style="width:${m.progress}%"></i></div><div class="pct" style="margin-top:4px">安装中 ${m.progress}%</div></div>`;
+  else foot = `<span class="st ok"><i></i>已安装</span>`;
+  return `<div class="mkt-card" data-mid="${m.id}">
+    <div class="mkt-top">
+      <div class="mono-badge tone-${m.tone}">${m.mono}</div>
+      <span class="name">${m.name}</span>
+      <span class="tag src">${m.src}</span>
+    </div>
+    <div class="mkt-desc">${m.desc}</div>
+    <div class="mkt-foot">${foot}<span class="tag cat">${m.cat}</span></div>
+  </div>`;
+}
+
+function bandHTML(){
+  if(state.tab==="tool") return `
+    <div class="band">
+      <div class="band-head">
+        <div><h2>工具库</h2><p>CLI、HTTP、函数与插件四类运行时，按 endpoint 挂载到小队。工具经 tool_search 按需上浮，常驻需控制预算。</p></div>
+        <button class="btn primary" id="addToolBtn">添加工具</button>
+      </div>
+    </div>`;
+  if(state.tab==="skill") return `
+    <div class="band">
+      <div class="band-head">
+        <div><h2>市场推荐</h2><p>来自技能市场与 GitHub 的高分技能，一键安装后自动挂载为按需条目。
+          <span class="src-note">推荐数据来源：后端聚合「官方精选 + GitHub 收录 + 安装量排序」生成（正式版走 /api/market/skills 拉取，本页为示意数据）。</span></p></div>
+        <button class="btn primary" id="addSkillBtn">添加技能</button>
+      </div>
+      <div class="market-row">${market.map(mktCardHTML).join("")}</div>
+    </div>`;
+  return `
+    <div class="band">
+      <div class="band-head">
+        <div><h2>连接新的外部服务</h2><p>通过 MCP 协议把外部系统能力挂进小队。云端服务推荐 Streamable HTTP：支持鉴权 header 与 OAuth，连接健康可持续观测。</p></div>
+        <button class="btn primary" id="addMcpBtn">添加连接器</button>
+      </div>
+      <div class="hl-chips">
+        <div class="hl-chip"><b>SSE · 事件流接入</b><span>适合只读查询类服务，配置一个 URL 即可</span></div>
+        <div class="hl-chip"><b>Streamable HTTP · 支持 OAuth <span class="tbadge">推荐</span></b><span>云端 MCP 首选，鉴权与续期由平台托管</span></div>
+        <div class="hl-chip"><b>stdio · 本地进程</b><span>在本机以命令行拉起，适合文件系统等本地资源</span></div>
+      </div>
+    </div>`;
+}
+
+function cardHTML(it){
+  const meta = [];
+  let badges = "", footExtra = "";
+  if(it.kind==="tool") badges = `<span class="tag">${it.runtime}</span>`;
+  if(it.kind==="skill"){
+    badges = `<span class="tag ver">${it.ver||""}</span><span class="tag src">${it.src}</span>`;
+    if(it.update) badges += `<span class="tag update">${it.update} 可更新</span>`;
+  }
+  if(it.kind==="mcp"){
+    badges = `<span class="tag">${T_LABEL[it.transport]}</span>`;
+  }
+  meta.push(badges);
+  meta.push(`<span class="tag cat">${it.cat}</span>`);
+  meta.push(it.load==="always" ? `<span class="tag always">常驻</span>` : `<span class="tag">按需</span>`);
+  meta.push(`<span class="tag">挂载 ${it.mounts} 个 Agent</span>`);
+
+  let mid = "";
+  if(it.kind==="mcp"){
+    const body = it.transport==="stdio" ? it.cmd : it.url;
+    mid = `<div class="endpoint">${body}</div>`;
+  }
+  let foot = "";
+  if(it.installing!=null){
+    foot = `<div class="grow"><div class="progress"><i style="width:${it.installing}%"></i></div></div>
+            <span class="pct">安装中 ${it.installing}%</span>`;
+  }else if(it.kind==="mcp"){
+    const [cls,txt] = HEALTH[it.health];
+    foot = `<span class="st ${cls}"><i></i>${txt}</span>`;
+    if(it.health==="pending") foot += `<button class="grant" data-grant="${it.id}">授权 OAuth</button>`;
+  }else{
+    foot = it.enabled
+      ? `<span class="st ok"><i></i>启用中</span>`
+      : `<span class="st off"><i></i>已停用</span>`;
+  }
+  const menu = state.openMenu===it.id ? `
+    <div class="menu">
+      <button data-act="toggle" data-id="${it.id}">${it.enabled?"停用":"启用"}</button>
+      <button data-act="edit" data-id="${it.id}">编辑</button>
+      <button class="danger" data-act="del" data-id="${it.id}">删除</button>
+    </div>` : "";
+  const confirmBar = it.confirming ? `
+    <div class="confirm-bar">
+      <span>确认删除？该操作不可撤销</span>
+      <span class="grow" style="flex:1"></span>
+      <button class="btn-mini no" data-act="delno" data-id="${it.id}">取消</button>
+      <button class="btn-mini yes" data-act="delyes" data-id="${it.id}">删除</button>
+    </div>` : "";
+  return `<div class="card ${it.enabled?"":"off"} ${it.confirming?"confirming":""}" data-card="${it.id}">
+    <div class="card-head">
+      <div class="mono-badge tone-${it.tone}">${it.mono}</div>
+      <span class="card-name">${it.name}</span>
+      <button class="dots" data-menu="${it.id}">…</button>
+    </div>
+    <div class="meta">${meta.join("")}</div>
+    <div class="desc">${it.desc}</div>
+    ${mid}
+    <div class="card-foot">${foot}</div>
+    ${menu}${confirmBar}
+  </div>`;
+}
+
+function render(){
+  document.querySelectorAll("#tabs button").forEach(b=>b.classList.toggle("on",b.dataset.tab===state.tab));
+  $("#band").innerHTML = bandHTML();
+  $("#chips").innerHTML = chipsHTML();
+  const list = bucket().filter(i=>state.cat==="全部"||i.cat===state.cat);
+  $("#grid").innerHTML = list.length ? list.map(cardHTML).join("")
+    : `<div class="empty">该分类下暂无条目——切换分类，或从上方发现带安装新的能力。</div>`;
+  updateCounts(); updateBudget();
+  if(state.tab==="skill"){ bindSkillBand(); const sb=$("#addSkillBtn"); if(sb) sb.onclick=openSkillModal; }
+  if(state.tab==="tool"){ const tb=$("#addToolBtn"); if(tb) tb.onclick=openToolDrawer; }
+  if(state.tab==="mcp"){ $("#addMcpBtn").onclick=openDrawer; }
+}
+
+/* ================= 技能带交互 ================= */
+function bindSkillBand(){
+  document.querySelectorAll("[data-minstall]").forEach(b=>{
+    b.onclick = ()=>{
+      const m = market.find(x=>x.id===b.dataset.minstall);
+      if(m.status!=="idle") return;
+      m.status="installing"; m.progress=0;
+      const h = setInterval(()=>{
+        m.progress = Math.min(100, m.progress + 7 + Math.random()*10);
+        const card = document.querySelector(`[data-mid="${m.id}"] .mkt-foot`);
+        if(card) card.innerHTML = `<div class="grow"><div class="install-bar"><i style="width:${m.progress}%"></i></div><div class="pct" style="margin-top:4px">安装中 ${Math.floor(m.progress)}%</div></div><span class="tag cat">${m.cat}</span>`;
+        if(m.progress>=100){
+          clearInterval(h);
+          m.status="done";
+          skills.push({id:"sk-"+m.id,kind:"skill",name:m.name,mono:m.mono,tone:m.tone,ver:"v1.0.0",src:m.src,cat:m.cat,load:"defer",mounts:0,enabled:true,desc:m.desc+"（刚从市场安装）"});
+          render(); toast(`已安装 ${m.name}，出现在技能列表`);
+        }
+      },220);
+      render();
+    };
+  });
+}
+
+/* ================= 卡片菜单 / 治理 ================= */
+document.addEventListener("click",e=>{
+  const menuBtn = e.target.closest("[data-menu]");
+  if(menuBtn){
+    state.openMenu = state.openMenu===menuBtn.dataset.menu ? null : menuBtn.dataset.menu;
+    render(); return;
+  }
+  const act = e.target.closest("[data-act]");
+  if(act){
+    const it = allItems().find(i=>i.id===act.dataset.id);
+    const a = act.dataset.act;
+    if(a==="toggle"){ it.enabled=!it.enabled; state.openMenu=null; render(); toast(it.enabled?"已启用 "+it.name:"已停用 "+it.name); }
+    if(a==="edit"){ state.openMenu=null; render(); toast("演示原型：编辑表单略"); }
+    if(a==="del"){ it.confirming=true; state.openMenu=null; render(); }
+    if(a==="delno"){ it.confirming=false; render(); }
+    if(a==="delyes"){
+      const arr = it.kind==="tool"?tools : it.kind==="skill"?skills : mcps;
+      arr.splice(arr.indexOf(it),1);
+      render(); toast("已删除 "+it.name);
+    }
+    return;
+  }
+  const grant = e.target.closest("[data-grant]");
+  if(grant){
+    const it = mcps.find(m=>m.id===grant.dataset.grant);
+    it.health="ok"; it.tone="green"; render(); toast(it.name+" OAuth 授权完成，已连接"); return;
+  }
+  if(!e.target.closest(".menu")) { if(state.openMenu){ state.openMenu=null; render(); } }
+});
+document.querySelectorAll("#tabs button").forEach(b=>{
+  b.onclick=()=>{ state.tab=b.dataset.tab; state.cat="全部"; state.openMenu=null; render(); };
+});
+$("#chips").addEventListener("click",e=>{
+  const c=e.target.closest(".chip"); if(c){ state.cat=c.dataset.cat; render(); }
+});
+
+/* ================= 连接器抽屉 ================= */
+const dState={transport:"stdio",auth:"bearer",oauth:false,tested:false,pkgReady:false};
+function openDrawer(){
+  /* 每次打开重置 stdio 安装包状态 */
+  dState.pkgReady=false;
+  $("#pkgProg").style.display="none"; $("#pkgBar").style.width="0%";
+  $("#pkgName").textContent="stdio 连接器仅支持导入压缩包方式安装";
+  $("#fPkgFile").value=""; $("#fCmd").value="";
+  syncTransport(); syncAuth();
+  $("#overlay").classList.add("open"); $("#drawer").classList.add("open");
+}
+function closeDrawer(){
+  $("#overlay").classList.remove("open"); $("#drawer").classList.remove("open");
+}
+function syncTransport(){
+  document.querySelectorAll("#transport button").forEach(b=>b.classList.toggle("on",b.dataset.t===dState.transport));
+  const remote = dState.transport!=="stdio";
+  $("#grpPkg").style.display = remote?"none":"block";
+  /* stdio 必须先装好 zip 安装包，才出现启动命令字段 */
+  $("#grpCmd").style.display = (remote||!dState.pkgReady)?"none":"block";
+  $("#grpRemote").style.display = remote?"block":"none";
+  resetTest();
+}
+function syncAuth(){
+  document.querySelectorAll("#authseg button").forEach(b=>b.classList.toggle("on",b.dataset.a===dState.auth));
+  $("#authBearer").style.display = dState.auth==="bearer"?"block":"none";
+  $("#authOauth").style.display = dState.auth==="oauth"?"block":"none";
+  resetTest();
+}
+function resetTest(){
+  dState.tested=false; $("#submitBtn").disabled=true;
+  $("#testStatus").style.display="none";
+}
+document.querySelectorAll("#transport button").forEach(b=>b.onclick=()=>{dState.transport=b.dataset.t; syncTransport();});
+document.querySelectorAll("#authseg button").forEach(b=>b.onclick=()=>{dState.auth=b.dataset.a; syncAuth();});
+/* stdio：上传 zip 安装包 → 模拟解压 → 就绪后生成启动命令 */
+$("#pkgPick").onclick=()=>$("#fPkgFile").click();
+$("#fPkgFile").onchange=e=>{
+  const f=e.target.files&&e.target.files[0];
+  if(!f)return;
+  $("#pkgName").textContent=f.name;
+  $("#pkgProg").style.display="block";
+  let p=0;
+  const h=setInterval(()=>{
+    p=Math.min(100,p+9+Math.random()*10);
+    $("#pkgBar").style.width=p+"%";
+    $("#pkgPct").textContent="安装包解压中 "+Math.floor(p)+"%";
+    if(p>=100){
+      clearInterval(h);
+      dState.pkgReady=true;
+      /* 启动命令默认值：优先取 zip 文件名（去扩展名），其次取已填写的名称 */
+      const name=(f.name||"").replace(/\.zip$/i,"")||$("#fName").value.trim()||"server";
+      $("#fCmd").value="npx -y @modelcontextprotocol/server-"+name;
+      $("#grpCmd").style.display="block";
+      $("#pkgPct").textContent="安装包已就绪 · 依赖已解压，请确认启动命令";
+      toast("安装包就绪，请确认启动命令并测试连接");
+    }
+  },180);
+};
+$("#oauthBtn").onclick=()=>{
+  dState.oauth=true;
+  const b=$("#oauthBtn"); b.textContent="已授权 · 可测试连接"; b.classList.add("ok");
+};
+$("#testBtn").onclick=()=>{
+  const st=$("#testStatus"), tx=$("#testText");
+  st.style.display="inline-flex"; st.className="test-status testing"; tx.textContent="正在建立连接…";
+  $("#testBtn").disabled=true; $("#testBtn").textContent="测试中…";
+  setTimeout(()=>{
+    $("#testBtn").disabled=false; $("#testBtn").textContent="测试连接";
+    let ok=true, msg="";
+    if(dState.transport==="stdio"){
+      if(!dState.pkgReady){ok=false;msg="连接失败：请先上传并安装 zip 安装包";}
+      else{
+        const c=$("#fCmd").value.trim();
+        if(!c){ok=false;msg="连接失败：未填写启动命令";}
+      }
+    }else{
+      const u=$("#fUrl").value.trim();
+      if(!/^https?:\/\/.+/.test(u)){ok=false;msg="连接失败：端点 URL 无效";}
+      else if(dState.auth==="bearer" && !$("#fToken").value.trim()){ok=false;msg="连接失败：未填写 Bearer Token";}
+      else if(dState.auth==="oauth" && !dState.oauth){ok=false;msg="连接失败：未完成 OAuth 授权";}
+    }
+    if(ok){
+      st.className="test-status good";
+      tx.textContent="连接成功 · 延迟 42ms · "+T_LABEL[dState.transport];
+      dState.tested=true; $("#submitBtn").disabled=false;
+    }else{
+      st.className="test-status bad"; tx.textContent=msg;
+    }
+  },1000);
+};
+$("#submitBtn").onclick=()=>{
+  const name=$("#fName").value.trim()||"new-mcp";
+  mcps.push({id:"m-"+Date.now(),kind:"mcp",name,mono:name.slice(0,2).toLowerCase(),tone:"green",
+    transport:dState.transport,
+    cmd:dState.transport==="stdio"?$("#fCmd").value.trim():"",
+    url:dState.transport!=="stdio"?$("#fUrl").value.trim():"",
+    cat:"工程研发",health:"ok",load:"defer",mounts:0,enabled:true,
+    desc:"新添加的 "+T_LABEL[dState.transport]+" 连接"});
+  $("#fName").value="";$("#fCmd").value="";$("#fUrl").value="";$("#fToken").value="";
+  dState.oauth=false;$("#oauthBtn").textContent="发起 OAuth 授权";$("#oauthBtn").classList.remove("ok");
+  closeDrawer(); state.tab="mcp"; state.cat="全部"; render();
+  toast("已添加并连接 "+name);
+};
+$("#cancelBtn").onclick=closeDrawer;
+$("#drawerX").onclick=closeDrawer;
+$("#overlay").onclick=()=>{ closeDrawer(); closeToolDrawer(); };
+document.addEventListener("keydown",e=>{ if(e.key==="Escape"){ closeDrawer(); closeToolDrawer(); closeSkillModal(); } });
+
+/* ================= 添加工具抽屉 ================= */
+const tState={runtime:"cli",load:"defer"};
+function openToolDrawer(){
+  ["tName","tDesc","tEndpoint"].forEach(id=>$("#"+id).value="");
+  tState.runtime="cli"; tState.load="defer";
+  document.querySelectorAll("#runtime button").forEach(b=>b.classList.toggle("on",b.dataset.r==="cli"));
+  document.querySelectorAll("#loadSeg button").forEach(b=>b.classList.toggle("on",b.dataset.l==="defer"));
+  $("#overlay").classList.add("open"); $("#toolDrawer").classList.add("open");
+}
+function closeToolDrawer(){
+  $("#toolDrawer").classList.remove("open");
+  if(!$("#drawer").classList.contains("open")) $("#overlay").classList.remove("open");
+}
+document.querySelectorAll("#runtime button").forEach(b=>b.onclick=()=>{
+  tState.runtime=b.dataset.r;
+  document.querySelectorAll("#runtime button").forEach(x=>x.classList.toggle("on",x===b));
+});
+document.querySelectorAll("#loadSeg button").forEach(b=>b.onclick=()=>{
+  tState.load=b.dataset.l;
+  document.querySelectorAll("#loadSeg button").forEach(x=>x.classList.toggle("on",x===b));
+});
+$("#toolDrawerX").onclick=closeToolDrawer;
+$("#tCancel").onclick=closeToolDrawer;
+$("#tSubmit").onclick=()=>{
+  const name=$("#tName").value.trim();
+  if(!name){ toast("请填写工具名称"); return; }
+  const endpoint=$("#tEndpoint").value.trim();
+  if(!endpoint){ toast("请填写接入点 endpoint"); return; }
+  tools.push({id:"t-"+Date.now(),kind:"tool",name,mono:name.slice(0,2).toLowerCase(),tone:"blue",
+    runtime:tState.runtime,cat:$("#tCat").value||"工程研发",load:tState.load,mounts:0,enabled:true,
+    desc:$("#tDesc").value.trim()||"未填写摘要"});
+  closeToolDrawer(); state.tab="tool"; render();
+  toast("已添加工具 "+name+"（"+tState.runtime+"）");
+};
+
+/* ================= 添加技能弹窗（外网 / 本地上传 / 手写 MD + skill-install 优化对照） ================= */
+const sState={mode:"remote",localMode:"upload"};
+function openSkillModal(){
+  sState.mode="remote"; sState.localMode="upload";
+  document.querySelectorAll("#skillModeSeg button").forEach(b=>b.classList.toggle("on",b.dataset.m==="remote"));
+  document.querySelectorAll("#localModeSeg button").forEach(b=>b.classList.toggle("on",b.dataset.lm==="upload"));
+  ["sUrl","sUpName","sWName","sBody"].forEach(id=>$("#"+id).value="");
+  $("#sFile").value=""; $("#sFileName").textContent="支持技能压缩包（含 SKILL.md + scripts）或单个 SKILL.md";
+  $("#sRemoteProg").style.display="none"; $("#sUpProg").style.display="none";
+  syncSkillMode(); syncLocalMode(); resetWriteFlow();
+  $("#skillOverlay").classList.add("open"); $("#skillModal").classList.add("open");
+}
+function closeSkillModal(){
+  $("#skillModal").classList.remove("open"); $("#skillOverlay").classList.remove("open");
+}
+function syncSkillMode(){
+  $("#skillRemote").style.display = sState.mode==="remote"?"block":"none";
+  $("#skillLocal").style.display  = sState.mode==="local"?"block":"none";
+  const go=$("#sGo");
+  go.style.display = sState.mode==="remote"?"inline-flex":"none";
+  $("#sStatus").style.display="none";
+}
+function syncLocalMode(){
+  $("#localUpload").style.display = sState.localMode==="upload"?"block":"none";
+  $("#localWrite").style.display  = sState.localMode==="write"?"block":"none";
+  if(sState.localMode!=="write") resetWriteFlow();
+}
+/* 手写流程回到「编辑表单」态（丢弃未确认的优化结果） */
+function resetWriteFlow(){
+  $("#writeForm").style.display="block";
+  $("#writeReview").style.display="none";
+  $("#sOptProg").style.display="none";
+  const btn=$("#sCreate"); if(btn) btn.disabled=false;
+}
+document.querySelectorAll("#skillModeSeg button").forEach(b=>b.onclick=()=>{
+  sState.mode=b.dataset.m;
+  document.querySelectorAll("#skillModeSeg button").forEach(x=>x.classList.toggle("on",x===b));
+  syncSkillMode();
+});
+document.querySelectorAll("#localModeSeg button").forEach(b=>b.onclick=()=>{
+  sState.localMode=b.dataset.lm;
+  document.querySelectorAll("#localModeSeg button").forEach(x=>x.classList.toggle("on",x===b));
+  syncLocalMode();
+});
+$("#skillX").onclick=closeSkillModal;
+$("#skillOverlay").onclick=closeSkillModal;
+$("#sCancel").onclick=closeSkillModal;
+$("#sFilePick").onclick=()=>$("#sFile").click();
+$("#sFile").onchange=e=>{
+  const f=e.target.files&&e.target.files[0];
+  if(f) $("#sFileName").textContent=f.name;
+};
+function addSkill(entry){
+  skills.push(entry);
+  closeSkillModal(); state.tab="skill"; render();
+}
+/* skill-install 优化后的版本：保留原正文，补齐结构化 frontmatter、用途、步骤与注意事项 */
+function buildOptimized(){
+  const name=$("#sWName").value.trim()||"my-skill";
+  const orig=$("#sBody").value.trim();
+  return `---
+name: ${name}
+description: ${name} · skill-install 优化版：补齐用途、步骤与边界说明，便于 tool_search 检索
+---
+
+## 用途
+- 依据正文推断核心能力与适用场景，供 tool_search 检索匹配
+
+## 使用步骤
+1. 输入准备：明确任务目标与所需材料
+2. 执行：按下方原始正文指引操作
+3. 产出校验：确认输出符合预期后再交付
+
+## 注意事项
+- 涉及写操作时先向用户确认
+- 超出能力范围时明确告知，不猜测执行
+
+## 原始正文
+${orig}`;
+}
+$("#sGo").onclick=()=>{
+  const st=$("#sStatus"), tx=$("#sStatusText");
+  if(sState.mode==="remote"){
+    const url=$("#sUrl").value.trim();
+    if(!/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+/.test(url)){ toast("仅支持 GitHub 仓库地址，如 https://github.com/org/skill-repo"); return; }
+    st.style.display="inline-flex"; st.className="test-status testing"; tx.textContent="正在从 GitHub 仓库拉取…";
+    $("#sRemoteProg").style.display="block";
+    let p=0;
+    const h=setInterval(()=>{
+      p=Math.min(100,p+8+Math.random()*12);
+      $("#sRemoteBar").style.width=p+"%";
+      $("#sRemotePct").textContent="拉取中 "+Math.floor(p)+"%";
+      if(p>=100){
+        clearInterval(h);
+        const name=(url.replace(/\/+$/,"").split("/").pop()||"remote-skill").replace(/\.git$/,"")||"remote-skill";
+        addSkill({id:"sk-url-"+Date.now(),kind:"skill",name,mono:name.slice(0,2).toLowerCase(),tone:"green",
+          ver:"v0.1.0",src:"GitHub",cat:"工程研发",load:"defer",mounts:0,enabled:true,
+          desc:"从 GitHub 仓库安装："+url.slice(0,44)});
+        toast("已从外网安装 "+name);
+      }
+    },200);
+  }else if(sState.localMode==="upload"){
+    const f=$("#sFile").files&&$("#sFile").files[0];
+    if(!f){ toast("请先选择 zip 或 md 技能文件"); return; }
+    st.style.display="inline-flex"; st.className="test-status testing"; tx.textContent="正在解析文件…";
+    $("#sUpProg").style.display="block";
+    let p=0;
+    const h=setInterval(()=>{
+      p=Math.min(100,p+10+Math.random()*12);
+      $("#sUpBar").style.width=p+"%";
+      $("#sUpPct").textContent="解析中 "+Math.floor(p)+"%";
+      if(p>=100){
+        clearInterval(h);
+        const name=$("#sUpName").value.trim()||f.name.replace(/\.(zip|md)$/i,"")||"local-skill";
+        addSkill({id:"sk-up-"+Date.now(),kind:"skill",name,mono:name.slice(0,2).toLowerCase(),tone:"green",
+          ver:"v0.1.0",src:"本地上传",cat:$("#sUpCat").value||"工程研发",load:"defer",mounts:0,enabled:true,
+          desc:"本地上传 "+f.name+"（"+Math.round(f.size/1024)+" KB）"});
+        toast("已添加技能 "+name+"（来源：本地上传）");
+      }
+    },180);
+  }
+};
+/* 手写 MD：创建时后台自动调用 skill-install 优化，完成后展示双版本对照 */
+$("#sCreate").onclick=()=>{
+  const name=$("#sWName").value.trim();
+  const body=$("#sBody").value.trim();
+  if(!name){ toast("请填写技能名称"); return; }
+  if(!body){ toast("请填写 SKILL.md 正文"); return; }
+  const btn=$("#sCreate"); btn.disabled=true;
+  $("#sOptProg").style.display="block";
+  const steps=["调用 skill-install 分析正文结构…","补充用途、步骤与注意事项…","统一 frontmatter 与检索描述…"];
+  let i=0;
+  $("#sOptText").textContent=steps[0];
+  const h=setInterval(()=>{
+    i++;
+    if(i<steps.length){ $("#sOptText").textContent=steps[i]; return; }
+    clearInterval(h);
+    $("#origBody").textContent=body;
+    $("#optBody").textContent=buildOptimized();
+    $("#writeForm").style.display="none";
+    $("#writeReview").style.display="block";
+  },900);
+};
+/* 选择保留版本：另一版本从服务器本地存储删除（正式实现为 DELETE /api/toolkit/draft/:id） */
+function pickVersion(which){
+  const name=$("#sWName").value.trim()||"my-skill";
+  const kept = which==="opt"?"优化后版本":"原版本";
+  const dropped = which==="opt"?"原版本":"优化后版本";
+  addSkill({id:"sk-w-"+Date.now(),kind:"skill",name,mono:name.slice(0,2).toLowerCase(),tone:"green",
+    ver:"v0.1.0",src:"手写创建",cat:$("#sWCat").value||"工程研发",load:"defer",mounts:0,enabled:true,
+    desc:which==="opt"?"手写创建 · 采用 skill-install 优化版":"手写创建 · 采用原版本"});
+  toast(`已保留${kept}，${dropped}已从服务器本地存储删除`);
+}
+$("#pickOrig").onclick=()=>pickVersion("orig");
+$("#pickOpt").onclick=()=>pickVersion("opt");
+
+/* ================= 初始化下拉与启动 ================= */
+["tCat","sUpCat","sWCat"].forEach(id=>{
+  const el=document.getElementById(id);
+  if(el) el.innerHTML=CATS.map(c=>`<option>${c}</option>`).join("");
+});
+render();
+</script>
+</body>
+</html>

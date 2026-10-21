@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1440">
+<title>Sortie Deck 工具箱 · 总目（编辑部目录风）</title>
+<style>
+/* ============ tokens（来自 spec，未凭空发明） ============ */
+:root{
+  --bg:#f6f9fc; --bg2:#edf1f7; --panel:#ffffff; --panel2:#f8fafd;
+  --line:#e3e8ee; --line-strong:#cbd2dc;
+  --ink:#1a1f36; --weak:#697386;
+  --green:#0e9f6e; --green-bg:#dff2e9;
+  --blue:#3b5bdb; --blue-bg:#6e8be8;
+  --red:#c9503a;
+  --serif:"Songti SC","Noto Serif SC",Georgia,serif;
+  --sans:-apple-system,"PingFang SC",system-ui,sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,monospace;
+  --radius:10px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{
+  font-family:var(--sans);color:var(--ink);background:var(--bg);
+  /* 极淡网格纹理 */
+  background-image:linear-gradient(rgba(26,31,54,0.025) 1px,transparent 1px),
+                   linear-gradient(90deg,rgba(26,31,54,0.025) 1px,transparent 1px);
+  background-size:32px 32px;
+  min-width:1440px;
+}
+/* ============ 顶部导航（静态简化） ============ */
+.topnav{height:56px;background:var(--panel);border-bottom:1px solid var(--line);
+  display:flex;align-items:center;padding:0 32px;gap:28px}
+.logo{display:flex;align-items:baseline;gap:10px}
+.logo .mark{width:22px;height:22px;background:var(--ink);color:var(--panel);
+  font-family:var(--serif);font-size:13px;display:flex;align-items:center;justify-content:center;border-radius:4px}
+.logo .name{font-family:var(--serif);font-weight:700;font-size:17px;letter-spacing:1px}
+.logo .sub{font-size:11px;color:var(--weak)}
+.nav-items{display:flex;gap:22px;font-size:13px;color:var(--weak);margin-left:24px}
+.nav-items span{cursor:default;padding:4px 2px}
+.nav-items .on{color:var(--ink);font-weight:600;border-bottom:2px solid var(--ink)}
+/* ============ 页头 ============ */
+.pagehead{display:flex;align-items:flex-end;justify-content:space-between;
+  padding:28px 32px 18px;max-width:1440px}
+.ph-left .kicker{font-size:11px;letter-spacing:4px;color:var(--weak);margin-bottom:8px}
+.ph-left h1{font-family:var(--serif);font-size:32px;font-weight:900;letter-spacing:2px}
+.ph-left h1 em{font-style:normal;color:var(--weak);font-weight:400;font-size:22px;margin-left:10px}
+.ph-left .desc{margin-top:8px;font-size:13px;color:var(--weak)}
+.ph-right{display:flex;align-items:center;gap:14px}
+.search{width:280px;height:36px;border:1px solid var(--line-strong);background:var(--panel);
+  border-radius:var(--radius);padding:0 12px;font-size:13px;font-family:var(--sans);color:var(--ink)}
+.search::placeholder{color:var(--weak)}
+.search:focus{outline:none;border-color:var(--ink)}
+.budget{border:1px solid var(--line-strong);background:var(--panel2);border-radius:var(--radius);
+  padding:7px 12px;min-width:150px}
+.budget .b-line{display:flex;justify-content:space-between;align-items:baseline;font-size:12px;color:var(--weak)}
+.budget .b-num{font-family:var(--serif);font-weight:900;font-size:16px;color:var(--ink)}
+.budget .b-cap{color:var(--weak)}
+.budget .bar{height:3px;background:var(--bg2);margin-top:5px;border-radius:2px;overflow:hidden}
+.budget .bar i{display:block;height:100%;background:var(--ink)}
+.btn{height:36px;padding:0 16px;border-radius:var(--radius);font-size:13px;cursor:pointer;
+  border:1px solid var(--line-strong);background:var(--panel);color:var(--ink);font-family:var(--sans)}
+.btn:hover{background:var(--bg2)}
+.btn.primary{background:var(--ink);color:var(--panel);border-color:var(--ink)}
+.btn.primary:hover{background:#2b3252}
+/* ============ tabs ============ */
+.tabs{display:flex;gap:0;border-bottom:1px solid var(--line-strong);padding:0 32px;max-width:1440px}
+.tab{background:none;border:none;cursor:pointer;padding:10px 22px 12px;font-family:var(--sans);
+  font-size:14px;color:var(--weak);position:relative;display:flex;align-items:baseline;gap:7px}
+.tab .n{font-family:var(--serif);font-size:13px}
+.tab.on{color:var(--ink);font-weight:600}
+.tab.on::after{content:"";position:absolute;left:14px;right:14px;bottom:-1px;height:2px;background:var(--ink)}
+/* ============ 主体：左索引栏 + 右目录 ============ */
+.main{display:grid;grid-template-columns:236px 1fr;gap:0;max-width:1440px;padding:0 32px 60px}
+/* 左：分类索引（书签式目录条目） */
+.rail{border-right:1px solid var(--line-strong);padding:26px 22px 0 0;position:relative}
+.rail .rail-title{font-size:10px;letter-spacing:5px;color:var(--weak);margin-bottom:16px;padding-left:14px}
+.cat{display:grid;grid-template-columns:38px 1fr auto;align-items:baseline;gap:8px;
+  width:100%;background:none;border:none;cursor:pointer;text-align:left;
+  padding:9px 10px 9px 14px;border-radius:var(--radius);font-family:var(--sans)}
+.cat:hover{background:var(--bg2)}
+.cat .no{font-family:var(--serif);font-size:13px;color:var(--weak);letter-spacing:1px}
+.cat .nm{font-size:13.5px;color:var(--ink)}
+.cat .ct{font-family:var(--serif);font-size:12px;color:var(--weak)}
+.cat.on{background:var(--ink)}
+.cat.on .no{color:var(--blue-bg)}
+.cat.on .nm,.cat.on .ct{color:var(--panel)}
+/* 右：目录列表 */
+.catalog{padding:26px 0 0 30px;min-height:560px}
+.chap{display:flex;align-items:baseline;gap:14px;border-bottom:1px solid var(--line-strong);padding-bottom:12px}
+.chap .cno{font-family:var(--serif);font-size:26px;font-weight:900;letter-spacing:2px}
+.chap .cnm{font-family:var(--serif);font-size:20px;font-weight:700;letter-spacing:2px}
+.chap .cmeta{margin-left:auto;font-size:12px;color:var(--weak)}
+.chap .cmeta b{font-family:var(--serif);color:var(--ink);font-size:15px}
+/* 目录条目行 */
+.row{display:grid;grid-template-columns:44px 1fr auto auto;gap:18px;align-items:center;
+  padding:16px 6px;border-bottom:1px solid var(--line)}
+.row.disabled{opacity:.45}
+.row:hover{background:var(--panel)}
+.mono{width:40px;height:40px;border-radius:var(--radius);display:flex;align-items:center;justify-content:center;
+  font-family:var(--mono);font-size:13px;font-weight:700;border:1px solid var(--line-strong)}
+.mono.g{background:var(--green-bg);color:var(--green);border-color:transparent}
+.mono.b{background:#e8edfb;color:var(--blue);border-color:transparent}
+.mono.r{background:#f7e6e2;color:var(--red);border-color:transparent}
+.mono.k{background:var(--ink);color:var(--panel);border-color:transparent}
+.mono.w{background:var(--bg2);color:var(--weak)}
+.entry .e-name{font-family:var(--serif);font-weight:900;font-size:16.5px;letter-spacing:.5px;display:flex;align-items:baseline;gap:10px}
+.entry .e-name .ver{font-family:var(--mono);font-size:11px;font-weight:400;color:var(--weak)}
+.entry .e-sum{font-size:12.5px;color:var(--weak);margin-top:4px;line-height:1.5}
+.entry .e-sum code{font-family:var(--mono);font-size:11px;color:var(--ink);background:var(--bg2);padding:1px 5px;border-radius:4px}
+.entry .upd{display:inline-block;font-size:11px;color:var(--blue);border:1px solid var(--blue-bg);border-radius:4px;padding:0 5px;margin-left:8px}
+/* 右侧细颗粒信息列 */
+.meta{display:grid;grid-template-columns:auto auto auto;gap:4px 18px;justify-items:end;align-items:center}
+.meta .kv{display:flex;align-items:baseline;gap:6px;font-size:11.5px;color:var(--weak);white-space:nowrap}
+.meta .kv b{font-family:var(--mono);font-weight:600;color:var(--ink);font-size:11.5px}
+.tag{font-size:11px;padding:2px 8px;border-radius:4px;white-space:nowrap;letter-spacing:1px}
+.tag.always{background:var(--ink);color:var(--panel)}
+.tag.defer{border:1px solid var(--line-strong);color:var(--weak);background:var(--panel2)}
+.tag.mount{font-family:var(--serif);color:var(--ink)}
+.tag.mount b{font-weight:900;font-size:13px}
+.dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:6px;vertical-align:1px}
+.dot.g{background:var(--green)} .dot.b{background:var(--blue)} .dot.r{background:var(--red)}
+.st{font-size:12px;white-space:nowrap}
+.st.g{color:var(--green)} .st.b{color:var(--blue)} .st.r{color:var(--red)}
+.st a{color:var(--blue);cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+/* 安装中进度条 */
+.prog{width:180px;height:4px;background:var(--bg2);border-radius:2px;overflow:hidden;margin-top:6px}
+.prog i{display:block;height:100%;background:var(--blue);transition:width .2s}
+/* 操作列 */
+.ops{display:flex;align-items:center;gap:4px}
+.switch{width:32px;height:18px;border-radius:9px;background:var(--line-strong);border:none;cursor:pointer;position:relative;transition:background .15s}
+.switch::after{content:"";position:absolute;width:14px;height:14px;border-radius:50%;background:var(--panel);top:2px;left:2px;transition:left .15s}
+.switch.on{background:var(--green)}
+.switch.on::after{left:16px}
+.op{background:none;border:none;cursor:pointer;font-size:12px;color:var(--weak);padding:4px 6px;font-family:var(--sans)}
+.op:hover{color:var(--ink);text-decoration:underline;text-underline-offset:2px}
+.op.danger:hover{color:var(--red);text-decoration:none;background:#f7e6e2;border-radius:4px}
+/* 安装推荐行 */
+.row.reco{background:var(--panel2);border:1px dashed var(--line-strong);border-radius:var(--radius);margin-top:10px}
+/* 空态 */
+.empty{padding:60px 0;text-align:center;color:var(--weak);font-size:13px}
+.empty .big{font-family:var(--serif);font-size:18px;color:var(--ink);margin-bottom:6px}
+/* ============ modal ============ */
+.mask{position:fixed;inset:0;background:rgba(26,31,54,.35);display:none;align-items:center;justify-content:center;z-index:50}
+.mask.show{display:flex}
+.modal{width:520px;max-height:80vh;overflow:auto;background:var(--panel);border-radius:var(--radius);
+  border:1px solid var(--line-strong);box-shadow:0 12px 40px rgba(26,31,54,.18)}
+.m-head{display:flex;align-items:baseline;padding:20px 24px 0}
+.m-head h3{font-family:var(--serif);font-size:20px;font-weight:900;letter-spacing:1px}
+.m-head .m-no{font-family:var(--serif);color:var(--weak);font-size:13px;margin-right:10px}
+.m-head .x{margin-left:auto;background:none;border:none;font-size:18px;cursor:pointer;color:var(--weak);line-height:1}
+.m-head .x:hover{color:var(--red)}
+.m-body{padding:16px 24px 24px}
+.f-row{margin-bottom:14px}
+.f-row label{display:block;font-size:12px;color:var(--weak);margin-bottom:6px;letter-spacing:1px}
+.f-row input,.f-row select,.f-row textarea{width:100%;height:36px;border:1px solid var(--line-strong);
+  border-radius:var(--radius);padding:0 12px;font-size:13px;font-family:var(--sans);background:var(--panel);color:var(--ink)}
+.f-row textarea{height:64px;padding:8px 12px;font-family:var(--mono);font-size:12px}
+.f-row input:focus,.f-row select:focus,.f-row textarea:focus{outline:none;border-color:var(--ink)}
+.f-2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.m-foot{display:flex;justify-content:flex-end;gap:10px;border-top:1px solid var(--line);padding:14px 24px}
+.test-ok{color:var(--green)!important;background:var(--green-bg)!important;border-color:transparent!important}
+/* 安装进度 */
+.inst-prog{margin-top:4px}
+.inst-prog .bar{height:6px;background:var(--bg2);border-radius:3px;overflow:hidden}
+.inst-prog .bar i{display:block;height:100%;width:0;background:var(--blue);transition:width .15s}
+.inst-prog .pct{font-family:var(--serif);font-weight:900;font-size:14px;margin-top:8px;color:var(--blue)}
+</style>
+</head>
+<body>
+
+<!-- 顶部导航（静态简化） -->
+<nav class="topnav">
+  <div class="logo"><span class="mark">阶</span><span class="name">Sortie Deck</span><span class="sub">前线小队 · 共交付 · 无传话</span></div>
+  <div class="nav-items">
+    <span>作战面</span><span>任务</span><span>知识库</span><span>记忆</span><span>角色工厂</span>
+    <span class="on">工具箱</span><span>角色频道</span><span>小队</span><span>决策中心</span><span>管理</span>
+  </div>
+</nav>
+
+<!-- 页头 -->
+<header class="pagehead">
+  <div class="ph-left">
+    <div class="kicker">SORTIE DECK · TOOLBOX INDEX</div>
+    <h1>工具箱<em>总目 · Catalogue of Capabilities</em></h1>
+    <div class="desc">小队与 Agent 挂载能力的仓库：工具 / 技能 / 连接器，支持外网一键安装与本地治理。</div>
+  </div>
+  <div class="ph-right">
+    <input id="search" class="search" placeholder="搜索名称、摘要、端点…">
+    <div class="budget">
+      <div class="b-line"><span>常驻预算</span><span><span class="b-num" id="bNow">0</span> <span class="b-cap">/ 建议上限 12</span></span></div>
+      <div class="bar"><i id="bBar"></i></div>
+    </div>
+    <button class="btn primary" id="btnAdd">添加</button>
+    <button class="btn" id="btnImport">从外网导入</button>
+  </div>
+</header>
+
+<!-- 三类 tab -->
+<div class="tabs" id="tabs">
+  <button class="tab on" data-tab="tool">工具<span class="n" id="cnt-tool"></span></button>
+  <button class="tab" data-tab="skill">技能<span class="n" id="cnt-skill"></span></button>
+  <button class="tab" data-tab="mcp">连接器<span class="n" id="cnt-mcp"></span></button>
+</div>
+
+<!-- 主体 -->
+<div class="main">
+  <aside class="rail">
+    <div class="rail-title">分类索引 · CONTENTS</div>
+    <div id="rail"></div>
+  </aside>
+  <section class="catalog">
+    <div class="chap">
+      <span class="cno" id="chapNo">00</span><span class="cnm" id="chapName">全部条目</span>
+      <span class="cmeta">本类共 <b id="chapCnt">0</b> 条</span>
+    </div>
+    <div id="list"></div>
+  </section>
+</div>
+
+<!-- 连接器添加 modal -->
+<div class="mask" id="maskMcp">
+  <div class="modal">
+    <div class="m-head"><span class="m-no">附页 · 新增</span><h3>添加连接器（MCP）</h3><button class="x" data-close="maskMcp">×</button></div>
+    <div class="m-body">
+      <div class="f-row"><label>名称</label><input id="mcpName" placeholder="如 github-mcp"></div>
+      <div class="f-2">
+        <div class="f-row"><label>功能分类</label>
+          <select id="mcpCat"><option>工程研发</option><option>产品设计</option><option>质量测试</option><option>运维发布</option><option>知识资料</option><option>浏览器自动化</option><option>办公协作</option></select>
+        </div>
+        <div class="f-row"><label>传输方式 transport</label>
+          <select id="mcpTransport"><option value="stdio">stdio（本地进程）</option><option value="sse">SSE</option><option value="http">Streamable HTTP</option></select>
+        </div>
+      </div>
+      <div class="f-row" id="fCommand"><label>启动命令 command</label><textarea id="mcpCommand" placeholder="npx -y @modelcontextprotocol/server-filesystem"></textarea></div>
+      <div id="fRemote" style="display:none">
+        <div class="f-row"><label>端点 URL</label><input id="mcpUrl" placeholder="https://mcp.example.com/sse"></div>
+        <div class="f-row"><label>鉴权方式</label>
+          <select id="mcpAuth"><option value="bearer">Bearer Token</option><option value="oauth">OAuth 授权</option></select>
+        </div>
+        <div class="f-row" id="fToken" style="display:none"><label>Token</label><input id="mcpToken" type="password" placeholder="粘贴 Bearer Token"></div>
+      </div>
+    </div>
+    <div class="m-foot">
+      <button class="btn" id="btnTest">测试连接</button>
+      <button class="btn" data-close="maskMcp">取消</button>
+      <button class="btn primary" data-close="maskMcp">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 技能外网安装 modal -->
+<div class="mask" id="maskSkill">
+  <div class="modal">
+    <div class="m-head"><span class="m-no">附页 · 导入</span><h3>从外网安装技能</h3><button class="x" data-close="maskSkill">×</button></div>
+    <div class="m-body">
+      <div class="f-row"><label>技能包 URL / GitHub 仓库</label><input id="skillUrl" placeholder="https://github.com/org/skill-repo"></div>
+      <div class="f-row"><label>或从技能市场挑选</label>
+        <select><option>data-viz · 图表生成 · 市场</option><option>sql-optimizer · 查询优化 · 市场</option></select>
+      </div>
+      <div class="f-row inst-prog" id="instProg" style="display:none">
+        <div class="bar"><i id="instBar"></i></div>
+        <div class="pct" id="instPct">安装中 0%</div>
+      </div>
+    </div>
+    <div class="m-foot">
+      <button class="btn" data-close="maskSkill">取消</button>
+      <button class="btn primary" id="btnInstall">开始安装</button>
+    </div>
+  </div>
+</div>
+
+<!-- 工具添加 modal（简化表单） -->
+<div class="mask" id="maskTool">
+  <div class="modal">
+    <div class="m-head"><span class="m-no">附页 · 新增</span><h3>添加工具</h3><button class="x" data-close="maskTool">×</button></div>
+    <div class="m-body">
+      <div class="f-row"><label>名称</label><input placeholder="如 pdf_parse"></div>
+      <div class="f-2">
+        <div class="f-row"><label>功能分类</label>
+          <select><option>工程研发</option><option>产品设计</option><option>质量测试</option><option>运维发布</option><option>知识资料</option><option>浏览器自动化</option><option>办公协作</option></select>
+        </div>
+        <div class="f-row"><label>runtime</label><select><option>cli</option><option>http</option><option>function</option><option>plugin</option></select></div>
+      </div>
+      <div class="f-row"><label>endpoint</label><input placeholder="/api/tools/run 或可执行命令"></div>
+    </div>
+    <div class="m-foot">
+      <button class="btn" data-close="maskTool">取消</button>
+      <button class="btn primary" data-close="maskTool">保存</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ================= 示例数据（严格取自 spec） ================= */
+const CATS = ["工程研发","产品设计","质量测试","运维发布","知识资料","浏览器自动化","办公协作"];
+const DATA = {
+  tool:[
+    {name:"web_search",  mono:"ws",mc:"b",cat:"工程研发",  sum:"联网检索与网页摘要，返回带引用的结果",runtime:"http",    src:"内置",    ver:"v2.1.0",load:"always",mount:4,on:true,  endpoint:"https://api.sortie.dev/search"},
+    {name:"code_runner", mono:"cr",mc:"k",cat:"工程研发",  sum:"沙箱内执行代码片段，支持 Python / Node",runtime:"cli",     src:"本地创建",ver:"v1.0.3",load:"defer", mount:2,on:true,  endpoint:"/usr/local/bin/sd-run"},
+    {name:"image_gen",   mono:"ig",mc:"g",cat:"产品设计",  sum:"文生图与局部重绘，输出 1024px 设计稿",runtime:"function",src:"内置",    ver:"v3.2.0",load:"defer", mount:3,on:true,  endpoint:"fn:image_gen.invoke"},
+    {name:"doc_export",  mono:"de",mc:"w",cat:"办公协作",  sum:"将任务纪要导出为 PDF / DOCX 交付件",  runtime:"plugin",  src:"市场",    ver:"v0.8.2",load:"defer", mount:1,on:false, endpoint:"plugin://doc_export"}
+  ],
+  skill:[
+    {name:"log-analyzer",mono:"la",mc:"b",cat:"工程研发",  sum:"解析 Nginx / 应用日志，定位错误模式并给出修复建议",src:"GitHub",ver:"v1.2.0",update:"v1.3.0",load:"always",mount:2,on:true},
+    {name:"ppt-builder", mono:"pb",mc:"g",cat:"办公协作",  sum:"按大纲生成结构化 PPTX，含版式与配图建议",        src:"市场",  ver:"v0.9.1",load:"defer",mount:1,on:true},
+    {name:"frontend-review",mono:"fr",mc:"r",cat:"产品设计",sum:"对前端改动做可访问性与样式回归审查",            src:"GitHub",installing:67},
+    {name:"data-viz",    mono:"dv",mc:"w",cat:"质量测试",  sum:"测试数据可视化：覆盖率趋势、缺陷分布图",        src:"市场推荐",reco:true}
+  ],
+  mcp:[
+    {name:"filesystem",mono:"fs",mc:"k",cat:"知识资料",  sum:"官方 filesystem MCP，读写仓库内沙箱文件",transport:"stdio",cmd:"npx -y @modelcontextprotocol/server-filesystem",health:"g",healthTxt:"已连接",load:"always",mount:5,on:true},
+    {name:"browser",  mono:"br",mc:"g",cat:"浏览器自动化",sum:"驱动无头浏览器完成页面巡检与端到端验证",transport:"stdio",cmd:"npx -y @playwright/mcp",health:"g",healthTxt:"已连接",load:"defer",mount:3,on:true},
+    {name:"postgres-mcp",mono:"pg",mc:"b",cat:"工程研发",sum:"内网只读库查询，供 Agent 拉取业务指标",transport:"sse",url:"https://mcp.internal.xmly.dev/pg/sse",auth:"Bearer",health:"g",healthTxt:"已连接",load:"defer",mount:2,on:true},
+    {name:"github-mcp",mono:"gh",mc:"k",cat:"工程研发", sum:"仓库 / PR / Issue 操作，走 GitHub 官方 MCP 端点",transport:"http",url:"https://api.githubcopilot.com/mcp/",auth:"OAuth",health:"b",healthTxt:"待授权",oauth:true,mount:0,on:true},
+    {name:"notion-mcp",mono:"nt",mc:"r",cat:"办公协作", sum:"同步 Notion 文档页至知识库索引",transport:"http",url:"https://mcp.notion.com/mcp",auth:"OAuth",health:"r",healthTxt:"已断开",load:"defer",mount:1,on:true}
+  ]
+};
+const TABNAME = {tool:"工具",skill:"技能",mcp:"连接器"};
+const state = {tab:"tool", cat:"全部", q:""};
+
+/* ================= 渲染 ================= */
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function counts(){
+  const c = {tool:{},skill:{},mcp:{}};
+  for(const t of ["tool","skill","mcp"]){
+    DATA[t].forEach(it=>{ const k=it.cat||"—"; c[t][k]=(c[t][k]||0)+1; });
+  }
+  return c;
+}
+function renderRail(){
+  const c = counts();
+  let html = `<button class="cat ${state.cat==="全部"?"on":""}" data-cat="全部">
+    <span class="no">00</span><span class="nm">全部</span><span class="ct">${DATA[state.tab].length}</span></button>`;
+  CATS.forEach((cat,i)=>{
+    html += `<button class="cat ${state.cat===cat?"on":""}" data-cat="${cat}">
+      <span class="no">0${i+1}</span><span class="nm">${cat}</span><span class="ct">${c[state.tab][cat]||0}</span></button>`;
+  });
+  $("#rail").innerHTML = html;
+  document.querySelectorAll(".cat").forEach(b=>b.onclick=()=>{state.cat=b.dataset.cat;render();});
+}
+function loadTag(it){
+  return it.load==="always" ? `<span class="tag always">常驻</span>` : `<span class="tag defer">按需</span>`;
+}
+function mountTag(it){
+  if(it.mount===undefined) return "";
+  return `<span class="tag mount">挂载 <b>${it.mount}</b> 个 Agent</span>`;
+}
+function opsHtml(it,i){
+  if(it.reco||it.installing!==undefined) return "";
+  return `<div class="ops">
+    <button class="switch ${it.on?"on":""}" title="启用 / 停用" data-act="toggle" data-i="${i}"></button>
+    <button class="op" data-act="edit" data-i="${i}">编辑</button>
+    <button class="op danger" title="删除（不可恢复）" data-act="del" data-i="${i}">删除</button>
+  </div>`;
+}
+function rowHtml(it,i){
+  const dis = it.on===false ? "disabled":"";
+  let meta="", extra="";
+  if(state.tab==="tool"){
+    meta = `<span class="kv">来源 <b>${esc(it.src)}</b></span>
+            <span class="kv">runtime <b>${esc(it.runtime)}</b></span>
+            <span class="kv">版本 <b>${esc(it.ver)}</b></span>`;
+  }else if(state.tab==="skill"){
+    if(it.installing!==undefined){
+      extra = `<div class="prog"><i style="width:${it.installing}%"></i></div>`;
+      meta = `<span class="kv">来源 <b>${esc(it.src)}</b></span><span class="kv st b"><span class="dot b"></span>安装中 <b>${it.installing}%</b></span>`;
+    }else if(it.reco){
+      meta = `<span class="kv">来源 <b>${esc(it.src)}</b></span><span class="kv">版本 <b>未安装</b></span>`;
+    }else{
+      meta = `<span class="kv">来源 <b>${esc(it.src)}</b></span><span class="kv">版本 <b>${esc(it.ver)}</b></span>${it.update?`<span class="kv st b"><span class="dot b"></span>可更新 <b>${esc(it.update)}</b></span>`:""}`;
+    }
+  }else{
+    const trans = it.transport==="stdio" ? `stdio` : `${it.transport.toUpperCase()}`;
+    const detail = it.transport==="stdio" ? "" : `<span class="kv" style="grid-column:1/-1;justify-self:end">端点 <b>${esc(it.url||"")}</b></span>`;
+    meta = `<span class="kv">transport <b>${trans}</b></span>
+            <span class="kv st ${it.health}"><span class="dot ${it.health}"></span>${it.healthTxt}${it.oauth?` · <a data-act="oauth">OAuth 授权</a>`:""}</span>
+            ${detail}`;
+  }
+  const nameExtra = state.tab==="tool" ? `<span class="ver">${esc(it.endpoint||"")}</span>` :
+                    state.tab==="mcp" ? "" : (it.update?`<span class="upd">可更新 → ${esc(it.update)}</span>`:"");
+  const right = (it.reco)?`<div class="ops"><button class="btn primary" style="height:30px" data-act="installReco" data-i="${i}">安装</button></div>`
+              : opsHtml(it,i);
+  return `<div class="row ${dis} ${it.reco?"reco":""}">
+    <div class="mono ${it.mc}">${it.mono}</div>
+    <div class="entry">
+      <div class="e-name">${esc(it.name)}${nameExtra}</div>
+      <div class="e-sum">${esc(it.sum)}${extra}</div>
+    </div>
+    <div class="meta">${meta}${loadTag(it)}${mountTag(it)}</div>
+    ${right}
+  </div>`;
+}
+function render(){
+  // 章节
+  const idx = CATS.indexOf(state.cat);
+  $("#chapNo").textContent = state.cat==="全部" ? "00" : "0"+(idx+1);
+  $("#chapName").textContent = state.cat==="全部" ? `全部${TABNAME[state.tab]}` : state.cat;
+  // tab 计数
+  ["tool","skill","mcp"].forEach(t=>$("#cnt-"+t).textContent = "· "+DATA[t].length);
+  // 过滤
+  let items = DATA[state.tab].filter(it=>
+    (state.cat==="全部"||it.cat===state.cat) &&
+    (!state.q || (it.name+it.sum+(it.url||"")+(it.cmd||"")).toLowerCase().includes(state.q.toLowerCase()))
+  );
+  $("#chapCnt").textContent = items.length;
+  $("#list").innerHTML = items.length ? items.map(rowHtml).join("")
+    : `<div class="empty"><div class="big">本卷暂无条目</div>切换分类或从外网导入以充实目录。</div>`;
+  renderRail();
+  // 常驻预算 = 三类中 启用 且 常驻 的条目
+  let n=0; ["tool","skill","mcp"].forEach(t=>DATA[t].forEach(it=>{if(it.load==="always"&&it.on!==false&&it.on!==undefined)n++;}));
+  $("#bNow").textContent = n; $("#bBar").style.width = Math.min(100,n/12*100)+"%";
+  // 绑定行内事件
+  document.querySelectorAll("#list [data-act]").forEach(el=>{
+    const i = +el.dataset.i, it = items[i];
+    el.onclick = e=>{
+      e.stopPropagation();
+      const act = el.dataset.act;
+      if(act==="toggle"){ it.on = it.on===false; render(); }
+      else if(act==="del"){
+        if(el.dataset.confirm){ DATA[state.tab] = DATA[state.tab].filter(x=>x!==it); render(); }
+        else { el.dataset.confirm="1"; el.textContent="确认删除?"; setTimeout(()=>{el.dataset.confirm="";el.textContent="删除";},2000); }
+      }
+      else if(act==="edit"||act==="oauth"){ openModal(state.tab==="mcp"?"maskMcp":"maskTool"); }
+      else if(act==="installReco"){ openModal("maskSkill"); }
+    };
+  });
+}
+
+/* ================= tabs / search ================= */
+document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll(".tab").forEach(x=>x.classList.remove("on"));
+  b.classList.add("on"); state.tab=b.dataset.tab; state.cat="全部"; render();
+});
+$("#search").oninput = e=>{ state.q=e.target.value; render(); };
+
+/* ================= modal ================= */
+function openModal(id){ $("#"+id).classList.add("show"); }
+function closeModal(id){ $("#"+id).classList.remove("show"); }
+document.querySelectorAll("[data-close]").forEach(b=>b.onclick=()=>closeModal(b.dataset.close));
+document.querySelectorAll(".mask").forEach(m=>m.onclick=e=>{ if(e.target===m) m.classList.remove("show"); });
+document.addEventListener("keydown",e=>{ if(e.key==="Escape") document.querySelectorAll(".mask.show").forEach(m=>m.classList.remove("show")); });
+
+$("#btnAdd").onclick = ()=> openModal(state.tab==="mcp"?"maskMcp":state.tab==="skill"?"maskSkill":"maskTool");
+$("#btnImport").onclick = ()=> openModal(state.tab==="skill"?"maskSkill":"maskMcp");
+
+/* 连接器表单：transport 切换字段 */
+$("#mcpTransport").onchange = e=>{
+  const v = e.target.value;
+  $("#fCommand").style.display = v==="stdio"?"":"none";
+  $("#fRemote").style.display  = v==="stdio"?"none":"";
+};
+$("#mcpAuth").onchange = e=>{ $("#fToken").style.display = e.target.value==="bearer"?"":"none"; };
+/* 测试连接：1 秒后变为「已连接」绿态 */
+$("#btnTest").onclick = function(){
+  this.disabled = true; this.textContent = "测试中…"; this.className="btn";
+  setTimeout(()=>{ this.disabled=false; this.textContent="已连接"; this.className="btn test-ok"; },1000);
+};
+/* 技能安装：进度条模拟到 67% 停住 */
+$("#btnInstall").onclick = function(){
+  $("#instProg").style.display="";
+  let p=0; this.disabled=true; this.textContent="安装中…";
+  const t=setInterval(()=>{
+    p = Math.min(67, p + Math.ceil(Math.random()*9));
+    $("#instBar").style.width=p+"%";
+    $("#instPct").textContent = p>=67 ? "安装中 67%（下载技能包 scripts/SKILL.md…）" : "安装中 "+p+"%";
+    if(p>=67){ clearInterval(t); $("#btnInstall").disabled=false; $("#btnInstall").textContent="继续"; }
+  },150);
+};
+
+render();
+</script>
+</body>
+</html>

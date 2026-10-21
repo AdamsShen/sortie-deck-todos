@@ -51,6 +51,8 @@ class ToolkitItem(BaseModel):
     featured: bool = False
     enabled: bool = True
     source: str = ""  # import provenance
+    # 上下文负载策略：always=常驻（每轮注入，计入预算）/ defer=按需（tool_search 检索后上浮）
+    load: Literal["always", "defer"] = "defer"
     # --- loadout metadata -------------------------------------------------
     # Ability labels used by the JIT recall index (beyond name/tags/body)
     capabilities: list[str] = Field(default_factory=list)
@@ -86,6 +88,7 @@ class CreateToolkitRequest(BaseModel):
     featured: bool = False
     enabled: bool = True
     source: str = ""
+    load: Literal["always", "defer"] = "defer"
     capabilities: list[str] = Field(default_factory=list)
     executable: bool = False
     read_only: bool = True
@@ -110,6 +113,7 @@ class UpdateToolkitRequest(BaseModel):
     featured: bool | None = None
     enabled: bool | None = None
     source: str | None = None
+    load: Literal["always", "defer"] | None = None
     capabilities: list[str] | None = None
     executable: bool | None = None
     read_only: bool | None = None
@@ -386,6 +390,39 @@ def parse_skill_zip_bytes(data: bytes, *, name_hint: str = "") -> CreateToolkitR
     return parse_skill_package_files(files, name_hint=name_hint)
 
 
+def parse_mcp_zip_bytes(data: bytes, *, filename: str = "") -> CreateToolkitRequest:
+    """stdio MCP 连接器的 zip 包导入：解压到 data/mcp_packages/<slug>/ 并生成 stdio 条目。
+
+    启动命令预填 npx -y @modelcontextprotocol/server-<slug>，用户可在编辑表单里改成
+    包内真实的可执行入口；包体仅落盘到服务器本地存储，不进模型上下文。
+    """
+    slug = re.sub(r"[^a-z0-9-]+", "-", (Path(filename).stem or "mcp-package").lower()).strip("-")
+    if not slug:
+        slug = "mcp-package"
+    from sortie_deck.settings import settings
+
+    pkg_dir = settings.data_dir / "mcp_packages" / slug
+    pkg_dir.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        for info in zf.infolist():
+            if info.is_dir():
+                continue
+            # 防路径穿越：仅保留文件名部分，平铺解压
+            target = pkg_dir / Path(info.filename).name
+            if not target.name or target.name.startswith("."):
+                continue
+            target.write_bytes(zf.read(info))
+    return CreateToolkitRequest(
+        kind="mcp",
+        name=slug,
+        summary=f"从 {filename or 'zip 包'} 导入的本地 MCP 连接器",
+        transport="stdio",
+        command=f"npx -y @modelcontextprotocol/server-{slug}",
+        tags=["mcp", "imported", "zip"],
+        source=f"zip:{filename}" if filename else "zip",
+    )
+
+
 class ToolkitStore:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -508,6 +545,7 @@ class ToolkitStore:
             featured=req.featured,
             enabled=req.enabled,
             source=req.source,
+            load=req.load,
             capabilities=[c.strip() for c in req.capabilities if c.strip()],
             executable=req.executable,
             read_only=req.read_only,
@@ -585,9 +623,16 @@ class ToolkitStore:
     ) -> list[ToolkitItem]:
         created: list[CreateToolkitRequest] = []
         if req.kind == "mcp":
-            if not req.content.strip():
-                raise ValueError("MCP import needs JSON content")
-            created = parse_mcp_config(req.content)
+            if req.zip_base64.strip():
+                # V4：stdio 连接器仅支持 zip 包导入——解压到 mcp_packages 并预填启动命令
+                import base64
+
+                raw = base64.b64decode(req.zip_base64)
+                created = [parse_mcp_zip_bytes(raw, filename=req.filename)]
+            elif not req.content.strip():
+                raise ValueError("MCP import needs JSON content or zip package")
+            else:
+                created = parse_mcp_config(req.content)
         elif req.kind == "skill":
             if req.zip_base64.strip():
                 import base64

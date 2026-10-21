@@ -1358,6 +1358,19 @@ async def list_toolkit(
     ]
 
 
+@app.get("/api/toolkit/mounts")
+async def toolkit_mounts(_user: PublicUser = Depends(require_user)) -> dict[str, int]:
+    """各工具条目被多少个 Agent 挂载（基于 agents 的 toolkit_ids 统计）。
+
+    注意：必须注册在 /api/toolkit/{item_id} 之前，否则 "mounts" 会被当作 item_id。
+    """
+    counts: dict[str, int] = {}
+    for agent in get_agents().list():
+        for tid in agent.toolkit_ids or []:
+            counts[tid] = counts.get(tid, 0) + 1
+    return counts
+
+
 @app.get("/api/toolkit/{item_id}")
 async def get_toolkit_item(item_id: str, _user: PublicUser = Depends(require_user)) -> dict[str, Any]:
     try:
@@ -1429,6 +1442,210 @@ async def reindex_toolkit_index(_user: PublicUser = Depends(require_admin)) -> d
         return sync_all(get_toolkit())
     except Exception as exc:  # noqa: BLE001 — WeKnora 异常转 502 便于前端提示
         raise HTTPException(502, f"reindex failed: {exc}") from exc
+
+
+# ---------------------------------------------------------------------------
+# V4 工具箱：MCP 测试连接 / 技能安装 / 市场精选 / skill-install 优化 / 挂载计数
+# ---------------------------------------------------------------------------
+
+
+class McpTestRequest(BaseModel):
+    """连接测试入参：与 ToolkitItem 的 mcp 字段对齐，config 走 bearer_token/headers。"""
+
+    transport: Literal["stdio", "sse", "http"] = "stdio"
+    url: str = ""
+    command: str = ""
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class InstallSkillRequest(BaseModel):
+    url: str
+    category: str = ""
+    load: Literal["always", "defer"] = "defer"
+
+
+class OptimizeSkillRequest(BaseModel):
+    name: str
+    category: str = ""
+    body: str
+
+
+class ConfirmSkillDraftRequest(BaseModel):
+    keep: Literal["original", "optimized"] = "optimized"
+    load: Literal["always", "defer"] = "defer"
+
+
+class MarketInstallRequest(BaseModel):
+    key: str
+
+
+def _skill_draft_store():
+    from sortie_deck.skill_install import SkillDraftStore
+
+    global _skill_drafts
+    if _skill_drafts is None:
+        _skill_drafts = SkillDraftStore(settings.data_dir / "skill_drafts.json")
+    return _skill_drafts
+
+
+_skill_drafts: Any = None
+
+
+@app.post("/api/toolkit/mcp/test")
+async def test_mcp_connector(
+    req: McpTestRequest, _user: PublicUser = Depends(require_user)
+) -> dict[str, Any]:
+    """连接器连通性测试：按 transport 建临时会话，initialize + tools/list 后立即关闭。"""
+    from sortie_deck.mcp_runtime import _create_session
+    from sortie_deck.toolkit import ToolkitItem
+
+    url = req.url.strip()
+    command = req.command.strip()
+    # 显式校验：避免空 url 的 http/sse 落回 stdio 分支、空命令静默跳过
+    if req.transport in {"sse", "http"} and not url:
+        return {"ok": False, "error": "缺少端点 URL", "log": []}
+    if req.transport == "stdio" and not command:
+        return {"ok": False, "error": "缺少启动命令", "log": []}
+    item = ToolkitItem(
+        id="tk_test",
+        kind="mcp",
+        name="connector-test",
+        transport=req.transport,
+        url=url,
+        command=command,
+        args=list(req.args),
+        env=dict(req.env),
+        config=dict(req.config),
+    )
+    session = _create_session(item)
+    try:
+        await asyncio.wait_for(session.start(), timeout=15)
+        tools = [t.name for t in session.tools]
+        return {"ok": True, "tools": tools, "log": list(session.log)}
+    except Exception as exc:  # noqa: BLE001 — 任何连接失败都转成结构化结果而非 500
+        log = getattr(session, "log", [])
+        logger.warning("mcp test failed (transport=%s url=%s): %s", req.transport, req.url, exc)
+        return {"ok": False, "error": str(exc), "log": list(log)}
+    finally:
+        with suppress(Exception):
+            await session.close()
+
+
+@app.post("/api/toolkit/install_skill")
+async def install_skill_from_web(
+    req: InstallSkillRequest, user: PublicUser = Depends(require_user)
+) -> dict[str, Any]:
+    """从 GitHub 仓库一键安装技能（仅接受仓库地址，不支持 MD 直链）。"""
+    from sortie_deck.skill_install import install_from_github
+
+    try:
+        item_req = await install_from_github(req.url)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    if req.category.strip():
+        item_req.category = req.category.strip()
+    item_req.load = req.load
+    item = get_toolkit().create(item_req, author_id=user.id, author_name=user.display_name)
+    return item.model_dump(mode="json")
+
+
+@app.get("/api/market/skills")
+async def list_market_skills(_user: PublicUser = Depends(require_user)) -> list[dict[str, Any]]:
+    """市场精选目录：内置静态数据 + 按 store 实时标注 installed。"""
+    from sortie_deck.skill_install import MARKET_SKILLS
+
+    installed = {i.name for i in get_toolkit().list(kind="skill")}
+    return [
+        {**entry, "installed": entry["name"] in installed}
+        for entry in MARKET_SKILLS
+    ]
+
+
+@app.post("/api/market/skills/install")
+async def install_market_skill(
+    req: MarketInstallRequest, user: PublicUser = Depends(require_user)
+) -> dict[str, Any]:
+    """安装市场精选技能：已存在时直接返回既有条目（幂等）。"""
+    from sortie_deck.skill_install import market_request
+
+    try:
+        item_req = market_request(req.key)
+    except KeyError:
+        raise HTTPException(404, f"market skill not found: {req.key}") from None
+    existing = [
+        i
+        for i in get_toolkit().list(kind="skill")
+        if i.name == item_req.name
+    ]
+    if existing:
+        return existing[0].model_dump(mode="json")
+    item = get_toolkit().create(item_req, author_id=user.id, author_name=user.display_name)
+    return item.model_dump(mode="json")
+
+
+@app.post("/api/toolkit/optimize_skill")
+async def optimize_skill(
+    req: OptimizeSkillRequest, _user: PublicUser = Depends(require_user)
+) -> dict[str, Any]:
+    """手写 SKILL.md：后台调用 skill-install 优化，双版本草稿落盘待用户选版。"""
+    from sortie_deck.models import utc_now
+    from sortie_deck.skill_install import SkillDraft, optimize_skill_md
+
+    if not req.name.strip() or not req.body.strip():
+        raise HTTPException(400, "name 与 body 均不能为空")
+    optimized, backend = await optimize_skill_md(req.name.strip(), req.body.strip())
+    draft = SkillDraft(
+        name=req.name.strip(),
+        category=req.category.strip(),
+        original=req.body.strip(),
+        optimized=optimized,
+        backend=backend,
+        created_at=utc_now().isoformat(),
+    )
+    _skill_draft_store().save(draft)
+    return draft.model_dump(mode="json")
+
+
+@app.post("/api/toolkit/optimize_skill/{draft_id}/confirm")
+async def confirm_skill_draft(
+    draft_id: str, req: ConfirmSkillDraftRequest, user: PublicUser = Depends(require_user)
+) -> dict[str, Any]:
+    """选版确认：以保留版本创建技能条目，并删除草稿（未选版本从服务器本地存储清除）。"""
+    from sortie_deck.skill_install import SkillDraftStore
+
+    store: SkillDraftStore = _skill_draft_store()
+    try:
+        draft = store.get(draft_id)
+    except KeyError:
+        raise HTTPException(404, "draft not found") from None
+    body = draft.optimized if req.keep == "optimized" else draft.original
+    summary = ""
+    meta_line = next(
+        (ln for ln in body.splitlines() if ln.lower().startswith("description:")), ""
+    )
+    if meta_line:
+        summary = meta_line.split(":", 1)[1].strip()
+    item = get_toolkit().create(
+        CreateToolkitRequest(
+            kind="skill",
+            name=draft.name,
+            summary=summary[:120],
+            body=body,
+            category=draft.category,
+            tags=["skill", "handwritten"],
+            source="handwritten" if req.keep == "original" else f"handwritten+skill-install({draft.backend})",
+            load=req.load,
+        ),
+        author_id=user.id,
+        author_name=user.display_name,
+    )
+    # 未选版本随草稿一并从本地存储删除
+    store.delete(draft_id)
+    return item.model_dump(mode="json")
 
 
 @app.get("/api/executors")

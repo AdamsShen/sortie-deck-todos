@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Sortie Deck 工具箱 · v2 Linear 式高密度</title>
+<style>
+  :root{
+    --bg:#f6f9fc; --bg2:#edf1f7; --panel:#ffffff; --panel2:#f8fafd;
+    --line:#e3e8ee; --line2:#cbd2dc;
+    --ink:#1a1f36; --mut:#697386; --faint:#98a1b3;
+    --green:#0e9f6e; --greenbg:#dff2e9; --blue:#3b5bdb; --bluebg:#e9edfa; --bluet:#6e8be8; --red:#c9503a; --redbg:#faeae5;
+    --sel:#eef3fb;
+    --serif:"Songti SC","Noto Serif SC",Georgia,serif;
+    --sans:-apple-system,"PingFang SC","Helvetica Neue",system-ui,sans-serif;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    font:13px/1.5 var(--sans);color:var(--ink);background:var(--bg);
+    background-image:linear-gradient(rgba(26,31,54,.025) 1px,transparent 1px),
+                     linear-gradient(90deg,rgba(26,31,54,.025) 1px,transparent 1px);
+    background-size:32px 32px;
+    display:flex;flex-direction:column;overflow:hidden;
+  }
+  button{font-family:var(--sans);cursor:pointer}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:var(--line2);border-radius:5px;border:2px solid var(--panel)}
+
+  /* ===== 顶部导航（静态简化） ===== */
+  .topnav{height:48px;flex:0 0 48px;background:var(--panel);border-bottom:1px solid var(--line);
+    display:flex;align-items:center;gap:22px;padding:0 16px;position:relative;z-index:30}
+  .brand{display:flex;align-items:center;gap:10px;min-width:180px}
+  .mark{width:26px;height:26px;border-radius:7px;background:var(--ink);color:#fff;font:700 10px/26px var(--mono);text-align:center;letter-spacing:.5px}
+  .brand b{font:700 15px var(--serif);display:block;line-height:1.1}
+  .brand small{display:block;font-size:10px;color:var(--mut);line-height:1.3}
+  .nav{display:flex;gap:2px}
+  .nav a{padding:5px 10px;border-radius:6px;color:var(--mut);text-decoration:none;font-size:13px;white-space:nowrap}
+  .nav a:hover{color:var(--ink);background:var(--bg2)}
+  .nav a.on{color:var(--ink);font-weight:600;background:var(--bg2)}
+  .nav .audit{margin-left:16px;padding-left:18px;border-left:1px solid var(--line)}
+  .navright{margin-left:auto;display:flex;align-items:center;gap:12px}
+  .me{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:7px;padding:3px 10px 3px 4px;background:var(--panel2)}
+  .avt{width:22px;height:22px;border-radius:5px;background:var(--ink);color:#fff;font:700 9px/22px var(--mono);text-align:center}
+  .me b{font-size:12px}.me small{display:block;font-size:10px;color:var(--mut)}
+  .lnk{color:var(--mut);font-size:12px;background:none;border:none}
+  .lnk:hover{color:var(--ink)}
+
+  /* ===== 工作区布局 ===== */
+  .ws{flex:1;display:flex;min-height:0}
+  .side{width:212px;flex:0 0 212px;padding:14px 10px 12px;overflow-y:auto}
+  .main{flex:1;min-width:0;background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column}
+
+  /* ===== 左侧栏 ===== */
+  .slb{font-size:10.5px;letter-spacing:.08em;color:var(--faint);margin:16px 6px 6px;text-transform:uppercase}
+  .slb:first-child{margin-top:0}
+  .sbtn{display:flex;justify-content:space-between;align-items:center;width:100%;border:1px solid transparent;
+    background:transparent;border-radius:7px;padding:5px 8px;font-size:13px;color:var(--mut);text-align:left;margin-bottom:1px}
+  .sbtn:hover{background:#fff;color:var(--ink)}
+  .sbtn.on{background:#fff;border-color:var(--line);color:var(--ink);font-weight:600}
+  .sbtn.sm{font-size:12.5px;padding:4px 8px}
+  .sbtn .n{font:10.5px var(--mono);color:var(--faint)}
+  .sidefoot{margin-top:18px;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--panel2);font-size:11px;color:var(--mut)}
+  .sidefoot b{color:var(--ink);font-family:var(--mono)}
+  .pbar{height:4px;background:var(--bg2);border-radius:2px;overflow:hidden;margin:7px 0 6px}
+  .pbar i{display:block;height:100%;background:var(--green)}
+
+  /* ===== 工具条 ===== */
+  .toolbar{flex:0 0 52px;display:flex;align-items:center;gap:10px;padding:0 14px;border-bottom:1px solid var(--line);background:var(--panel)}
+  .search{position:relative;width:300px;flex:0 0 300px}
+  .search input{width:100%;height:30px;border:1px solid var(--line);border-radius:7px;background:var(--panel2);
+    padding:0 44px 0 10px;font:13px var(--sans);color:var(--ink);outline:none}
+  .search input:focus{border-color:var(--blue);background:#fff}
+  .search kbd{position:absolute;right:7px;top:6px;font:10px var(--mono);color:var(--faint);border:1px solid var(--line);border-radius:4px;padding:1px 5px;background:#fff}
+  .viewops{display:flex;gap:6px;margin-left:auto;align-items:center}
+  .ghost{height:28px;padding:0 10px;border:1px solid var(--line);border-radius:7px;background:#fff;color:var(--mut);font-size:12px}
+  .ghost:hover{color:var(--ink);border-color:var(--line2)}
+  .budget{font:11px var(--mono);color:var(--mut);border:1px solid var(--line);border-radius:7px;padding:5px 9px;background:var(--panel2)}
+  .budget b{color:var(--ink)}
+  .primary{height:30px;padding:0 14px;border:none;border-radius:7px;background:var(--ink);color:#fff;font-size:12.5px;font-weight:600}
+  .primary:hover{background:#2a3050}
+  .cnt{font-size:11.5px;color:var(--faint)}
+
+  /* ===== 高密度列表 ===== */
+  .gridrow{display:grid;grid-template-columns:24px 178px minmax(160px,1fr) 70px 112px 92px 46px 44px 116px;
+    gap:12px;align-items:center;padding:0 14px}
+  .colhead{flex:0 0 30px;border-bottom:1px solid var(--line);color:var(--faint);font-size:10.5px;
+    letter-spacing:.05em;background:var(--panel2);user-select:none}
+  .list{flex:1;overflow-y:auto}
+  .row{height:44px;border-bottom:1px solid var(--line);cursor:pointer}
+  .row:hover{background:var(--panel2)}
+  .row.sel{background:var(--sel)}
+  .mg{width:24px;height:24px;border-radius:6px;display:grid;place-items:center;font:600 10px var(--mono)}
+  .mg.b{color:var(--blue);background:rgba(59,91,219,.09)}
+  .mg.g{color:var(--green);background:rgba(14,159,110,.1)}
+  .mg.r{color:var(--red);background:rgba(201,80,58,.1)}
+  .mg.k{color:var(--ink);background:rgba(26,31,54,.06)}
+  .name{font:600 12.5px var(--mono);display:flex;align-items:center;gap:6px;overflow:hidden;white-space:nowrap}
+  .name .vt{font:500 10px var(--mono);color:var(--mut);background:var(--bg2);border-radius:4px;padding:0 4px;flex:0 0 auto}
+  .name .upd{font-size:10px;color:var(--blue);background:var(--bluebg);border-radius:4px;padding:0 4px;flex:0 0 auto}
+  .sum{color:var(--mut);font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cat{color:var(--mut);font-size:12px}
+  .src{font:11px var(--mono);color:var(--mut)}
+  .stat{display:flex;align-items:center;gap:6px;font-size:12px;min-width:0}
+  .dot{width:7px;height:7px;border-radius:50%;flex:0 0 7px}
+  .dot.g{background:var(--green)}.dot.b{background:var(--bluet)}.dot.r{background:var(--red)}.dot.m{background:var(--line2)}
+  .agc{font:11px var(--mono);color:var(--mut)}
+  .tag{font-size:10.5px;border-radius:4px;padding:1px 5px;display:inline-block}
+  .tag.al{color:var(--green);background:var(--greenbg)}
+  .tag.df{color:var(--mut);background:var(--bg2)}
+  .acts{display:flex;align-items:center;gap:4px;opacity:0;transition:opacity .12s;justify-content:flex-end}
+  .row:hover .acts,.row.sel .acts{opacity:1}
+  .sw{width:28px;height:16px;border-radius:8px;border:none;background:var(--line2);position:relative;transition:.15s;flex:0 0 28px}
+  .sw::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:#fff;transition:.15s}
+  .sw.on{background:var(--green)}
+  .sw.on::after{left:14px}
+  .abtn{border:none;background:transparent;color:var(--mut);font-size:11.5px;padding:3px 6px;border-radius:5px;white-space:nowrap}
+  .abtn:hover{background:var(--bg2);color:var(--ink)}
+  .abtn.del:hover{color:#fff;background:var(--red)}
+  .abtn.arm{color:#fff;background:var(--red)}
+  .row.off .name,.row.off .sum,.row.off .mg,.row.off .src,.row.off .cat{opacity:.45}
+  .mbar{width:52px;height:3px;border-radius:2px;background:var(--line);overflow:hidden;flex:0 0 52px}
+  .mbar i{display:block;height:100%;background:var(--blue)}
+  .inst{font-size:11px;color:var(--blue);font-family:var(--mono)}
+  .empty{padding:64px 20px;text-align:center;color:var(--faint);font-size:13px}
+
+  /* ===== 右侧详情面板 ===== */
+  .detail{position:fixed;top:48px;right:0;bottom:0;width:380px;background:var(--panel);border-left:1px solid var(--line);
+    box-shadow:-12px 0 32px rgba(26,31,54,.08);transform:translateX(102%);transition:transform .22s ease;z-index:40;
+    display:flex;flex-direction:column}
+  .detail.open{transform:none}
+  .dhead{flex:0 0 auto;display:flex;align-items:flex-start;gap:10px;padding:16px;border-bottom:1px solid var(--line)}
+  .dhead .mg{width:30px;height:30px;font-size:12px;border-radius:8px}
+  .dtitle{flex:1;min-width:0}
+  .dtitle b{font:600 14px var(--mono);display:block;word-break:break-all}
+  .dtitle .chip{margin-top:4px}
+  .x{border:none;background:transparent;font-size:18px;color:var(--faint);line-height:1}
+  .x:hover{color:var(--ink)}
+  .dbody{flex:1;overflow-y:auto;padding:16px}
+  .slb2{font-size:10.5px;letter-spacing:.08em;color:var(--faint);margin-bottom:8px;text-transform:uppercase}
+  .sec{margin-bottom:18px}
+  .sec p{font-size:12.5px;color:var(--mut)}
+  .kv{display:flex;justify-content:space-between;gap:12px;font-size:12.5px;padding:5px 0;border-bottom:1px dashed var(--line)}
+  .kv span{color:var(--mut);flex:0 0 auto}
+  .kv b{font-weight:500;text-align:right;word-break:break-all}
+  .kv b.mono{font:500 11.5px var(--mono)}
+  .codebox{font:11.5px var(--mono);background:var(--panel2);border:1px solid var(--line);border-radius:7px;
+    padding:8px 10px;word-break:break-all;margin:6px 0;color:var(--ink)}
+  .btn{height:30px;padding:0 12px;border:1px solid var(--line);border-radius:7px;background:#fff;font-size:12.5px;color:var(--ink)}
+  .btn:hover{border-color:var(--line2);background:var(--panel2)}
+  .btn.wide{width:100%;margin-top:8px}
+  .btn.acc{background:var(--ink);border-color:var(--ink);color:#fff}
+  .btn.acc:hover{background:#2a3050}
+  .btn.acc:disabled{opacity:.55;cursor:default}
+  .btn.del{color:var(--red);border-color:rgba(201,80,58,.4)}
+  .btn.del:hover,.btn.del.arm{background:var(--red);color:#fff;border-color:var(--red)}
+  .hint{font-size:11px;color:var(--faint);margin-top:6px}
+  .ag{list-style:none}
+  .ag li{padding:6px 0;border-bottom:1px dashed var(--line);font-size:12.5px;display:flex;gap:8px;align-items:center}
+  .ag li::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--line2);flex:0 0 6px}
+  .ag li.mut{color:var(--faint)}
+  .ag li.mut::before{display:none}
+  .danger{border-top:1px solid var(--line);padding-top:14px}
+  .chip{font-size:11px;padding:1px 8px;border-radius:10px;display:inline-block}
+  .chip.g{color:var(--green);background:var(--greenbg)}
+  .chip.b{color:var(--blue);background:var(--bluebg)}
+  .chip.r{color:var(--red);background:var(--redbg)}
+  .chip.m{color:var(--mut);background:var(--bg2)}
+  .bar{height:5px;border-radius:3px;background:var(--bg2);overflow:hidden}
+  .bar i{display:block;height:100%;background:var(--blue);transition:width .2s}
+
+  /* ===== Modal ===== */
+  .overlay{position:fixed;inset:0;background:rgba(26,31,54,.32);z-index:50;display:none;align-items:flex-start;justify-content:center;padding-top:8vh}
+  .overlay.show{display:flex}
+  .modal{width:520px;background:var(--panel);border-radius:10px;border:1px solid var(--line);box-shadow:0 24px 64px rgba(26,31,54,.18);max-height:82vh;overflow-y:auto}
+  .mhead{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--line)}
+  .mhead b{font:700 15px var(--serif)}
+  .mbody{padding:16px 18px}
+  .mfoot{display:flex;align-items:center;gap:8px;padding:12px 18px;border-top:1px solid var(--line)}
+  .mfoot .sp{flex:1}
+  .frow{margin-bottom:12px}
+  .frow label{display:block;font-size:11px;color:var(--mut);margin-bottom:5px}
+  .frow input[type=text],.frow input[type=password],.frow select{width:100%;height:32px;border:1px solid var(--line);border-radius:7px;padding:0 10px;font:12.5px var(--sans);background:#fff;outline:none}
+  .frow input:focus,.frow select:focus{border-color:var(--blue)}
+  .frow input.mono{font:12px var(--mono)}
+  .frow .ck{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink)}
+  .frow .ck input{accent-color:var(--green)}
+  .seg{display:flex;border:1px solid var(--line);border-radius:7px;overflow:hidden}
+  .seg button{flex:1;height:30px;border:none;background:#fff;font-size:12px;color:var(--mut);border-right:1px solid var(--line)}
+  .seg button:last-child{border-right:none}
+  .seg button.on{background:var(--ink);color:#fff;font-weight:600}
+  .mstate{font-size:12px;color:var(--faint)}
+  .mstate.ok{color:var(--green)}.mstate.busy{color:var(--blue)}
+  .mnote{font-size:11.5px;color:var(--mut);background:var(--panel2);border:1px dashed var(--line);border-radius:7px;padding:8px 10px}
+
+  .toast{position:fixed;left:50%;bottom:28px;transform:translate(-50%,12px);background:var(--ink);color:#fff;
+    font-size:12.5px;padding:8px 16px;border-radius:8px;opacity:0;pointer-events:none;transition:.2s;z-index:60}
+  .toast.show{opacity:1;transform:translate(-50%,0)}
+</style>
+</head>
+<body>
+
+<!-- ===== 顶部导航 ===== -->
+<header class="topnav">
+  <div class="brand"><span class="mark">SD</span><span><b>Sortie Deck</b><small>前线小队 · 共交付 · 无传话</small></span></div>
+  <nav class="nav">
+    <a href="#">作战面</a><a href="#">任务</a><a href="#">知识库</a><a href="#">记忆</a><a href="#">角色工厂</a>
+    <a href="#" class="on">工具箱</a><a href="#">角色频道</a><a href="#">小队</a><a href="#" class="audit">决策中心</a><a href="#">管理</a>
+  </nav>
+  <div class="navright">
+    <span class="me"><span class="avt">Ad</span><span><b>Admin</b><small>管理员 · sortie.in</small></span></span>
+    <button class="lnk">主题</button><button class="lnk">EN</button><button class="lnk">注销账号</button><button class="lnk">退出</button>
+  </div>
+</header>
+
+<div class="ws">
+  <!-- ===== 左侧边栏 ===== -->
+  <aside class="side">
+    <div class="slb">对象类型</div>
+    <div id="tabs">
+      <button class="sbtn" data-tab="tool">工具 <span class="n"></span></button>
+      <button class="sbtn" data-tab="skill">技能 <span class="n"></span></button>
+      <button class="sbtn" data-tab="mcp">连接器 <span class="n"></span></button>
+    </div>
+    <div class="slb">功能分类</div>
+    <div id="cats"></div>
+    <div class="slb">状态</div>
+    <div id="sts">
+      <button class="sbtn sm" data-st="">全部</button>
+      <button class="sbtn sm" data-st="on">启用</button>
+      <button class="sbtn sm" data-st="off">停用</button>
+      <button class="sbtn sm" data-st="ab">异常（待授权 / 断开）</button>
+    </div>
+    <div class="sidefoot">
+      <div>常驻上下文预算</div>
+      <div class="pbar"><i id="pfill" style="width:25%"></i></div>
+      <div><b id="pbnum">0</b> / 建议上限 12 · 超出将显著增加每轮 token 成本</div>
+    </div>
+  </aside>
+
+  <!-- ===== 主区 ===== -->
+  <main class="main">
+    <div class="toolbar">
+      <div class="search"><input id="q" type="text" placeholder="搜索工具 / 技能 / 连接器…"><kbd>⌘K</kbd></div>
+      <span class="cnt" id="cnt"></span>
+      <div class="viewops">
+        <button class="ghost" id="sortBtn" onclick="cycleSort()">排序：分类</button>
+        <button class="ghost" onclick="toast('文件导入：选择 JSON / SKILL.md 包（原型示意）')">导入</button>
+        <span class="budget" id="budget"></span>
+        <button class="primary" onclick="openModal()">＋ 添加</button>
+      </div>
+    </div>
+    <div class="colhead gridrow">
+      <span></span><span>名称</span><span>摘要</span><span>分类</span><span>来源 · 传输</span><span>状态</span><span>挂载</span><span>负载</span><span></span>
+    </div>
+    <div class="list" id="list"></div>
+    <div class="empty" id="empty" style="display:none">没有匹配的条目 —— 调整筛选，或点右上角「添加」。</div>
+  </main>
+</div>
+
+<!-- ===== 右侧详情面板 ===== -->
+<aside class="detail" id="detail"></aside>
+
+<!-- ===== 添加 / 编辑 Modal ===== -->
+<div class="overlay" id="overlay"><div class="modal" id="modal"></div></div>
+
+<div class="toast" id="toastEl"></div>
+
+<script>
+/* ================= 示例数据（依据 spec，禁止 Lorem） ================= */
+const CATS=["工程研发","产品设计","质量测试","运维发布","知识资料","浏览器自动化","办公协作"];
+const data={
+  tool:[
+    {mono:"ws",c:"b",name:"web_search",summary:"联网搜索与网页摘要，返回带引用来源的结果",cat:"工程研发",runtime:"http",endpoint:"https://api.sortie.dev/v1/tools/web-search",load:"always",agents:4,on:true,agentsList:["战情分析师","舆情雷达","小队参谋","情报员"]},
+    {mono:"cr",c:"k",name:"code_runner",summary:"沙箱内执行脚本与测试，捕获 stdout / stderr",cat:"工程研发",runtime:"cli",endpoint:"codex exec --sandbox workspace",load:"defer",agents:2,on:true,agentsList:["工程兵","测试工兵"]},
+    {mono:"ig",c:"g",name:"image_gen",summary:"文生图与改图，输出 1024px PNG 素材",cat:"产品设计",runtime:"function",endpoint:"fn://media/image-gen",load:"defer",agents:3,on:true,agentsList:["视觉设计","舆情雷达","前端哨兵"]},
+    {mono:"dg",c:"g",name:"deploy_gate",summary:"发布门禁检查：单测覆盖率与回滚预案校验",cat:"运维发布",runtime:"cli",endpoint:"deployctl gate --env prod",load:"defer",agents:2,on:true,agentsList:["发布官","值班工程师"]},
+    {mono:"kb",c:"b",name:"kb_lookup",summary:"检索知识库历史交付与决策记录",cat:"知识资料",runtime:"function",endpoint:"fn://kb/lookup",load:"defer",agents:2,on:true,agentsList:["知识管理员","小队参谋"]},
+    {mono:"de",c:"k",name:"doc_export",summary:"将交付物导出为 PDF / DOCX 周报",cat:"办公协作",runtime:"plugin",endpoint:"plugin://sortie/doc-export",load:"defer",agents:1,on:false,agentsList:["文档管家"]}
+  ],
+  skill:[
+    {mono:"la",c:"g",name:"log-analyzer",v:"v1.2.0",latest:"v1.3.0",source:"GitHub",summary:"解析部署日志定位报错根因，输出修复建议",cat:"工程研发",load:"always",agents:2,on:true,scripts:["SKILL.md","analyze.sh"],agentsList:["工程兵","值班工程师"]},
+    {mono:"pb",c:"g",name:"ppt-builder",v:"v0.9.1",source:"市场",summary:"按大纲生成汇报用 PPT 初稿与讲者备注",cat:"办公协作",load:"defer",agents:1,on:true,scripts:["SKILL.md"],agentsList:["文档管家"]},
+    {mono:"fr",c:"g",name:"frontend-review",installing:67,source:"GitHub",summary:"对前端改动做可访问性与样式走查",cat:"产品设计",load:"defer",agents:0,on:false,agentsList:[]},
+    {mono:"rn",c:"g",name:"release-notes",v:"v2.0.1",source:"本地创建",summary:"从合并记录生成版本发布说明",cat:"运维发布",load:"defer",agents:1,on:true,scripts:["SKILL.md"],agentsList:["发布官"]},
+    {mono:"at",c:"g",name:"api-tester",v:"v0.4.2",source:"市场",summary:"依据 OpenAPI 生成接口冒烟用例",cat:"质量测试",load:"defer",agents:1,on:true,scripts:["SKILL.md","smoke.ts"],agentsList:["测试工兵"]},
+    {mono:"dv",c:"k",name:"data-viz",market:true,source:"市场推荐",summary:"市场推荐：表格数据一键生成图表与解读",cat:"质量测试",load:"defer",agents:0,on:false,agentsList:[]}
+  ],
+  mcp:[
+    {mono:"fs",c:"b",name:"filesystem",transport:"stdio",command:"npx -y @modelcontextprotocol/server-filesystem",summary:"读写本地仓库文件，供小队共享工作区",cat:"知识资料",health:"已连接",load:"always",agents:5,on:true,agentsList:["小队参谋","知识管理员","工程兵","文档管家","情报员"]},
+    {mono:"br",c:"g",name:"browser",transport:"stdio",command:"npx -y @playwright/mcp@latest",summary:"驱动浏览器截图、走查与端到端操作",cat:"浏览器自动化",health:"已连接",load:"defer",agents:3,on:true,agentsList:["前端哨兵","测试工兵","舆情雷达"]},
+    {mono:"pg",c:"b",name:"postgres-mcp",transport:"sse",url:"https://mcp.internal.xmly.dev/pg/sse",auth:"Bearer token · 已配置",summary:"只读查询发布库，慢查询与容量巡检",cat:"工程研发",health:"已连接",load:"defer",agents:2,on:true,agentsList:["工程兵","值班工程师"]},
+    {mono:"fg",c:"g",name:"figma-mcp",transport:"http",url:"https://mcp.figma.com/mcp",auth:"OAuth · 已授权",summary:"读取设计稿节点与切图，校对还原度",cat:"产品设计",health:"已连接",load:"defer",agents:2,on:true,agentsList:["视觉设计","前端哨兵"]},
+    {mono:"gh",c:"r",name:"github-mcp",transport:"http",url:"https://api.githubcopilot.com/mcp/",auth:"OAuth · 待授权",summary:"读写 Issue / PR，触发 CI 重跑",cat:"工程研发",health:"待授权",load:"defer",agents:0,on:true,agentsList:[]},
+    {mono:"no",c:"k",name:"notion-mcp",transport:"http",url:"https://mcp.notion.com/mcp",auth:"OAuth · 已授权",summary:"同步作战笔记与周报到 Notion 空间",cat:"办公协作",health:"已断开",load:"defer",agents:1,on:true,agentsList:["文档管家"]}
+  ]
+};
+
+/* ================= 全局状态 ================= */
+const cur={tab:"tool",cat:"",st:"",q:"",sort:"cat",sel:null};
+const $=id=>document.getElementById(id);
+const listEl=$("list"),detail=$("detail"),overlay=$("overlay");
+
+/* ================= 工具函数 ================= */
+function toast(m){const t=$("toastEl");t.textContent=m;t.classList.add("show");clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove("show"),2200);}
+function statusOf(type,it){
+  if(type==="mcp"&&it.on){return {"已连接":["已连接","g"],"待授权":["待授权","b"],"已断开":["已断开","r"]}[it.health]||["未知","m"];}
+  if(type==="skill"){
+    if(it.market)return["未安装","m"];
+    if(it.installing!=null)return["安装中","b"];
+    if(!it.on)return["停用","m"];
+    return["启用","g"];
+  }
+  return it.on?["启用","g"]:["停用","m"];
+}
+function srcLabel(type,it){
+  if(type==="tool")return it.runtime;
+  if(type==="skill")return it.source;
+  return{stdio:"stdio",sse:"SSE",http:"HTTP"}[it.transport]||it.transport;
+}
+function transportLabel(t){return{stdio:"stdio",sse:"SSE",http:"Streamable HTTP"}[t]||t;}
+function curSel(){return cur.sel?data[cur.sel.type][cur.sel.idx]:null;}
+
+/* ================= 侧栏分类 / 状态按钮 ================= */
+$("cats").innerHTML=['<button class="sbtn sm" data-cat="">全部 <span class="n"></span></button>']
+  .concat(CATS.map(c=>`<button class="sbtn sm" data-cat="${c}">${c} <span class="n"></span></button>`)).join("");
+$("tabs").addEventListener("click",e=>{const b=e.target.closest("[data-tab]");if(b){cur.tab=b.dataset.tab;cur.sel=null;detail.classList.remove("open");render();}});
+$("cats").addEventListener("click",e=>{const b=e.target.closest("[data-cat]");if(b){cur.cat=b.dataset.cat;render();}});
+$("sts").addEventListener("click",e=>{const b=e.target.closest("[data-st]");if(b){cur.st=b.dataset.st;render();}});
+
+/* ================= 筛选 / 排序 ================= */
+function matchCat(it){return !cur.cat||it.cat===cur.cat;}
+function matchSt(it){
+  if(!cur.st)return true;
+  if(cur.st==="off")return !it.on&&!it.market&&it.installing==null;
+  if(cur.st==="ab")return cur.tab==="mcp"&&it.on&&it.health!=="已连接";
+  return it.on&&!(cur.tab==="mcp"&&it.health!=="已连接")&&!it.market&&it.installing==null;
+}
+function matchQ(it){const q=cur.q.trim().toLowerCase();return !q||(it.name+" "+it.summary+" "+it.cat).toLowerCase().includes(q);}
+function cycleSort(){cur.sort=cur.sort==="cat"?"name":cur.sort==="name"?"agents":"cat";
+  $("sortBtn").textContent="排序："+({cat:"分类",name:"名称",agents:"挂载"})[cur.sort];render();}
+$("q").addEventListener("input",e=>{cur.q=e.target.value;render();});
+document.addEventListener("keydown",e=>{
+  if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==="k"){e.preventDefault();$("q").focus();}
+  if(e.key==="Escape"){if(overlay.classList.contains("show"))closeModal();else if(detail.classList.contains("open"))closeDetail();}
+});
+
+/* ================= 渲染列表 ================= */
+function budgetCount(){return ["tool","skill","mcp"].reduce((s,k)=>s+data[k].filter(i=>i.load==="always"&&i.on&&!i.market&&i.installing==null).length,0);}
+function render(){
+  document.querySelectorAll("#tabs .sbtn").forEach(b=>{b.querySelector(".n").textContent=data[b.dataset.tab].length;b.classList.toggle("on",b.dataset.tab===cur.tab);});
+  document.querySelectorAll("#cats .sbtn").forEach(b=>{const c=b.dataset.cat;
+    b.querySelector(".n").textContent=c?data[cur.tab].filter(i=>i.cat===c).length:data[cur.tab].length;
+    b.classList.toggle("on",cur.cat===c);});
+  document.querySelectorAll("#sts .sbtn").forEach(b=>b.classList.toggle("on",cur.st===b.dataset.st));
+  const bd=budgetCount();
+  $("budget").innerHTML=`常驻 <b>${bd}</b> / 建议上限 12`;
+  $("pbnum").textContent=bd;$("pfill").style.width=Math.min(100,Math.round(bd/12*100))+"%";
+  let items=data[cur.tab].map((it,idx)=>({it,idx})).filter(({it})=>matchCat(it)&&matchSt(it)&&matchQ(it));
+  items.sort((a,b)=>{
+    if(cur.sort==="name")return a.it.name.localeCompare(b.it.name);
+    if(cur.sort==="agents")return b.it.agents-a.it.agents;
+    return CATS.indexOf(a.it.cat)-CATS.indexOf(b.it.cat)||a.it.name.localeCompare(b.it.name);
+  });
+  listEl.innerHTML=items.map(({it,idx})=>rowHTML(cur.tab,it,idx)).join("");
+  $("empty").style.display=items.length?"none":"block";
+  $("cnt").textContent=items.length+" 个条目";
+}
+function rowHTML(type,it,idx){
+  const st=statusOf(type,it);
+  const off=(!it.on&&!it.market&&it.installing==null)?"off":"";
+  const sel=(cur.sel&&cur.sel.type===type&&cur.sel.idx===idx)?"sel":"";
+  let nx="";
+  if(type==="skill"){
+    if(it.v)nx+=`<span class="vt">${it.v}</span>`;
+    if(it.latest)nx+=`<span class="upd">可更新 ${it.latest}</span>`;
+    if(it.market)nx+=`<span class="upd">市场推荐</span>`;
+  }
+  const statCell=(type==="skill"&&it.installing!=null)
+    ?`<span class="mbar"><i style="width:${it.installing}%"></i></span><span class="inst">${it.installing}%</span>`
+    :`<span class="dot ${st[1]}"></span>${st[0]}`;
+  const actions=it.market
+    ?`<button class="abtn" data-a="install" style="color:var(--blue)">安装</button>`
+    :`<button class="sw ${it.on?"on":""}" data-a="toggle" title="启用 / 停用"></button>
+      <button class="abtn" data-a="edit">编辑</button>
+      <button class="abtn del" data-a="del">删除</button>`;
+  return `<div class="row gridrow ${off} ${sel}" data-type="${type}" data-idx="${idx}">
+    <span class="mg ${it.c||"k"}">${it.mono}</span>
+    <span class="name">${it.name}${nx}</span>
+    <span class="sum">${it.summary}</span>
+    <span class="cat">${it.cat}</span>
+    <span class="src">${srcLabel(type,it)}</span>
+    <span class="stat">${statCell}</span>
+    <span class="agc">${it.agents} 个</span>
+    <span><span class="tag ${it.load==="always"?"al":"df"}">${it.load==="always"?"常驻":"按需"}</span></span>
+    <span class="acts">${actions}</span>
+  </div>`;
+}
+
+/* ================= 行事件（委托） ================= */
+listEl.addEventListener("click",e=>{
+  const row=e.target.closest(".row");if(!row)return;
+  const type=row.dataset.type,idx=+row.dataset.idx,it=data[type][idx];
+  const a=e.target.closest("[data-a]");
+  if(a){
+    const act=a.dataset.a;
+    if(act==="toggle"){it.on=!it.on;render();if(cur.sel&&cur.sel.type===type&&cur.sel.idx===idx)renderDetail();return;}
+    if(act==="edit"){openModal(type,idx);return;}
+    if(act==="del"){armDelete(a,()=>{data[type].splice(idx,1);if(cur.sel&&cur.sel.type===type&&cur.sel.idx===idx)closeDetail();render();toast("已删除 "+it.name);});return;}
+    if(act==="install"){startInstall(type,idx);return;}
+  }
+  openDetail(type,idx);
+});
+function armDelete(btn,fn){
+  if(btn.dataset.arm==="1"){fn();return;}
+  btn.dataset.arm="1";btn.textContent="确认";btn.classList.add("arm");
+  setTimeout(()=>{btn.dataset.arm="";btn.textContent="删除";btn.classList.remove("arm");},2500);
+}
+
+/* ================= 安装流（市场推荐技能） ================= */
+let instTimer=null;
+function startInstall(type,idx){
+  const it=data[type][idx];if(!it)return;
+  if(it.market){it.market=false;it.installing=0;it.on=true;it.source="市场";if(type==="skill"&&it.load==null)it.load="defer";}
+  if(it.installing==null)it.installing=0;
+  clearInterval(instTimer);
+  instTimer=setInterval(()=>{
+    it.installing=Math.min(100,it.installing+9);
+    if(cur.sel&&cur.sel.type===type&&cur.sel.idx===idx)renderDetail();
+    if(it.installing>=100){
+      clearInterval(instTimer);delete it.installing;it.v=it.v||"v1.0.0";it.load=it.load||"defer";
+      toast("安装完成："+it.name);
+    }
+    render();
+  },120);
+}
+
+/* ================= 右侧详情面板 ================= */
+function openDetail(type,idx){cur.sel={type,idx};renderDetail();detail.classList.add("open");}
+function closeDetail(){cur.sel=null;detail.classList.remove("open");render();}
+function renderDetail(){
+  if(!cur.sel)return;
+  const {type,idx}=cur.sel,it=data[type][idx];
+  if(!it){closeDetail();return;}
+  const st=statusOf(type,it);
+  let extra="";
+  if(type==="mcp"){
+    const ep=it.url||it.command;
+    extra=`<div class="sec"><div class="slb2">端点与鉴权</div>
+      <div class="kv"><span>传输</span><b>${transportLabel(it.transport)}</b></div>
+      <div class="codebox">${ep}</div>
+      <div class="kv"><span>鉴权</span><b class="mono">${it.auth||"本地进程 · 无需鉴权"}</b></div>
+      ${it.health==="待授权"?`<button class="btn wide acc" id="oauthBtn" onclick="oauthNow()">OAuth 授权</button>`:""}
+      <button class="btn wide acc" id="testBtn" onclick="testConn()">${it.health==="已断开"?"重新连接":"测试连接"}</button>
+      <div class="hint">点击后发起一次握手，约 1 秒返回结果。</div></div>`;
+  }else if(type==="skill"){
+    if(it.installing!=null){
+      extra=`<div class="sec"><div class="slb2">安装进度</div>
+        <div class="bar"><i style="width:${it.installing}%"></i></div>
+        <div class="hint">正在从 ${it.source} 拉取 SKILL.md 与 scripts… ${it.installing}%</div></div>`;
+    }else if(it.market){
+      extra=`<div class="sec"><div class="slb2">获取</div>
+        <div class="mnote">市场推荐技能，尚未安装。安装后将出现在技能列表并可挂载。</div>
+        <button class="btn wide acc" onclick="startInstall('skill',${idx})">安装技能</button></div>`;
+    }else{
+      extra=`<div class="sec"><div class="slb2">版本与来源</div>
+        <div class="kv"><span>当前版本</span><b class="mono">${it.v}</b></div>
+        <div class="kv"><span>来源</span><b>${it.source}</b></div>
+        <div class="kv"><span>包含文件</span><b class="mono">${(it.scripts||["SKILL.md"]).join(" · ")}</b></div>
+        ${it.latest?`<button class="btn wide acc" id="upBtn" onclick="updateSkill()">更新到 ${it.latest}</button>`:`<div class="hint">已是最新版本。</div>`}</div>`;
+    }
+  }else{
+    extra=`<div class="sec"><div class="slb2">接入方式</div>
+      <div class="kv"><span>运行时</span><b>${it.runtime}</b></div>
+      <div class="codebox">${it.endpoint}</div></div>`;
+  }
+  const agents=(it.agentsList&&it.agentsList.length)
+    ?it.agentsList.map(a=>`<li>${a}</li>`).join("")
+    :`<li class="mut">暂未挂载任何 Agent</li>`;
+  detail.innerHTML=`
+    <div class="dhead"><span class="mg ${it.c||"k"}">${it.mono}</span>
+      <div class="dtitle"><b>${it.name}</b><span class="chip ${st[1]}">${st[0]}</span></div>
+      <button class="x" onclick="closeDetail()">×</button></div>
+    <div class="dbody">
+      <div class="sec"><div class="slb2">摘要</div><p>${it.summary}</p></div>
+      <div class="sec">
+        <div class="kv"><span>分类</span><b>${it.cat}</b></div>
+        <div class="kv"><span>负载策略</span><b>${it.load==="always"?"常驻 alwaysLoad":"按需 defer"}</b></div>
+        <div class="kv"><span>挂载</span><b>${it.agents} 个 Agent</b></div>
+      </div>
+      ${extra}
+      <div class="sec"><div class="slb2">挂载的 Agent</div><ul class="ag">${agents}</ul>
+        <button class="btn wide" onclick="toast('挂载管理：选择小队与 Agent（原型示意）')">管理挂载</button></div>
+      <div class="sec danger"><div class="slb2">危险区</div>
+        <button class="btn wide del" id="delBtn" onclick="delFromDetail()">删除该条目</button>
+        <div class="hint">删除后，小队成员将立即失去该能力，不可恢复。</div></div>
+    </div>`;
+}
+function testConn(){
+  const it=curSel(),b=$("testBtn");if(!b)return;
+  b.disabled=true;b.textContent="测试中…";
+  setTimeout(()=>{it.health="已连接";it.on=true;
+    if(it.auth)it.auth=it.auth.replace("待授权","已授权");
+    toast("连接成功 · "+it.name);render();renderDetail();},1000);
+}
+function oauthNow(){
+  const it=curSel(),b=$("oauthBtn");if(!b)return;
+  b.disabled=true;b.textContent="授权中…";
+  setTimeout(()=>{it.health="已连接";it.auth="OAuth · 已授权";it.agents=it.agentsList.length;
+    toast("OAuth 授权完成 · "+it.name);render();renderDetail();},1000);
+}
+function updateSkill(){
+  const it=curSel(),b=$("upBtn");if(!b)return;
+  b.disabled=true;b.textContent="更新中…";
+  setTimeout(()=>{it.v=it.latest;delete it.latest;toast("已更新到 "+it.v);render();renderDetail();},1100);
+}
+function delFromDetail(){
+  const b=$("delBtn");if(!b)return;
+  if(b.dataset.arm==="1"){
+    const {type,idx}=cur.sel;const it=data[type][idx];
+    data[type].splice(idx,1);closeDetail();render();toast("已删除 "+it.name);
+  }else{b.dataset.arm="1";b.textContent="确认删除？";b.classList.add("arm");
+    setTimeout(()=>{if($("delBtn")){$("delBtn").dataset.arm="";$("delBtn").textContent="删除该条目";$("delBtn").classList.remove("arm");}},2500);}
+}
+
+/* ================= Modal：添加 / 编辑 ================= */
+let mctx={type:"mcp",mode:"add",idx:null,transport:"stdio",auth:"bearer",testState:"",draft:null};
+const FIELD_IDS=["mName","mSummary","mUrl","mCommand","mToken","mEndpoint"];
+function openModal(type,idx){
+  mctx={type:type||cur.tab,mode:idx!=null?"edit":"add",idx:idx!=null?idx:null,
+    transport:"stdio",auth:"bearer",testState:"",draft:null};
+  if(mctx.mode==="edit"){
+    const it=data[mctx.type][idx];
+    if(mctx.type==="mcp"&&it.transport)mctx.transport=it.transport;
+    if(mctx.type==="mcp"&&/OAuth/.test(it.auth||""))mctx.auth="oauth";
+  }
+  overlay.classList.add("show");buildModal();
+}
+function closeModal(){overlay.classList.remove("show");}
+overlay.addEventListener("click",e=>{if(e.target===overlay)closeModal();});
+function mDraft(){
+  mctx.draft={};
+  FIELD_IDS.forEach(id=>{const el=$(id);if(el)mctx.draft[id]=el.value;});
+  const ck=$("mAlways");if(ck)mctx.draft._always=ck.checked;
+}
+function mSet(k,v){mDraft();mctx[k]=v;buildModal();}
+function segHTML(pairs,key,curVal){
+  return `<div class="seg">${pairs.map(([k,v])=>`<button type="button" class="${curVal===k?"on":""}" onclick="mSet('${key}','${k}')">${v}</button>`).join("")}</div>`;
+}
+function buildModal(){
+  const t=mctx.type,edit=mctx.mode==="edit";
+  let body="";
+  const typeSeg=`<div class="frow"><label>条目类型</label>${segHTML([["tool","工具"],["skill","技能"],["mcp","连接器"]],"type",t)}</div>`;
+  const nameF=`<div class="frow"><label>名称</label><input type="text" id="mName" class="mono" placeholder="例如 my-tool"></div>`;
+  const sumF=`<div class="frow"><label>摘要</label><input type="text" id="mSummary" placeholder="一句话说明用途"></div>`;
+  const catF=`<div class="frow"><label>功能分类</label><select id="mCat">${CATS.map(c=>`<option>${c}</option>`).join("")}</select></div>`;
+  const alwaysF=`<div class="frow"><label class="ck"><input type="checkbox" id="mAlways"> 常驻 alwaysLoad（每轮注入上下文，计入常驻预算）</label></div>`;
+
+  if(edit){
+    body=typeSeg+nameF+sumF+catF;
+    if(t==="tool")body+=`<div class="frow"><label>接入点 endpoint</label><input type="text" id="mEndpoint" class="mono" placeholder="https://… 或 cli 命令"></div>`;
+    if(t==="mcp")body+=`<div class="frow"><label>传输 transport</label>${segHTML([["stdio","stdio"],["sse","SSE"],["http","Streamable HTTP"]],"transport",mctx.transport)}</div>
+      <div class="frow"><label>${mctx.transport==="stdio"?"启动命令":"端点 URL"}</label><input type="text" id="${mctx.transport==="stdio"?"mCommand":"mUrl"}" class="mono" placeholder="${mctx.transport==="stdio"?"npx -y @modelcontextprotocol/server-…":"https://…/mcp"}"></div>`;
+    if(t==="skill")body+=`<div class="mnote">技能正文（SKILL.md）与 scripts 请在安装目录中编辑，此处仅维护元信息。</div>`;
+  }else if(t==="mcp"){
+    body=typeSeg+nameF+sumF
+      +`<div class="frow"><label>传输 transport</label>${segHTML([["stdio","stdio"],["sse","SSE"],["http","Streamable HTTP"]],"transport",mctx.transport)}</div>`;
+    if(mctx.transport==="stdio"){
+      body+=`<div class="frow"><label>启动命令</label><input type="text" id="mCommand" class="mono" placeholder="npx -y @modelcontextprotocol/server-filesystem"></div>
+        <div class="mnote">stdio：由 Sortie Deck 在本机拉起子进程，无需鉴权配置。</div>`;
+    }else{
+      body+=`<div class="frow"><label>端点 URL</label><input type="text" id="mUrl" class="mono" placeholder="https://mcp.example.com/${mctx.transport==="sse"?"sse":"mcp"}"></div>
+        <div class="frow"><label>鉴权方式</label>${segHTML([["bearer","Bearer Token"],["oauth","OAuth"]],"auth",mctx.auth)}</div>`;
+      body+=mctx.auth==="bearer"
+        ?`<div class="frow"><label>Token</label><input type="password" id="mToken" class="mono" placeholder="sk-… 或 Bearer token"></div>`
+        :`<div class="mnote">OAuth：添加后将跳转授权页完成 consent，再进行连接测试。</div>`;
+    }
+    body+=catF+alwaysF;
+  }else if(t==="skill"){
+    body=typeSeg
+      +`<div class="frow"><label>从外网安装（URL / GitHub 仓库 / 市场链接）</label><input type="text" id="mUrl" class="mono" placeholder="https://github.com/org/skill-repo 或 sortie://market/skill/…"></div>`
+      +sumF+catF+alwaysF
+      +`<div id="mProg" style="display:none;margin:4px 0 10px"><div class="bar"><i id="mBar" style="width:0%"></i></div><div class="hint" id="mProgT">准备安装…</div></div>`;
+  }else{
+    body=typeSeg+nameF+sumF
+      +`<div class="frow"><label>运行时 runtime</label><select id="mRt"><option>cli</option><option>http</option><option>function</option><option>plugin</option></select></div>
+        <div class="frow"><label>接入点 endpoint</label><input type="text" id="mEndpoint" class="mono" placeholder="https://… 或 fn://…"></div>`
+      +catF+alwaysF;
+  }
+
+  let foot="";
+  if(!edit&&t==="mcp"){
+    foot=`<button class="ghost" id="mTest" onclick="mTestConn()">测试连接</button><span class="mstate" id="mState"></span><span class="sp"></span>
+      <button class="ghost" onclick="closeModal()">取消</button><button class="primary" onclick="mSave()">添加</button>`;
+  }else if(!edit&&t==="skill"){
+    foot=`<span class="mstate" id="mState"></span><span class="sp"></span>
+      <button class="ghost" onclick="closeModal()">取消</button><button class="primary" id="mGo" onclick="mInstall()">安装</button>`;
+  }else{
+    foot=`<span class="sp"></span><button class="ghost" onclick="closeModal()">取消</button><button class="primary" onclick="mSave()">${edit?"保存":"添加"}</button>`;
+  }
+
+  $("modal").innerHTML=`
+    <div class="mhead"><b>${edit?"编辑条目":"添加到工具箱"}</b><button class="x" onclick="closeModal()">×</button></div>
+    <div class="mbody">${body}</div>
+    <div class="mfoot">${foot}</div>`;
+
+  if(mctx.draft){
+    FIELD_IDS.forEach(id=>{const el=$(id);if(el&&mctx.draft[id]!=null)el.value=mctx.draft[id];});
+    const ck=$("mAlways");if(ck&&mctx.draft._always!=null)ck.checked=mctx.draft._always;
+  }
+  if(edit){
+    const it=data[mctx.type][mctx.idx];
+    if(it){
+      if($("mName"))$("mName").value=it.name;
+      if($("mSummary"))$("mSummary").value=it.summary;
+      if($("mCat"))$("mCat").value=it.cat;
+      if($("mEndpoint"))$("mEndpoint").value=it.endpoint||"";
+      if($("mCommand"))$("mCommand").value=it.command||"";
+      if($("mUrl")&&!$("mUrl").value)$("mUrl").value=it.url||"";
+      const ck=$("mAlways");if(ck)ck.checked=it.load==="always";
+    }
+  }
+}
+function mTestConn(){
+  const b=$("mTest"),s=$("mState");if(!b)return;
+  b.disabled=true;b.textContent="测试中…";s.className="mstate busy";s.textContent="正在握手…";
+  setTimeout(()=>{b.disabled=false;b.textContent="重新测试";mctx.testState="ok";
+    s.className="mstate ok";s.textContent="连接成功，可以添加";},1000);
+}
+function mSave(){
+  const name=($("mName")&&$("mName").value.trim())||"";
+  if(!name){toast("请填写名称");return;}
+  const summary=($("mSummary")&&$("mSummary").value.trim())||"暂无摘要";
+  const cat=($("mCat")&&$("mCat").value)||CATS[0];
+  const always=!!($("mAlways")&&$("mAlways").checked);
+  const load=always?"always":"defer";
+  if(mctx.mode==="edit"){
+    const it=data[mctx.type][mctx.idx];
+    Object.assign(it,{name,summary,cat,load});
+    if(mctx.type==="tool"&&$("mEndpoint"))it.endpoint=$("mEndpoint").value.trim()||it.endpoint;
+    if(mctx.type==="mcp"){
+      if(mctx.transport==="stdio"&&$("mCommand"))it.command=$("mCommand").value.trim()||it.command;
+      if(mctx.transport!=="stdio"&&$("mUrl"))it.url=$("mUrl").value.trim()||it.url;
+    }
+    toast("已保存："+name);
+  }else if(mctx.type==="mcp"){
+    const it={mono:name.slice(0,2).toLowerCase(),c:"b",name,summary,cat,transport:mctx.transport,
+      load,agents:0,on:true,agentsList:[],
+      health:mctx.testState==="ok"?"已连接":(mctx.transport==="stdio"?"已断开":"待授权")};
+    if(mctx.transport==="stdio"){it.command=($("mCommand")&&$("mCommand").value.trim())||("npx -y @modelcontextprotocol/server-"+name);}
+    else{
+      it.url=($("mUrl")&&$("mUrl").value.trim())||("https://mcp.example.com/"+(mctx.transport==="sse"?"sse":"mcp"));
+      it.auth=mctx.auth==="oauth"?"OAuth · 待授权":"Bearer token · 已配置";
+    }
+    data.mcp.push(it);cur.tab="mcp";toast("已添加连接器："+name+(mctx.testState==="ok"?"（已连接）":""));
+  }else if(mctx.type==="tool"){
+    data.tool.push({mono:name.slice(0,2).toLowerCase(),c:"k",name,summary,cat,load,
+      runtime:($("mRt")&&$("mRt").value)||"http",
+      endpoint:($("mEndpoint")&&$("mEndpoint").value.trim())||"fn://"+name,agents:0,on:true,agentsList:[]});
+    cur.tab="tool";toast("已添加工具："+name);
+  }
+  cur.sel=null;detail.classList.remove("open");closeModal();render();
+}
+function mInstall(){
+  const url=($("mUrl")&&$("mUrl").value.trim())||"";
+  if(!url){toast("请输入安装 URL");return;}
+  const name=(url.replace(/\/+$/,"").split("/").pop()||"new-skill").replace(/\.git$/,"");
+  const cat=($("mCat")&&$("mCat").value)||CATS[0];
+  const always=!!($("mAlways")&&$("mAlways").checked);
+  const it={mono:name.slice(0,2).toLowerCase(),c:"g",name,
+    summary:($("mSummary")&&$("mSummary").value.trim())||"通过外网安装的技能",
+    cat,load:always?"always":"defer",v:"v1.0.0",
+    source:/github/.test(url)?"GitHub":"市场",agents:0,on:true,scripts:["SKILL.md"],agentsList:[]};
+  $("mGo").disabled=true;
+  $("mProg").style.display="block";
+  let p=0;
+  const timer=setInterval(()=>{
+    p=Math.min(100,p+11);
+    $("mBar").style.width=p+"%";
+    $("mProgT").textContent="正在拉取 SKILL.md 与 scripts… "+p+"%";
+    if(p>=100){
+      clearInterval(timer);
+      data.skill.push(it);cur.tab="skill";cur.sel=null;detail.classList.remove("open");
+      closeModal();render();toast("安装完成："+name);
+    }
+  },130);
+}
+
+/* ================= 初始化 ================= */
+render();
+</script>
+</body>
+</html>
