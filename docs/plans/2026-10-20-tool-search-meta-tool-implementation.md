@@ -96,9 +96,12 @@ T1 → T2 → toolkit.stateful → T7（池） → T8 → T3/T9（graph 接线�
 
 ## 遗留与后续
 
-1. harness 执行器（claudecode 等 CLI）从回复文本解析 toolkit_search/pick 意图 → 写入
-   `StageResult.meta` 的粘合层（当前 mock/直构 StageResult 的 executor 已可用）。
-2. http/sse transport 的连接复用池化。
+1. ~~harness 执行器从回复文本解析意图 → 写入 `StageResult.meta` 的粘合层~~
+   ✅ 2026-10-21 完成：`executor._parse_toolkit_intents`（```toolkit_intent 围栏协议）+
+   pick 上浮的 mcp 回写 `stage_toolkits`（`graph.merge_picked_toolkits`），端到端链路见
+   `tests/test_toolkit_chain.py`。
+2. ~~http/sse transport 的连接复用池化~~ ✅ 2026-10-20 完成（见
+   `docs/plans/2026-10-20-mcp-http-transport-and-skill-scripts.md`）。
 3. P2：`ToolkitItem.embedding` 向量索引、UI 装载记录面板。
 
 ## 状态

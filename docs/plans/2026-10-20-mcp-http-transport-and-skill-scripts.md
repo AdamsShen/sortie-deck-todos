@@ -1,9 +1,17 @@
 # 实施计划：MCP http/sse 传输层 + skill 脚本执行沙箱
 
+> 实施落地（2026-10-20）：`src/sortie_deck/mcp_http.py`（HttpMcpSession / SseMcpSession / SSE 解析器）、
+> `src/sortie_deck/skill_runner.py`（run_skill_script）、池分派 `_create_session` + 共享桶
+> （`mcp_runtime.py`）、`skill_run` 意图链路（`graph.py` `_handle_skill_run` + `skill_runs.json`
+> 产物）、协议说明书第 4 步（`executor.py`）。测试：`tests/test_mcp_http.py`（5，真实 uvicorn
+> 线程服务器）、`tests/test_skill_runner.py`（8）、`test_toolkit_meta.py` 增 4、`test_mcp_pool.py`
+> 增 3（共享桶/任务结束存活/死实例重建）。
+
+
 - 日期：2026-10-20
 - 依据：`docs/plans/2026-10-20-tool-search-meta-tool.md`（3.5 节 http/sse 池化、P1 skill scripts 沙箱）及其
   实施文档中的两处降级项
-- 状态：草案，待确认后实施
+- 状态：**已完成**（2026-10-20 实施，42 个相关用例通过；全量 416 通过 / 1 存量 LLM 环境失败与本次无关）
 
 ## 1. 需求背景
 
