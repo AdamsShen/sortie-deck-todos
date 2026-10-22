@@ -260,6 +260,8 @@ export default function App() {
   const [agentList, setAgentList] = useState<PublishedAgent[]>([]);
   const [agentEditing, setAgentEditing] = useState(false);
   const [agentSelectedId, setAgentSelectedId] = useState<string | null>(null);
+  // V2 作战室：名册网格顶部的可见性分段过滤器（all/public/private）
+  const [agentVisFilter, setAgentVisFilter] = useState<"all" | Visibility>("all");
   const [agentForm, setAgentForm] = useState<{
     title: string;
     slot: AgentSlot;
@@ -279,6 +281,11 @@ export default function App() {
     toolkit_ids: [],
     avatar: "",
   });
+  // V-C 装配线：工具绑定弹框状态（草稿勾选在弹框内暂存，点「确定」才写回 agentForm）
+  const [toolPickerOpen, setToolPickerOpen] = useState(false);
+  const [toolPickDraft, setToolPickDraft] = useState<string[]>([]);
+  const [toolQuery, setToolQuery] = useState("");
+  const [toolKindFilter, setToolKindFilter] = useState<"" | ToolkitItem["kind"]>("");
   const [sfxMuted, setSfxMutedState] = useState(() => loadSfxMuted());
   const [bgmMuted, setBgmMutedState] = useState(() => loadBgmMuted());
   const agentAvatarRef = useRef<HTMLInputElement | null>(null);
@@ -1787,6 +1794,12 @@ export default function App() {
     [agentList, agentSelectedId]
   );
 
+  // V2 名册网格数据源：按顶部分段过滤器筛可见性
+  const filteredAgents = useMemo(
+    () => (agentVisFilter === "all" ? agentList : agentList.filter((a) => a.visibility === agentVisFilter)),
+    [agentList, agentVisFilter]
+  );
+
   useEffect(() => {
     if ((view !== "tasks" && view !== "squad") || !token) return;
     api<{ tracks: PipelineTrackInfo[]; catalog?: PipelineStageInfo[] }>("/api/pipelines", { token })
@@ -1804,10 +1817,82 @@ export default function App() {
     });
   }
 
+  // ── V-C 装配线 · 工具绑定弹框 ──
+  // 打开时以当前已绑定为草稿底稿，弹框内增删只改草稿，确定才写回
+  function openToolPicker() {
+    playSfx("click");
+    setToolPickDraft(agentForm.toolkit_ids);
+    setToolQuery("");
+    setToolKindFilter("");
+    setToolPickerOpen(true);
+  }
+
+  function toggleToolDraft(id: string) {
+    setToolPickDraft((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }
+
+  // 确定绑定：草稿写回表单；取消 / Esc / 点遮罩则丢弃草稿
+  function confirmToolPick() {
+    setAgentForm((prev) => ({ ...prev, toolkit_ids: toolPickDraft }));
+    setToolPickerOpen(false);
+    playSfx("ok");
+  }
+
+  // 装配线导航：滚动到对应分段（01 身份 / 02 人设 / 03 装备 / 04 发布）
+  function jumpToAsm(anchor: string) {
+    document.getElementById(anchor)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  // 弹框打开期间：Esc 关闭 + 锁定背景滚动（App.tsx 中 KeyboardEvent 被 React 类型遮蔽，走 Event + key 断言）
+  useEffect(() => {
+    if (!toolPickerOpen) return undefined;
+    const onKey = (e: Event) => {
+      if ((e as { key?: string }).key === "Escape") setToolPickerOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = "";
+    };
+  }, [toolPickerOpen]);
+
   const enabledToolkit = useMemo(
     () => toolkitCatalog.filter((i) => i.enabled !== false),
     [toolkitCatalog]
   );
+  // 已选装备 id → 工具条目查找（id 可能指向已停用/已删除项，回退为仅显示 id）
+  const toolById = useMemo(() => new Map(enabledToolkit.map((t) => [t.id, t])), [enabledToolkit]);
+  // 弹框候选列表：类型过滤 + 名称/用途搜索
+  const pickerTools = useMemo(() => {
+    const q = toolQuery.trim().toLowerCase();
+    return enabledToolkit.filter(
+      (t) =>
+        (!toolKindFilter || t.kind === toolKindFilter) &&
+        (!q || t.name.toLowerCase().includes(q) || (t.summary || "").toLowerCase().includes(q))
+    );
+  }, [enabledToolkit, toolQuery, toolKindFilter]);
+  // V-C 装配线四段（label/hint 为 i18n key；anchor 对应表单分段 DOM id）
+  const ASM_STAGES: {
+    key: "identity" | "persona" | "gear" | "publish";
+    no: string;
+    en: string;
+    anchor: string;
+    label: string;
+    hint: string;
+  }[] = [
+    { key: "identity", no: "01", en: "IDENTITY", anchor: "wr-asm-identity", label: "wrSecIdentity", hint: "wrAsmIdentityHint" },
+    { key: "persona", no: "02", en: "PERSONA", anchor: "wr-asm-persona", label: "wrAsmPersona", hint: "wrAsmPersonaHint" },
+    { key: "gear", no: "03", en: "GEAR", anchor: "wr-asm-gear", label: "wrAsmGear", hint: "wrAsmGearHint" },
+    { key: "publish", no: "04", en: "PUBLISH", anchor: "wr-asm-publish", label: "wrAsmPublish", hint: "wrAsmPublishHint" },
+  ];
+  // 各分段完成态：驱动装配线导航圆点与底部「可发布」提示
+  const asmDone = {
+    identity: !!agentForm.title.trim(),
+    persona: !!agentForm.persona.trim(),
+    gear: agentForm.toolkit_ids.length > 0,
+    publish: !!agentForm.title.trim() && !!agentForm.persona.trim() && agentForm.toolkit_ids.length > 0,
+  };
   // 常驻预算：启用且 load=always 的条目数（每轮注入上下文的成本计数）
   const toolkitAlwaysCount = useMemo(
     () => toolkitCatalog.filter((i) => i.enabled !== false && i.load === "always").length,
@@ -4281,149 +4366,189 @@ export default function App() {
       )}
 
       {view === "agents" && (
-        <div className="deck-body workbench kb-layout">
-          <aside className="sidebar">
-            <div className="panel-label">{tr("forgeTitle")}</div>
-            <p className="kb-hint">{tr("forgeHint")}</p>
-            <button className="btn primary" type="button" onClick={startNewAgent}>
-              {tr("publishAgent")}
-            </button>
-            <div className="list">
-              {agentList.map((a) => (
-                <button
-                  key={a.id}
-                  type="button"
-                  className={`mission ${a.id === agentSelectedId && !agentEditing ? "active" : ""}`}
-                  onClick={() => {
-                    playSfx("click");
-                    setAgentEditing(false);
-                    setAgentSelectedId(a.id);
-                  }}
-                >
-                  <div className="mission-top">
-                    <RoleAvatar avatar={a.avatar} role={a.slot} title={a.title} size={28} />
-                    <span className="mission-id">{a.slot}</span>
-                    <span className="st">{a.visibility}</span>
-                  </div>
-                  <strong>{a.title}</strong>
-                  <span className="mission-stage">
-                    {a.summary || a.slug} · {tr("byAuthor")} {a.author_name}
-                  </span>
-                  {(a.toolkit_ids || []).length > 0 && (
-                    <div className="toolkit-pick">
-                      {(a.toolkit_ids || []).map((id) => {
-                        const item = toolkitCatalog.find((t) => t.id === id);
-                        return (
-                          <span key={id} className={`toolkit-chip on kind-${item?.kind || "tool"}`}>
-                            {item?.name || id.slice(0, 10)}
-                          </span>
-                        );
-                      })}
-                    </div>
-                  )}
-                </button>
-              ))}
-              {!agentList.length && <div className="empty-queue">{tr("emptyAgents")}</div>}
-            </div>
-          </aside>
-          <main className="main page-pad">
-            {agentEditing ? (
-              <form className="form kb-form" onSubmit={saveAgent}>
-                <h2 className="page-title">{agentSelectedId ? tr("editDoc") : tr("publishAgent")}</h2>
-                <div className="agent-avatar-row">
-                  <RoleAvatar
-                    avatar={agentForm.avatar || `preset:${agentForm.slot}`}
-                    role={agentForm.slot}
-                    title={agentForm.title || agentForm.slot}
-                    size={64}
-                  />
-                  <div className="agent-avatar-actions">
-                    <span className="panel-label">{tr("crewAvatarUpload")}</span>
-                    <div className="avatar-picker">
-                      {AVATAR_PRESET_OPTIONS.map((p) => (
-                        <RoleAvatar
-                          key={p.id}
-                          avatar={p.id}
-                          role={p.role}
-                          size={32}
-                          onClick={() => {
-                            playSfx("toggle");
-                            setAgentForm({ ...agentForm, avatar: p.id });
-                          }}
-                        />
-                      ))}
-                    </div>
-                    <button
-                      type="button"
-                      className="btn ghost"
-                      disabled={busy}
-                      onClick={() => {
-                        playSfx("click");
-                        agentAvatarRef.current?.click();
-                      }}
-                    >
-                      {tr("crewAvatarUpload")}
-                    </button>
-                    <input
-                      ref={agentAvatarRef}
-                      type="file"
-                      accept="image/*,.webp,image/webp"
-                      hidden
-                      onChange={(e) => {
-                        const f = e.target.files?.[0];
-                        e.target.value = "";
-                        void uploadPublishAvatar(f);
-                      }}
-                    />
-                  </div>
+        <div className="wr-page">
+          <header className="wr-page-head">
+            <h2>{tr("forgeTitle")}</h2>
+            <span className="wr-hint">{tr("forgeHint")}</span>
+            <div className="wr-head-right">
+              {!agentEditing && (
+                <div className="wr-seg">
+                  <button
+                    type="button"
+                    className={agentVisFilter === "all" ? "on" : ""}
+                    onClick={() => {
+                      playSfx("toggle");
+                      setAgentVisFilter("all");
+                    }}
+                  >
+                    {tr("wrFilterAll")} {agentList.length}
+                  </button>
+                  <button
+                    type="button"
+                    className={agentVisFilter === "public" ? "on" : ""}
+                    onClick={() => {
+                      playSfx("toggle");
+                      setAgentVisFilter("public");
+                    }}
+                  >
+                    {tr("visPublic")} {agentList.filter((a) => a.visibility === "public").length}
+                  </button>
+                  <button
+                    type="button"
+                    className={agentVisFilter === "private" ? "on" : ""}
+                    onClick={() => {
+                      playSfx("toggle");
+                      setAgentVisFilter("private");
+                    }}
+                  >
+                    {tr("visPrivate")} {agentList.filter((a) => a.visibility === "private").length}
+                  </button>
                 </div>
-                <label>
-                  <span>{tr("agentTitle")}</span>
-                  <input
-                    value={agentForm.title}
-                    onChange={(e) => setAgentForm({ ...agentForm, title: e.target.value })}
-                    required
-                  />
-                </label>
-                <label>
-                  <span>{tr("agentSlot")}</span>
-                  <select
-                    value={agentForm.slot}
-                    onChange={(e) => setAgentForm({ ...agentForm, slot: e.target.value as AgentSlot })}
+              )}
+              {!agentEditing && (
+                <button className="btn primary" type="button" onClick={startNewAgent}>
+                  {tr("publishAgent")}
+                </button>
+              )}
+            </div>
+          </header>
+          {agentEditing ? (
+            <>
+              <form className="form kb-form wr-agent-form wr-asm-form" onSubmit={saveAgent}>
+                <div className="wr-page-head">
+                  <button
+                    type="button"
+                    className="btn ghost wr-back"
+                    onClick={() => {
+                      playSfx("click");
+                      setAgentEditing(false);
+                      setAgentSelectedId(null);
+                    }}
                   >
-                    {AGENT_SLOTS.map((slot) => (
-                      <option key={slot} value={slot}>
-                        {tr(SLOT_I18N[slot])}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  <span>{tr("agentVisibility")}</span>
-                  <select
-                    value={agentForm.visibility}
-                    onChange={(e) => setAgentForm({ ...agentForm, visibility: e.target.value as Visibility })}
-                  >
-                    <option value="public">{tr("visPublic")}</option>
-                    <option value="private">{tr("visPrivate")}</option>
-                  </select>
-                </label>
-                <label>
-                  <span>{tr("agentSummary")}</span>
-                  <input
-                    value={agentForm.summary}
-                    onChange={(e) => setAgentForm({ ...agentForm, summary: e.target.value })}
-                  />
-                </label>
-                <label>
-                  <span>{tr("docTags")}</span>
-                  <input
-                    value={agentForm.tags}
-                    onChange={(e) => setAgentForm({ ...agentForm, tags: e.target.value })}
-                  />
-                </label>
-                <label>
-                  <span>{tr("agentPersona")}</span>
+                    ← {tr("wrBackToRoster")}
+                  </button>
+                  <h2>{agentSelectedId ? tr("editDoc") : tr("publishAgent")}</h2>
+                </div>
+
+                {/* V-C 装配线导航：圆点实时反映各分段完成态，点击滚动到对应分段 */}
+                <div className="wr-asm-pipeline">
+                  {ASM_STAGES.map((s) => (
+                    <button
+                      key={s.key}
+                      type="button"
+                      className={`wr-asm-stage${asmDone[s.key] ? " done" : ""}`}
+                      onClick={() => jumpToAsm(s.anchor)}
+                    >
+                      <span className="wr-no">{s.no} · {s.en}</span>
+                      <h4>{tr(s.label)}</h4>
+                      <p>{tr(s.hint)}</p>
+                      <span className="wr-dot" />
+                    </button>
+                  ))}
+                </div>
+
+                {/* 01 身份 */}
+                <section className="wr-card wr-asm-sec" id="wr-asm-identity">
+                  <div className="wr-sec-head asm"><span className="wr-no">01</span><b>{tr("wrSecIdentity")}</b></div>
+                  <div className="agent-avatar-row">
+                    <RoleAvatar
+                      avatar={agentForm.avatar || `preset:${agentForm.slot}`}
+                      role={agentForm.slot}
+                      title={agentForm.title || agentForm.slot}
+                      size={64}
+                    />
+                    <div className="agent-avatar-actions">
+                      <span className="panel-label">{tr("crewAvatarUpload")}</span>
+                      <div className="avatar-picker">
+                        {AVATAR_PRESET_OPTIONS.map((p) => (
+                          <RoleAvatar
+                            key={p.id}
+                            avatar={p.id}
+                            role={p.role}
+                            size={32}
+                            onClick={() => {
+                              playSfx("toggle");
+                              setAgentForm({ ...agentForm, avatar: p.id });
+                            }}
+                          />
+                        ))}
+                      </div>
+                      <button
+                        type="button"
+                        className="btn ghost"
+                        disabled={busy}
+                        onClick={() => {
+                          playSfx("click");
+                          agentAvatarRef.current?.click();
+                        }}
+                      >
+                        {tr("crewAvatarUpload")}
+                      </button>
+                      <input
+                        ref={agentAvatarRef}
+                        type="file"
+                        accept="image/*,.webp,image/webp"
+                        hidden
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          e.target.value = "";
+                          void uploadPublishAvatar(f);
+                        }}
+                      />
+                    </div>
+                  </div>
+                  <label className="wr-field">
+                    <span>{tr("agentTitle")}</span>
+                    <input
+                      value={agentForm.title}
+                      onChange={(e) => setAgentForm({ ...agentForm, title: e.target.value })}
+                      required
+                    />
+                  </label>
+                  <div className="wr-form-row">
+                    <label className="wr-field">
+                      <span>{tr("agentSlot")}</span>
+                      <select
+                        value={agentForm.slot}
+                        onChange={(e) => setAgentForm({ ...agentForm, slot: e.target.value as AgentSlot })}
+                      >
+                        {AGENT_SLOTS.map((slot) => (
+                          <option key={slot} value={slot}>
+                            {tr(SLOT_I18N[slot])}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="wr-field">
+                      <span>{tr("agentVisibility")}</span>
+                      <select
+                        value={agentForm.visibility}
+                        onChange={(e) => setAgentForm({ ...agentForm, visibility: e.target.value as Visibility })}
+                      >
+                        <option value="public">{tr("visPublic")}</option>
+                        <option value="private">{tr("visPrivate")}</option>
+                      </select>
+                    </label>
+                  </div>
+                  <label className="wr-field">
+                    <span>{tr("docTags")}</span>
+                    <input
+                      value={agentForm.tags}
+                      onChange={(e) => setAgentForm({ ...agentForm, tags: e.target.value })}
+                    />
+                  </label>
+                </section>
+
+                {/* 02 人设 */}
+                <section className="wr-card wr-asm-sec" id="wr-asm-persona">
+                  <div className="wr-sec-head asm"><span className="wr-no">02</span><b>{tr("wrAsmPersona")}</b></div>
+                  <label className="wr-field">
+                    <span>{tr("agentSummary")}</span>
+                    <input
+                      value={agentForm.summary}
+                      onChange={(e) => setAgentForm({ ...agentForm, summary: e.target.value })}
+                    />
+                  </label>
                   {/* persona 编辑框：右下角浮动增强按钮，增强中显示浮层 */}
                   <span style={{ position: "relative", display: "block" }}>
                     {agentPersonaBusy ? (
@@ -4468,56 +4593,199 @@ export default function App() {
                       required
                     />
                   </span>
-                </label>
-                <div className="loadout-block">
-                  <span className="loadout-label">{tr("agentToolkits")}</span>
-                  <p className="loadout-hint">{tr("agentToolkitsHint")}</p>
-                  {enabledToolkit.length === 0 ? (
-                    <p className="loadout-hint">{tr("noToolkitYet")}</p>
-                  ) : (
-                    <div className="toolkit-pick">
-                      {enabledToolkit.map((item) => {
-                        const on = agentForm.toolkit_ids.includes(item.id);
-                        return (
-                          <button
-                            key={item.id}
-                            type="button"
-                            className={`toolkit-chip kind-${item.kind} ${on ? "on" : ""}`}
-                            onClick={() => toggleAgentFormToolkit(item.id)}
-                            title={item.summary || item.name}
-                          >
-                            {item.kind}/{item.name}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                  <div className="loadout-slot-actions">
-                    <span className="muted">
-                      {tr("toolsSelected")} {agentForm.toolkit_ids.length}
-                    </span>
+                </section>
+
+                {/* 03 装备：已选工具卡片网格 + 弹框选择 CTA，确定后回显、可再次修改 */}
+                <section className="wr-card wr-asm-sec" id="wr-asm-gear">
+                  <div className="wr-sec-head asm">
+                    <span className="wr-no">03</span>
+                    <b>{tr("wrAsmGear")}</b>
                     {agentForm.toolkit_ids.length > 0 && (
-                      <button
-                        type="button"
-                        className="btn linkish"
-                        onClick={() => setAgentForm({ ...agentForm, toolkit_ids: [] })}
-                      >
-                        {tr("clearTools")}
-                      </button>
+                      <span className="wr-asm-count">
+                        {tr("toolsSelected")} {agentForm.toolkit_ids.length}
+                      </span>
                     )}
                   </div>
-                </div>
-                <div className="kb-actions">
-                  <button className="btn primary" type="submit" disabled={busy}>
-                    {tr("saveDoc")}
-                  </button>
+                  <div className={`wr-gear-zone${agentForm.toolkit_ids.length > 0 ? " has" : ""}`}>
+                    {agentForm.toolkit_ids.length > 0 && (
+                      <div className="wr-gear-grid">
+                        {agentForm.toolkit_ids.map((id) => {
+                          const item = toolById.get(id);
+                          return (
+                            <div className="wr-gear-card" key={id}>
+                              {item && (
+                                <span className={`wr-gear-kb kind-${item.kind}`}>
+                                  {item.kind === "mcp"
+                                    ? tr("toolKindMcp")
+                                    : item.kind === "skill"
+                                      ? tr("toolKindSkill")
+                                      : tr("toolKindTool")}
+                                </span>
+                              )}
+                              <b>{item ? `${item.kind}/${item.name}` : id}</b>
+                              {item?.summary && <p>{item.summary}</p>}
+                              <button
+                                type="button"
+                                className="wr-gear-x"
+                                title={tr("clearTools")}
+                                onClick={() => toggleAgentFormToolkit(id)}
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    <button type="button" className="wr-pick-cta" onClick={openToolPicker}>
+                      <span className="wr-plus">＋</span>
+                      {tr("wrGearCta")}
+                      <small>{tr("wrGearCtaHint")}</small>
+                    </button>
+                  </div>
+                </section>
+
+                {/* 04 发布 */}
+                <section className="wr-card wr-asm-sec" id="wr-asm-publish">
+                  <div className="wr-sec-head asm"><span className="wr-no">04</span><b>{tr("wrAsmPublish")}</b></div>
+                  <p className="wr-asm-note">{tr("wrAsmPublishNote")}</p>
+                </section>
+
+                {/* 底部固定操作条：装配完成度提示 + 保存/取消 */}
+                <div className="wr-publish-bar">
+                  <span className={`wr-ready${asmDone.publish ? " ok" : ""}`}>
+                    {asmDone.publish ? `✓ ${tr("wrAsmReady")}` : tr("wrAsmWip")}
+                  </span>
+                  <span className="wr-bar-spacer" />
                   <button className="btn ghost" type="button" onClick={() => setAgentEditing(false)}>
                     {tr("cancel")}
                   </button>
+                  <button className="btn primary" type="submit" disabled={busy || !asmDone.publish}>
+                    {tr("saveDoc")}
+                  </button>
                 </div>
               </form>
-            ) : agentSelected ? (
-              <article className="kb-article">
+
+              {/* 工具绑定弹框：宽幅双栏（左浏览勾选 / 右已选实时对照），确定才写回表单 */}
+              {toolPickerOpen && (
+                <div
+                  className="wr-tool-overlay"
+                  onClick={(e) => {
+                    if (e.target === e.currentTarget) setToolPickerOpen(false);
+                  }}
+                >
+                  <div className="wr-tool-modal" role="dialog" aria-modal="true">
+                    <div className="wr-tool-head">
+                      <h3>{tr("wrPickTitle")}</h3>
+                      <p>{tr("wrPickHint")}</p>
+                    </div>
+                    <div className="wr-tool-body">
+                      <div className="wr-tool-browse">
+                        <div className="wr-tool-tools">
+                          <input
+                            className="wr-tool-search"
+                            value={toolQuery}
+                            placeholder={tr("wrSearchTool")}
+                            onChange={(e) => setToolQuery(e.target.value)}
+                          />
+                          <div className="wr-seg">
+                            {(["", "tool", "skill", "mcp"] as const).map((k) => (
+                              <button
+                                key={k || "all"}
+                                type="button"
+                                className={toolKindFilter === k ? "on" : ""}
+                                onClick={() => setToolKindFilter(k)}
+                              >
+                                {k === ""
+                                  ? tr("wrFilterAll")
+                                  : k === "tool"
+                                    ? tr("toolKindTool")
+                                    : k === "skill"
+                                      ? tr("toolKindSkill")
+                                      : tr("toolKindMcp")}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="wr-tool-list">
+                          {pickerTools.length === 0 ? (
+                            <p className="wr-tool-empty">{tr("noToolkitYet")}</p>
+                          ) : (
+                            pickerTools.map((item) => {
+                              const on = toolPickDraft.includes(item.id);
+                              return (
+                                <button
+                                  key={item.id}
+                                  type="button"
+                                  className={`wr-tool-item${on ? " picked" : ""}`}
+                                  title={item.summary || item.name}
+                                  onClick={() => toggleToolDraft(item.id)}
+                                >
+                                  <span className="wr-tool-info">
+                                    <b>{item.kind}/{item.name}</b>
+                                    {item.summary && <p>{item.summary}</p>}
+                                  </span>
+                                  <span className="wr-tick">✓</span>
+                                </button>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+                      <div className="wr-tool-picked">
+                        <div className="wr-pane-head">
+                          {tr("wrPicked")} <b>{toolPickDraft.length}</b>
+                        </div>
+                        <div className="wr-picked-list">
+                          {toolPickDraft.length === 0 ? (
+                            <p className="wr-tool-empty">—</p>
+                          ) : (
+                            toolPickDraft.map((id) => {
+                              const item = toolById.get(id);
+                              return (
+                                <div className="wr-picked-row" key={id}>
+                                  <b>{item ? `${item.kind}/${item.name}` : id}</b>
+                                  <button type="button" title={tr("clearTools")} onClick={() => toggleToolDraft(id)}>
+                                    ✕
+                                  </button>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="wr-tool-foot">
+                      <span className="wr-willbind">
+                        {tr("wrWillBind")} <b>{toolPickDraft.length}</b> {tr("wrItemsUnit")}
+                      </span>
+                      <span className="wr-bar-spacer" />
+                      <button type="button" className="btn ghost" onClick={() => setToolPickerOpen(false)}>
+                        {tr("cancel")}
+                      </button>
+                      <button type="button" className="btn primary" onClick={confirmToolPick}>
+                        {tr("saveDoc")}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </>
+          ) : agentSelected ? (
+              <>
+                <div className="wr-head-right" style={{ marginBottom: 10 }}>
+                  <button
+                    className="btn ghost wr-back"
+                    type="button"
+                    onClick={() => {
+                      playSfx("click");
+                      setAgentSelectedId(null);
+                    }}
+                  >
+                    ← {tr("wrBackToRoster")}
+                  </button>
+                </div>
+                <article className="kb-article">
                 <div className="topbar">
                   <div>
                     <p className="eyebrow">
@@ -4555,10 +4823,50 @@ export default function App() {
                   {tr("byAuthor")} {agentSelected.author_name} · {agentSelected.updated_at}
                 </p>
               </article>
+              </>
             ) : (
-              <div className="empty-queue">{tr("emptyAgents")}</div>
+              <div className="wr-roster">
+                {filteredAgents.map((a) => (
+                  <button
+                    key={a.id}
+                    type="button"
+                    className="wr-role-card"
+                    onClick={() => {
+                      playSfx("click");
+                      setAgentSelectedId(a.id);
+                    }}
+                  >
+                    <span className="wr-top">
+                      <RoleAvatar avatar={a.avatar} role={a.slot} title={a.title} size={34} />
+                      <span className="wr-slot">{a.slot}</span>
+                      <span className={`st wr-vis ${a.visibility === "public" ? "green" : "copper"}`}>
+                        {a.visibility}
+                      </span>
+                    </span>
+                    <b>{a.title}</b>
+                    <p>
+                      {a.summary || a.slug} · {tr("byAuthor")} {a.author_name}
+                    </p>
+                    {(a.toolkit_ids || []).length > 0 && (
+                      <span className="wr-tools">
+                        {(a.toolkit_ids || []).map((id) => {
+                          const item = toolkitCatalog.find((t) => t.id === id);
+                          return (
+                            <span key={id} className={`toolkit-chip on kind-${item?.kind || "tool"}`}>
+                              {item?.name || id.slice(0, 10)}
+                            </span>
+                          );
+                        })}
+                      </span>
+                    )}
+                  </button>
+                ))}
+                {!agentList.length && <div className="empty-queue">{tr("emptyAgents")}</div>}
+                <button type="button" className="wr-role-card wr-new" onClick={startNewAgent}>
+                  ＋ {tr("publishAgent")}
+                </button>
+              </div>
             )}
-          </main>
         </div>
       )}
 
@@ -5590,7 +5898,12 @@ export default function App() {
 
       {view === "decisions" && (
         <main className="main page-pad">
-          <DecisionCenter token={token} lang={lang} />
+          <DecisionCenter
+            token={token}
+            lang={lang}
+            isAdmin={user.role === "admin"}
+            initiativeTitles={Object.fromEntries(items.map((i) => [i.id, i.title]))}
+          />
         </main>
       )}
 

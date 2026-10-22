@@ -5983,3 +5983,1103 @@ tr:hover td {
     flex-wrap: wrap;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════
+   V2 作战室 · 角色工坊/角色锻造/小群/决策中心
+   （设计稿 design-demos/role-pages-v2-war-room.html，用户已选定）
+   类名一律 wr- 前缀，避免与既有 .rail/.pipeline-* 等冲突
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── 页面骨架：全宽页头 + 分段过滤器（与其他页面一致，不满屏留白） ── */
+.wr-page {
+  padding: 20px 22px 56px;
+}
+.wr-page-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+.wr-page-head h2 {
+  font-family: var(--serif);
+  font-size: 1.32rem;
+  font-weight: 600;
+}
+.wr-page-head .wr-hint {
+  font-size: 0.76rem;
+  color: var(--muted);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.wr-head-right {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.wr-seg {
+  display: inline-flex;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 3px;
+  gap: 2px;
+}
+.wr-seg button {
+  border: none;
+  background: none;
+  padding: 5px 11px;
+  border-radius: 6px;
+  font-size: 0.76rem;
+  color: var(--muted);
+  transition: color 0.15s ease;
+}
+.wr-seg button.on {
+  color: var(--text);
+  background: var(--panel);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+.wr-back {
+  font-size: 0.78rem;
+}
+
+/* ── 角色工坊：名册网格 ── */
+.wr-roster {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 12px;
+}
+.wr-role-card {
+  text-align: left;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 15px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+}
+.wr-role-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(26, 31, 54, 0.08);
+  border-color: var(--line-hot);
+}
+.wr-role-card .wr-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.wr-role-card .wr-slot {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  color: var(--copper);
+}
+.wr-role-card .wr-vis {
+  margin-left: auto;
+}
+.wr-role-card b {
+  font-size: 0.92rem;
+  font-family: var(--serif);
+}
+.wr-role-card p {
+  font-size: 0.76rem;
+  color: var(--muted);
+  line-height: 1.55;
+  flex: 1;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.wr-role-card .wr-tools {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.wr-role-card.wr-new {
+  border-style: dashed;
+  background: none;
+  align-items: center;
+  justify-content: center;
+  min-height: 150px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+.wr-role-card.wr-new:hover {
+  color: var(--text);
+  border-color: var(--line-hot);
+  box-shadow: none;
+}
+
+/* ── 角色锻造：横向流水线 ── */
+.wr-pipeline {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  margin-bottom: 20px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--panel);
+}
+.wr-stage {
+  padding: 13px 16px;
+  border-right: 1px solid var(--line);
+  position: relative;
+}
+.wr-stage:last-child {
+  border-right: none;
+}
+.wr-stage .wr-no {
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  color: var(--muted);
+  letter-spacing: 0.12em;
+}
+.wr-stage h4 {
+  font-size: 0.82rem;
+  margin: 6px 0 4px;
+}
+.wr-stage p {
+  font-size: 0.7rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.wr-stage .wr-dot {
+  position: absolute;
+  top: 15px;
+  right: 14px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--line-hot);
+}
+.wr-stage.done .wr-dot {
+  background: var(--signal);
+}
+.wr-stage.hot {
+  background: color-mix(in srgb, var(--warn) 10%, var(--panel));
+}
+.wr-stage.hot .wr-no {
+  color: var(--warn);
+}
+.wr-stage.hot .wr-dot {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 25%, transparent);
+}
+.wr-cap-row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.wr-cap-row input {
+  flex: 1;
+  border: 1px solid var(--line-hot);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 0.82rem;
+  background: var(--panel-2);
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+.wr-cap-row input:focus {
+  border-color: var(--copper);
+}
+.wr-forge-body {
+  display: grid;
+  grid-template-columns: 1.45fr 1fr;
+  gap: 16px;
+  align-items: start;
+}
+.wr-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 18px 20px;
+}
+.wr-card .wr-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.wr-side-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.wr-side-card h4 {
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+.wr-issue {
+  display: flex;
+  gap: 8px;
+  font-size: 0.78rem;
+  color: var(--danger);
+  margin-bottom: 7px;
+  line-height: 1.5;
+}
+.wr-sim-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.78rem;
+  padding: 7px 0;
+  border-top: 1px solid var(--line);
+}
+.wr-sim-row:first-of-type {
+  border-top: none;
+}
+.wr-sim-row .wr-score {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--warn);
+}
+.wr-contract-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.78rem;
+  padding: 4px 0;
+}
+.wr-contract-row .k {
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  flex: none;
+  padding-top: 2px;
+}
+.wr-history {
+  margin-top: 20px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.wr-history .wr-h {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 10px;
+  background: var(--panel);
+}
+/* 锻造草稿卡内的编辑字段栈 */
+.wr-field-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.wr-field {
+  display: block;
+}
+.wr-field > span {
+  display: block;
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.wr-field input,
+.wr-field textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 0.82rem;
+  background: var(--panel-2);
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+.wr-field input:focus,
+.wr-field textarea:focus {
+  border-color: var(--copper);
+}
+.wr-field textarea {
+  min-height: 96px;
+  resize: vertical;
+  line-height: 1.7;
+}
+
+/* ── 小群：窄轨道 + 对话时间线 ── */
+.wr-subroom-layout {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: 16px;
+  align-items: start;
+}
+.wr-rail-item {
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  border-radius: 10px;
+  padding: 11px 13px;
+  margin-bottom: 8px;
+  transition: border-color 0.15s ease;
+}
+.wr-rail-item:hover {
+  border-color: var(--line-hot);
+}
+.wr-rail-item.active {
+  border-color: var(--copper);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--copper) 12%, transparent);
+}
+.wr-rail-item .wr-t {
+  font-size: 0.78rem;
+  font-weight: 500;
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  align-items: center;
+}
+.wr-rail-item .wr-g {
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin-top: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 长 role key（如 eng_backend → eng_backend）换行时不再挤压状态标签 */
+.wr-rail-item .wr-tt {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+.wr-rail-item .wr-t .subroom-status {
+  flex: none;
+}
+.wr-timeline {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 20px 24px;
+}
+.wr-timeline .wr-tl-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.wr-timeline .wr-tl-head b {
+  font-family: var(--serif);
+  font-size: 1.05rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.wr-budget {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0 6px;
+}
+.wr-budget .wr-track {
+  flex: 1;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--deep);
+  overflow: hidden;
+}
+.wr-budget .wr-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--copper);
+  transition: width 0.3s ease;
+}
+.wr-budget .wr-lab {
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  color: var(--muted);
+  flex: none;
+}
+.wr-msg {
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+.wr-msg:first-of-type {
+  border-top: none;
+}
+.wr-msg .who {
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+.wr-msg .who small {
+  font-weight: 400;
+  color: var(--copper);
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  margin-left: 6px;
+}
+.wr-msg p {
+  font-size: 0.82rem;
+  line-height: 1.7;
+  margin-top: 4px;
+  white-space: pre-wrap;
+}
+.wr-conclusion-bar {
+  margin-top: 14px;
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  background: var(--signal-dim);
+  border: 1px solid color-mix(in srgb, var(--signal) 35%, transparent);
+  border-radius: 10px;
+  padding: 13px 16px;
+}
+.wr-conclusion-bar .k {
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.14em;
+  color: var(--signal);
+  flex: none;
+  padding-top: 3px;
+}
+.wr-conclusion-bar p {
+  font-size: 0.82rem;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+/* ── 决策中心：倒计时收件箱 ── */
+.wr-dec-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+.wr-urgency {
+  height: 3px;
+  display: flex;
+}
+.wr-urgency i {
+  flex: 1;
+}
+.wr-dec-card .wr-inner {
+  padding: 16px 20px;
+}
+.wr-dec-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 9px;
+  flex-wrap: wrap;
+}
+.wr-dec-head .wr-id {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+.wr-dec-head .wr-clock {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--warn);
+}
+.wr-dec-head .wr-clock.calm {
+  color: var(--signal);
+}
+.wr-dec-q {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin-bottom: 6px;
+  line-height: 1.6;
+}
+.wr-dec-ctx {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-bottom: 10px;
+  line-height: 1.6;
+}
+.wr-dec-meta {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--muted);
+  margin-bottom: 12px;
+  line-height: 1.7;
+}
+.wr-answer-row {
+  display: flex;
+  gap: 10px;
+}
+.wr-answer-row input {
+  flex: 1;
+  border: 1px solid var(--line-hot);
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 0.82rem;
+  background: var(--panel-2);
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+.wr-answer-row input:focus {
+  border-color: var(--copper);
+}
+.wr-dec-card.closed {
+  opacity: 0.75;
+}
+.wr-dec-card.closed .wr-inner {
+  padding: 12px 20px;
+}
+.wr-dec-card.closed .wr-dec-ctx {
+  margin-bottom: 0;
+}
+
+/* 决策分组：按任务 / 按人（管理员）聚合 */
+.wr-group {
+  margin-bottom: 22px;
+}
+.wr-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 10px;
+}
+.wr-group-head b {
+  font-family: var(--serif);
+  font-size: 0.98rem;
+}
+.wr-group-head .wr-group-id {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+.wr-group-head .wr-group-count {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+.wr-group-head .wr-group-count .hot {
+  color: var(--warn);
+}
+.wr-subgroup-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 14px 0 8px;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+.wr-subgroup-head::before {
+  content: "";
+  width: 14px;
+  height: 1px;
+  background: var(--line-hot);
+  align-self: center;
+}
+.wr-person-name {
+  font-size: 0.95rem;
+  font-weight: 600;
+  font-family: var(--mono);
+}
+
+/* 发布角色表单: 卡片式双栏（左身份 / 右人设+工具） */
+.wr-agent-form .wr-page-head {
+  margin-bottom: 16px;
+}
+.wr-agent-form .wr-page-head h2 {
+  font-family: var(--serif);
+  font-size: 1.2rem;
+  font-weight: 600;
+}
+.wr-sec-head {
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+.wr-form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.wr-agent-form .wr-field select {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 0.82rem;
+  background: var(--panel-2);
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+.wr-agent-form .wr-field select:focus {
+  border-color: var(--copper);
+}
+.wr-agent-form .agent-avatar-row {
+  margin-bottom: 14px;
+}
+.wr-agent-form .wr-field {
+  margin-bottom: 12px;
+}
+.wr-agent-form .wr-field:last-child {
+  margin-bottom: 0;
+}
+.wr-agent-form .wr-side-stack .loadout-block {
+  margin: 0 0 14px;
+}
+
+/* ── V-C 装配线：发布角色页 01→04 分段导航 + 工具绑定弹框 ── */
+/* 底部有固定操作条，表单底部留出等高空间防遮挡 */
+.wr-asm-form {
+  padding-bottom: 76px;
+}
+.wr-asm-pipeline {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--panel);
+  margin-bottom: 14px;
+}
+.wr-asm-stage {
+  padding: 12px 16px;
+  border: none;
+  border-right: 1px solid var(--line);
+  position: relative;
+  text-align: left;
+  background: none;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.wr-asm-stage:last-child {
+  border-right: none;
+}
+.wr-asm-stage:hover {
+  background: var(--panel-2);
+}
+.wr-asm-stage .wr-no {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+}
+.wr-asm-stage h4 {
+  font-size: 0.8rem;
+  margin: 5px 0 3px;
+}
+.wr-asm-stage p {
+  font-size: 0.66rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+.wr-asm-stage .wr-dot {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--line-hot);
+  transition: background 0.2s ease;
+}
+.wr-asm-stage.done .wr-dot {
+  background: var(--signal);
+}
+.wr-asm-sec {
+  margin-bottom: 14px;
+}
+/* 分段标题：mono 序号 + serif 段名（覆盖 .wr-sec-head 的纯 mono 基础样式） */
+.wr-sec-head.asm {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-family: var(--serif);
+  font-size: 0.98rem;
+  color: var(--text);
+  letter-spacing: 0;
+}
+.wr-sec-head.asm .wr-no {
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.14em;
+  color: var(--copper);
+}
+.wr-asm-count {
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  color: var(--muted);
+  margin-left: auto;
+}
+.wr-gear-zone {
+  border: 1px dashed var(--line-hot);
+  border-radius: 12px;
+  padding: 14px;
+}
+.wr-gear-zone.has {
+  border-style: solid;
+}
+.wr-gear-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 9px;
+  margin-bottom: 12px;
+}
+.wr-gear-card {
+  position: relative;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  border-radius: 10px;
+  padding: 11px 13px;
+}
+.wr-gear-card b {
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  display: block;
+  word-break: break-all;
+  padding-right: 20px;
+}
+.wr-gear-card p {
+  font-size: 0.68rem;
+  color: var(--muted);
+  margin-top: 4px;
+  line-height: 1.45;
+}
+.wr-gear-kb {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.08em;
+  padding: 2px 7px;
+  border-radius: 5px;
+  border: 1px solid var(--line-hot);
+  color: var(--muted);
+  margin-bottom: 7px;
+  text-transform: uppercase;
+}
+.wr-gear-kb.kind-skill {
+  color: var(--signal);
+  border-color: color-mix(in srgb, var(--signal) 40%, transparent);
+  background: var(--signal-dim);
+}
+.wr-gear-kb.kind-mcp {
+  color: var(--copper);
+  border-color: color-mix(in srgb, var(--copper) 40%, transparent);
+}
+.wr-gear-x {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 0.82rem;
+  padding: 2px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.wr-gear-x:hover {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+.wr-pick-cta {
+  width: 100%;
+  border: 1px dashed var(--line-hot);
+  background: none;
+  border-radius: 10px;
+  padding: 16px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+.wr-pick-cta:hover {
+  border-color: var(--copper);
+  color: var(--copper);
+}
+.wr-pick-cta .wr-plus {
+  display: block;
+  font-family: var(--mono);
+  font-size: 1.2rem;
+  margin-bottom: 4px;
+}
+.wr-pick-cta small {
+  display: block;
+  font-size: 0.68rem;
+  margin-top: 4px;
+  opacity: 0.8;
+}
+.wr-publish-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 22px;
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  backdrop-filter: blur(8px);
+}
+.wr-publish-bar .wr-ready {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.wr-publish-bar .wr-ready.ok {
+  color: var(--signal);
+}
+.wr-bar-spacer {
+  flex: 1;
+}
+
+/* 工具绑定弹框：宽幅双栏（左浏览勾选 / 右已选实时对照） */
+.wr-tool-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 14, 24, 0.5);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 6vh 20px 20px;
+  z-index: 100;
+}
+.wr-tool-modal {
+  width: min(860px, 100%);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line-hot);
+  border-radius: 14px;
+  box-shadow: 0 24px 64px rgba(10, 14, 24, 0.3);
+  overflow: hidden;
+  animation: wr-pop 0.18s ease;
+}
+@keyframes wr-pop {
+  from {
+    transform: translateY(10px) scale(0.98);
+    opacity: 0;
+  }
+}
+.wr-tool-head {
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.wr-tool-head h3 {
+  font-family: var(--serif);
+  font-size: 1.08rem;
+}
+.wr-tool-head p {
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin-top: 3px;
+}
+.wr-tool-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1.5fr 1fr;
+  min-height: 0;
+}
+.wr-tool-browse {
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.wr-tool-tools {
+  padding: 12px 16px 0;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.wr-tool-search {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 0.8rem;
+  background: var(--panel-2);
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+.wr-tool-search:focus {
+  border-color: var(--copper);
+}
+.wr-tool-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 16px 14px;
+}
+.wr-tool-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  border-radius: 9px;
+  padding: 9px 11px;
+  margin-bottom: 7px;
+  cursor: pointer;
+  transition: border-color 0.12s ease;
+}
+.wr-tool-item:hover {
+  border-color: var(--line-hot);
+}
+.wr-tool-item.picked {
+  border-color: var(--signal);
+  box-shadow: 0 0 0 3px var(--signal-dim);
+}
+.wr-tool-info {
+  flex: 1;
+  min-width: 0;
+}
+.wr-tool-info b {
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  display: block;
+}
+.wr-tool-info p {
+  font-size: 0.66rem;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.wr-tick {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  border: 1px solid var(--line-hot);
+  display: grid;
+  place-items: center;
+  font-size: 0.66rem;
+  color: transparent;
+}
+.wr-tool-item.picked .wr-tick {
+  background: var(--signal);
+  border-color: var(--signal);
+  color: #fff;
+}
+.wr-tool-picked {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--panel-2);
+}
+.wr-pane-head {
+  padding: 12px 16px 8px;
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+}
+.wr-pane-head b {
+  color: var(--copper);
+}
+.wr-picked-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 16px 14px;
+}
+.wr-picked-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+}
+.wr-picked-row b {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  word-break: break-all;
+}
+.wr-picked-row button {
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 0.78rem;
+  padding: 1px 5px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.wr-picked-row button:hover {
+  color: var(--danger);
+}
+.wr-tool-empty {
+  font-size: 0.72rem;
+  color: var(--muted);
+  text-align: center;
+  padding: 18px 0;
+}
+.wr-tool-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 20px;
+  border-top: 1px solid var(--line);
+}
+.wr-willbind {
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+.wr-willbind b {
+  color: var(--signal);
+}
+
+@media (max-width: 900px) {
+  .wr-asm-pipeline {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .wr-asm-stage {
+    border-bottom: 1px solid var(--line);
+  }
+  .wr-tool-body {
+    grid-template-columns: 1fr;
+  }
+  .wr-tool-picked {
+    max-height: 30vh;
+  }
+}
+
+@media (max-width: 900px) {
+  .wr-pipeline {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .wr-stage:nth-child(2) {
+    border-right: none;
+  }
+  .wr-stage:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--line);
+  }
+  .wr-forge-body,
+  .wr-subroom-layout {
+    grid-template-columns: 1fr;
+  }
+}
