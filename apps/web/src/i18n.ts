@@ -328,7 +328,6 @@ const dict = {
     wrAsmPublishNote:
       "发布后角色进入名册，任务组器可按编制岗位点名；公开角色对全队可见，私有角色仅自己可用。发布前可随时回到上方分段修改。",
     wrAsmReady: "装配完成 · 可发布",
-    wrAsmWip: "装配中 · 填写身份并至少绑定一件装备",
     wrGearCta: "从工具箱选择装备",
     wrGearCtaHint: "确定后回显于此，可随时再次修改",
     wrPickTitle: "从工具箱选择装备",
@@ -782,7 +781,6 @@ const dict = {
     wrAsmPublishNote:
       "Published agents join the roster and can be picked by slot at mission intake. Public agents are visible to the whole team; private ones only to you. You can revisit any section before publishing.",
     wrAsmReady: "Assembled · ready to publish",
-    wrAsmWip: "Assembling · fill identity and bind at least one item",
     wrGearCta: "Pick gear from toolkit",
     wrGearCtaHint: "Shown here after confirm; edit anytime",
     wrPickTitle: "Pick gear from toolkit",

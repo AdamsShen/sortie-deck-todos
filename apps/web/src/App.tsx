@@ -1839,8 +1839,19 @@ export default function App() {
   }
 
   // 装配线导航：滚动到对应分段（01 身份 / 02 人设 / 03 装备 / 04 发布）
+  // 不用 scrollIntoView——它会同时滚动多层祖先容器，容易把滚动状态搞乱；
+  // 改为在主滚动容器 .main 上按视口差值设置 scrollTop，滚动后仍可自由上下滑
   function jumpToAsm(anchor: string) {
-    document.getElementById(anchor)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    const el = document.getElementById(anchor);
+    if (!el) return;
+    const container = el.closest(".main");
+    if (!container) {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+    const cRect = container.getBoundingClientRect();
+    const eRect = el.getBoundingClientRect();
+    container.scrollTo({ top: container.scrollTop + (eRect.top - cRect.top) - 12, behavior: "smooth" });
   }
 
   // 弹框打开期间：Esc 关闭 + 锁定背景滚动（App.tsx 中 KeyboardEvent 被 React 类型遮蔽，走 Event + key 断言）
@@ -4366,7 +4377,9 @@ export default function App() {
       )}
 
       {view === "agents" && (
-        <div className="wr-page">
+        /* 角色工坊视图：与其他页面一样包进 .main 滚动容器（.wr-page 只负责内边距），
+           否则页面内容超出视口时没有可滚动容器，整页卡死 */
+        <main className="main page-pad wr-page">
           <header className="wr-page-head">
             <h2>{tr("forgeTitle")}</h2>
             <span className="wr-hint">{tr("forgeHint")}</span>
@@ -4651,16 +4664,16 @@ export default function App() {
                   <p className="wr-asm-note">{tr("wrAsmPublishNote")}</p>
                 </section>
 
-                {/* 底部固定操作条：装配完成度提示 + 保存/取消 */}
+                {/* 底部固定操作条：完成时给正向提示，不做强制拦截 */}
                 <div className="wr-publish-bar">
-                  <span className={`wr-ready${asmDone.publish ? " ok" : ""}`}>
-                    {asmDone.publish ? `✓ ${tr("wrAsmReady")}` : tr("wrAsmWip")}
-                  </span>
+                  {asmDone.publish && (
+                    <span className="wr-ready ok">✓ {tr("wrAsmReady")}</span>
+                  )}
                   <span className="wr-bar-spacer" />
                   <button className="btn ghost" type="button" onClick={() => setAgentEditing(false)}>
                     {tr("cancel")}
                   </button>
-                  <button className="btn primary" type="submit" disabled={busy || !asmDone.publish}>
+                  <button className="btn primary" type="submit" disabled={busy}>
                     {tr("saveDoc")}
                   </button>
                 </div>
@@ -4867,7 +4880,7 @@ export default function App() {
                 </button>
               </div>
             )}
-        </div>
+        </main>
       )}
 
       {view === "toolkit" && (
