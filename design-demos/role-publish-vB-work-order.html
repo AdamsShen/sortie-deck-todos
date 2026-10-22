@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<!--
+  Sortie Deck · 发布角色重设计 V-B「工单双栏」
+  ============================================================
+  Assumptions:
+  1. 同 V-A：只重做「发布角色」页，沿用 V2 作战室语言；mock 工具数据对齐 ToolkitItem。
+  2. 核心交互：弹框选择 → 确定回显 → 可再次修改（与 V-A 相同契约）。
+  3. 变体差异（对比 V-A/V-C）：左侧「工单式」完整表单（mono 编号分区），
+     右侧 300px 常驻「已选装备」侧栏（sticky，随选择即时更新，含类型统计），
+     弹框 640px、按类型分组渲染，强调「浏览 → 勾选」的批量感。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sortie Deck · 发布角色 V-B 工单双栏</title>
+<style>
+  :root {
+    --void: #f6f9fc; --deep: #edf1f7; --panel: #ffffff; --panel-2: #f8fafd;
+    --line: #e3e8ee; --line-hot: #cbd2dc; --text: #1a1f36; --muted: #697386;
+    --signal: #0e9f6e; --signal-dim: #dff2e9; --copper: #3b5bdb; --danger: #c9503a;
+    --warn: #b7791f; --warn-dim: #fdf3e0;
+    --serif: "Songti SC", "Noto Serif SC", "Source Han Serif SC", Georgia, serif;
+    --font: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  [data-theme="ink"] {
+    --void: #171a21; --deep: #1c2029; --panel: #20242d; --panel-2: #262b35;
+    --line: #32363f; --line-hot: #454a55; --text: #ece9e1; --muted: #8b8a80;
+    --signal: #3fd68f; --signal-dim: #24422f; --copper: #7b96f0; --danger: #e57760;
+    --warn: #e2b04c; --warn-dim: #3a3222;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { font-family: var(--font); color: var(--text); background: var(--void); min-height: 100vh; }
+  button { cursor: pointer; font: inherit; color: inherit; }
+  input, textarea, select { font: inherit; color: inherit; }
+
+  .topbar { display: flex; align-items: center; gap: 18px; padding: 10px 22px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 10; }
+  .brand { display: flex; align-items: center; gap: 9px; }
+  .brand-mark { width: 28px; height: 28px; border-radius: 7px; background: var(--text); color: var(--panel); display: grid; place-items: center; font-family: var(--serif); font-size: 14px; }
+  .brand b { font-family: var(--serif); font-size: 15px; }
+  .brand small { display: block; font-size: 10px; color: var(--muted); }
+  .nav { display: flex; gap: 2px; margin-left: 12px; }
+  .nav button { border: none; background: none; padding: 7px 11px; border-radius: 7px; font-size: 13px; color: var(--muted); }
+  .nav button.on { color: var(--signal); background: var(--signal-dim); }
+  .spacer { flex: 1; }
+  .theme-btn { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line-hot); background: var(--panel-2); border-radius: 7px; padding: 6px 10px; }
+
+  .page { max-width: 1180px; margin: 0 auto; padding: 22px 22px 56px; }
+  .page-head { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+  .back { border: 1px solid var(--line-hot); background: var(--panel); border-radius: 8px; padding: 6px 12px; font-size: 0.78rem; color: var(--muted); }
+  .page-head h2 { font-family: var(--serif); font-size: 1.32rem; font-weight: 600; }
+  .page-head .hint { font-size: 0.76rem; color: var(--muted); }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; }
+  .flabel { display: block; font-family: var(--mono); font-size: 0.64rem; letter-spacing: 0.14em; color: var(--muted); margin-bottom: 7px; }
+  .input, textarea.input, select.input { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; font-size: 0.82rem; background: var(--panel-2); outline: none; transition: border-color 0.15s ease; }
+  .input:focus { border-color: var(--copper); }
+  textarea.input { min-height: 110px; resize: vertical; line-height: 1.7; }
+
+  /* ── V-B：左工单表单 + 右常驻装备栏 ── */
+  .wo-grid { display: grid; grid-template-columns: 1fr 300px; gap: 16px; align-items: start; }
+  .wo-sec { border-top: 1px solid var(--line); padding: 16px 0 4px; }
+  .wo-sec:first-of-type { border-top: none; padding-top: 0; }
+  .wo-sec .no { font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.14em; color: var(--copper); margin-bottom: 10px; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .avatar-row { display: flex; align-items: center; gap: 14px; }
+  .avatar-big { width: 58px; height: 58px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-family: var(--mono); font-size: 15px; background: #0e9f6e; flex: none; }
+  .upload-btn { border: 1px dashed var(--line-hot); background: none; border-radius: 8px; padding: 6px 14px; font-size: 0.72rem; color: var(--muted); }
+  .upload-btn:hover { border-color: var(--copper); color: var(--copper); }
+
+  .actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
+  .btn { border-radius: 8px; padding: 9px 18px; font-size: 0.82rem; border: 1px solid var(--line-hot); background: var(--panel); }
+  .btn.primary { background: var(--signal); color: #fff; border-color: var(--signal); font-weight: 500; }
+  .btn.ghost { background: none; border-color: var(--line-hot); color: var(--muted); }
+
+  /* 右侧装备栏 */
+  .gear-rail { position: sticky; top: 70px; display: flex; flex-direction: column; gap: 12px; }
+  .gear-stats { display: flex; gap: 6px; flex-wrap: wrap; }
+  .stat { font-family: var(--mono); font-size: 0.64rem; border: 1px solid var(--line); border-radius: 6px; padding: 3px 9px; color: var(--muted); background: var(--panel-2); }
+  .stat b { color: var(--copper); }
+  .gear-row { display: flex; align-items: flex-start; gap: 9px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; margin-bottom: 7px; background: var(--panel-2); }
+  .gear-row .info { min-width: 0; flex: 1; }
+  .gear-row .info b { display: block; font-family: var(--mono); font-size: 0.72rem; word-break: break-all; }
+  .gear-row .info p { font-size: 0.66rem; color: var(--muted); margin-top: 2px; line-height: 1.45; }
+  .gear-x { flex: none; border: none; background: none; color: var(--muted); font-size: 0.82rem; padding: 1px 5px; border-radius: 6px; }
+  .gear-x:hover { color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
+  .add-tool { width: 100%; border: 1px dashed var(--line-hot); background: none; border-radius: 10px; padding: 11px; font-size: 0.78rem; color: var(--muted); transition: border-color 0.15s ease, color 0.15s ease; }
+  .add-tool:hover { border-color: var(--copper); color: var(--copper); }
+  .gear-empty { text-align: center; font-size: 0.72rem; color: var(--muted); padding: 12px 0 4px; line-height: 1.6; }
+
+  /* 弹框：640px、按类型分组 */
+  .overlay { position: fixed; inset: 0; background: rgba(10, 14, 24, 0.45); display: none; align-items: flex-start; justify-content: center; padding: 7vh 20px 20px; z-index: 100; }
+  .overlay.on { display: flex; }
+  .modal { width: 640px; max-height: 76vh; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line-hot); border-radius: 14px; box-shadow: 0 24px 64px rgba(10, 14, 24, 0.28); overflow: hidden; animation: pop 0.18s ease; }
+  @keyframes pop { from { transform: translateY(10px) scale(0.98); opacity: 0; } }
+  .modal-head { padding: 16px 18px 0; display: flex; justify-content: space-between; align-items: baseline; }
+  .modal-head h3 { font-family: var(--serif); font-size: 1.05rem; }
+  .modal-head .sub { font-family: var(--mono); font-size: 0.66rem; color: var(--muted); }
+  .modal-tools { padding: 12px 18px 0; display: flex; gap: 10px; }
+  .modal-tools .input { flex: 1; }
+  .seg { display: inline-flex; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 3px; gap: 2px; flex: none; }
+  .seg button { border: none; background: none; padding: 5px 11px; border-radius: 6px; font-size: 0.74rem; color: var(--muted); }
+  .seg button.on { color: var(--text); background: var(--panel); box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+  .tool-list { flex: 1; overflow-y: auto; padding: 12px 18px; }
+  .grp { font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.14em; color: var(--muted); margin: 12px 0 8px; }
+  .grp:first-child { margin-top: 0; }
+  .tool-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .tool-item { display: flex; align-items: center; gap: 10px; text-align: left; border: 1px solid var(--line); background: var(--panel-2); border-radius: 10px; padding: 10px 12px; transition: border-color 0.12s ease; }
+  .tool-item:hover { border-color: var(--line-hot); }
+  .tool-item.picked { border-color: var(--signal); box-shadow: 0 0 0 3px var(--signal-dim); }
+  .tool-item .info { flex: 1; min-width: 0; }
+  .tool-item .info b { font-family: var(--mono); font-size: 0.74rem; display: block; word-break: break-all; }
+  .tool-item .info p { font-size: 0.66rem; color: var(--muted); margin-top: 2px; line-height: 1.4; }
+  .tick { flex: none; width: 18px; height: 18px; border-radius: 6px; border: 1px solid var(--line-hot); display: grid; place-items: center; font-size: 0.66rem; color: transparent; }
+  .tool-item.picked .tick { background: var(--signal); border-color: var(--signal); color: #fff; }
+  .modal-foot { display: flex; align-items: center; gap: 10px; padding: 13px 18px; border-top: 1px solid var(--line); background: var(--panel-2); }
+  .modal-foot .count { font-family: var(--mono); font-size: 0.74rem; color: var(--muted); }
+  .modal-foot .count b { color: var(--signal); }
+  .modal-foot .spacer { flex: 1; }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand"><div class="brand-mark">出</div><div><b>Sortie Deck</b><small>上线小队 · 共交付，无传话</small></div></div>
+    <div class="nav">
+      <button>作战图</button><button>任务</button><button>知识库</button><button>记忆</button>
+      <button class="on">角色工坊</button><button>工具箱</button><button>角色锻造</button>
+      <button>小群</button><button>决策中心</button>
+    </div>
+    <div class="spacer"></div>
+    <button class="theme-btn" onclick="toggleTheme()">主题</button>
+  </div>
+
+  <div class="page">
+    <div class="page-head">
+      <button class="back">← 返回名册</button>
+      <h2>发布角色</h2>
+      <span class="hint">领域专家发布专业角色，任务组器时点名上阵</span>
+    </div>
+
+    <div class="wo-grid">
+      <!-- ① 左：工单式表单 -->
+      <section class="card">
+        <div class="wo-sec">
+          <div class="no">01 · 身份 IDENTITY</div>
+          <div class="avatar-row" style="margin-bottom:14px">
+            <div class="avatar-big" id="avatarBig">QA</div>
+            <button class="upload-btn">上传头像</button>
+          </div>
+          <div class="two-col">
+            <div>
+              <label class="flabel">角色名</label>
+              <input class="input" id="fTitle" value="回归守门员" oninput="syncAll()">
+            </div>
+            <div>
+              <label class="flabel">标签（逗号分隔）</label>
+              <input class="input" value="回归, 质量门禁, 弱网">
+            </div>
+            <div>
+              <label class="flabel">编制岗位</label>
+              <select class="input"><option>测试位</option><option>产品位</option><option>设计位</option><option>工程位</option><option>部署位</option></select>
+            </div>
+            <div>
+              <label class="flabel">可见性</label>
+              <select class="input"><option>公开</option><option>私有</option></select>
+            </div>
+          </div>
+        </div>
+        <div class="wo-sec">
+          <div class="no">02 · 人设 PERSONA</div>
+          <div style="margin-bottom:14px">
+            <label class="flabel">简介（一句话人设）</label>
+            <input class="input" value="替全队守住质量的最后防线，对漏测零容忍。">
+          </div>
+          <div>
+            <label class="flabel">系统提示词</label>
+            <textarea class="input" style="min-height:150px">你是资深 QA 工程师。接手任何任务先列「风险清单」，再按清单逐项设计回归用例；发现缺陷时给出最小复现路径与严重级别建议。弱网、并发、脏数据三类场景必须覆盖。</textarea>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="btn ghost">取消</button>
+          <button class="btn primary" id="saveBtn">保存并发布</button>
+        </div>
+      </section>
+
+      <!-- ② 右：常驻已选装备栏 -->
+      <aside class="gear-rail">
+        <section class="card">
+          <div class="flabel" style="margin-bottom:10px">已选装备 <span id="gearCount" style="color:var(--copper)">2</span></div>
+          <div class="gear-stats" id="gearStats"></div>
+          <div id="gearList" style="margin-top:10px"></div>
+          <button class="add-tool" onclick="openModal()">＋ 从工具箱选择</button>
+        </section>
+      </aside>
+    </div>
+  </div>
+
+  <!-- 工具选择弹框（按类型分组） -->
+  <div class="overlay" id="overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal">
+      <div class="modal-head">
+        <h3>工具箱</h3>
+        <span class="sub">BROWSE &amp; PICK</span>
+      </div>
+      <div class="modal-tools">
+        <input class="input" id="toolSearch" placeholder="搜索名称或用途…" oninput="renderToolList()">
+        <div class="seg" id="kindSeg">
+          <button class="on" data-k="" onclick="pickKind(this)">全部</button>
+          <button data-k="tool" onclick="pickKind(this)">工具</button>
+          <button data-k="skill" onclick="pickKind(this)">技能</button>
+          <button data-k="mcp" onclick="pickKind(this)">MCP</button>
+        </div>
+      </div>
+      <div class="tool-list" id="toolList"></div>
+      <div class="modal-foot">
+        <span class="count">已勾选 <b id="pickCount">0</b> 项</span>
+        <span class="spacer"></span>
+        <button class="btn ghost" onclick="closeModal()">取消</button>
+        <button class="btn primary" onclick="confirmPick()">确定</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+  /* ── mock 工具数据（对齐 ToolkitItem 字段） ── */
+  const TOOLS = [
+    { id: "skill/prd-tighten",   kind: "skill", summary: "把模糊 PRD 收敛成可验收条款" },
+    { id: "skill/api-tester",    kind: "skill", summary: "接口回归用例批量生成与执行" },
+    { id: "skill/qa-clearance",  kind: "skill", summary: "发版前质量门禁自检清单" },
+    { id: "skill/data-viz",      kind: "skill", summary: "测试结论数据看板速出" },
+    { id: "skill/doc-summarizer",kind: "skill", summary: "长文档摘要，产出风险点清单" },
+    { id: "skill/copy-polish",   kind: "skill", summary: "缺陷报告文案润色" },
+    { id: "tool/http-probe",     kind: "tool",  summary: "HTTP 探针：状态码 / 时延 / 重定向" },
+    { id: "tool/git-diff",       kind: "tool",  summary: "变更 diff 审阅，圈定回归范围" },
+    { id: "tool/db-inspector",   kind: "tool",  summary: "只读查询数据库，核对脏数据" },
+    { id: "tool/ui-v4-tool",     kind: "tool",  summary: "UI 自动化走查驱动" },
+    { id: "mcp/browser",         kind: "mcp",   summary: "浏览器自动化，弱网与并发模拟" },
+    { id: "mcp/filesystem",      kind: "mcp",   summary: "工作区文件读写" },
+    { id: "mcp/search",          kind: "mcp",   summary: "外部资料检索" },
+  ];
+  const KIND_CN = { tool: "工具", skill: "技能", mcp: "MCP" };
+
+  let selected = new Set(["skill/qa-clearance", "skill/api-tester", "mcp/browser"]);
+  let kind = "";
+
+  /* ── 右栏渲染：确定后回显；× 可删，按钮可再改 ── */
+  function renderGear() {
+    const rows = [...selected].map((id) => {
+      const t = TOOLS.find((x) => x.id === id);
+      return `<div class="gear-row">
+        <div class="info"><b>${t.id}</b><p>${t.summary}</p></div>
+        <button class="gear-x" title="移除" onclick="removeGear('${id}')">✕</button>
+      </div>`;
+    }).join("");
+    document.getElementById("gearList").innerHTML =
+      rows || `<p class="gear-empty">尚未绑定装备<br>任务运行时将无可调用的手牌</p>`;
+    document.getElementById("gearCount").textContent = selected.length;
+    const kinds = ["tool", "skill", "mcp"];
+    document.getElementById("gearStats").innerHTML = kinds.map((k) => {
+      const n = [...selected].filter((id) => TOOLS.find((x) => x.id === id).kind === k).length;
+      return `<span class="stat">${KIND_CN[k]} <b>${n}</b></span>`;
+    }).join("");
+  }
+
+  function removeGear(id) { selected.delete(id); renderGear(); }
+
+  /* ── 弹框：按类型分组渲染 ── */
+  function openModal() {
+    document.getElementById("overlay").classList.add("on");
+    renderToolList();
+  }
+  function closeModal() { document.getElementById("overlay").classList.remove("on"); }
+
+  function pickKind(btn) {
+    kind = btn.dataset.k;
+    document.querySelectorAll("#kindSeg button").forEach((b) => b.classList.toggle("on", b === btn));
+    renderToolList();
+  }
+
+  function renderToolList() {
+    const q = document.getElementById("toolSearch").value.trim().toLowerCase();
+    const pool = TOOLS.filter((t) => (!kind || t.kind === kind) &&
+      (!q || t.id.toLowerCase().includes(q) || t.summary.toLowerCase().includes(q)));
+    const kinds = [...new Set(pool.map((t) => t.kind))];
+    const html = kinds.map((k) => `
+      <div class="grp">${KIND_CN[k]} · ${pool.filter((t) => t.kind === k).length}</div>
+      <div class="tool-grid">
+        ${pool.filter((t) => t.kind === k).map((t) => `
+          <button class="tool-item ${selected.has(t.id) ? "picked" : ""}" onclick="togglePick('${t.id}')">
+            <div class="info"><b>${t.id}</b><p>${t.summary}</p></div>
+            <span class="tick">✓</span>
+          </button>`).join("")}
+      </div>`).join("");
+    document.getElementById("toolList").innerHTML = html || `<p class="gear-empty">没有匹配的工具</p>`;
+    document.getElementById("pickCount").textContent = selected.size;
+  }
+
+  function togglePick(id) { selected.has(id) ? selected.delete(id) : selected.add(id); renderToolList(); }
+  function confirmPick() { renderGear(); closeModal(); }
+
+  function syncAll() {
+    document.getElementById("avatarBig").textContent = (document.getElementById("fTitle").value || "?").slice(0, 2);
+  }
+  function toggleTheme() {
+    const el = document.documentElement;
+    el.dataset.theme = el.dataset.theme === "ink" ? "" : "ink";
+  }
+
+  renderGear();
+</script>
+</body>
+</html>

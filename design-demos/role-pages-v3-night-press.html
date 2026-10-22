@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<!--
+  Sortie Deck · 四页重设计 V3 — 「印厂夜班」概念版
+  ============================================================
+  Assumptions:
+  1. 覆盖 角色工坊/角色锻造/小群/决策中心，hash 切换四页。
+  2. 功能与数据来自调研报告（PublishedAgent/ForgeDraft/SubRoomRecord/HumanDecisionRecord）。
+  设计逻辑: 最佳设计师 —— 把「编辑部」隐喻推到底，每个页面找到它在本子上对应的印刷品:
+  ① 角色工坊 = 演员名册（cast card，索引卡 + 打孔位）; ② 角色锻造 = 铸造蓝图
+  （technical drawing: 虚线图框、图号、尺寸标注线包住自检与查重）; ③ 小群 = 剧本
+  对白页（人名在左页边、结论盖「本场结论」章）; ④ 决策中心 = 加急电报（电报纸
+  分隔线 + 限时刻 + 印章式 fallback）。
+  这是最 novel 的一版: 强 mono、发丝线、无阴影、纸面感。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sortie Deck · 四页 V3 印厂夜班</title>
+<style>
+  :root {
+    --void: #f4f2ec; --panel: #fbfaf6; --panel-2: #f1efe7;
+    --line: #d9d4c5; --line-hot: #b8b09a; --text: #26241c; --muted: #7a7565;
+    --signal: #1d6b4f; --copper: #8c4a1f; --danger: #a03123; --warn: #8c6a1f;
+    --stamp: #b3402e;
+    --serif: "Songti SC", "Noto Serif SC", "Source Han Serif SC", Georgia, serif;
+    --font: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  [data-theme="ink"] {
+    --void: #16181d; --panel: #1d2026; --panel-2: #22262d;
+    --line: #33373f; --line-hot: #4a4f59; --text: #e8e5da; --muted: #8d8b80;
+    --signal: #4cc08d; --copper: #d99a5b; --danger: #e57760; --warn: #d9b95b;
+    --stamp: #e06a52;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { font-family: var(--font); color: var(--text); background: var(--void); min-height: 100vh; transition: background-color 0.35s ease, color 0.25s ease; }
+  button { cursor: pointer; font: inherit; color: inherit; }
+  input, textarea { font: inherit; color: inherit; }
+
+  .topbar { display: flex; align-items: center; gap: 18px; padding: 11px 24px; border-bottom: 1px solid var(--line-hot); background: var(--panel); position: sticky; top: 0; z-index: 10; }
+  .brand { display: flex; align-items: baseline; gap: 10px; }
+  .brand b { font-family: var(--serif); font-size: 17px; letter-spacing: 0.06em; }
+  .brand small { font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: 0.1em; }
+  .nav { display: flex; }
+  .nav button { border: none; background: none; padding: 8px 13px; font-size: 13px; color: var(--muted); border-bottom: 2px solid transparent; }
+  .nav button.on { color: var(--text); border-bottom-color: var(--text); }
+  .spacer { flex: 1; }
+  .folio { font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: 0.16em; }
+  .theme-btn { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line-hot); background: none; padding: 6px 10px; }
+
+  .page { max-width: 1160px; margin: 0 auto; padding: 26px 24px 56px; display: none; }
+  .page.on { display: block; }
+  .page-head { display: flex; align-items: baseline; gap: 16px; border-bottom: 1px solid var(--line-hot); padding-bottom: 12px; margin-bottom: 20px; }
+  .page-head h2 { font-family: var(--serif); font-size: 24px; font-weight: 600; letter-spacing: 0.04em; }
+  .page-head .fig { font-family: var(--mono); font-size: 11px; color: var(--muted); letter-spacing: 0.14em; }
+  .page-head .hint { font-size: 12px; color: var(--muted); margin-left: auto; }
+  .mono { font-family: var(--mono); }
+
+  /* ═══ 页 1 · 角色工坊: 演员名册（索引卡墙） ═══ */
+  .castwall { columns: 3; column-gap: 16px; }
+  .cast-card {
+    break-inside: avoid; display: block; width: 100%; text-align: left;
+    background: var(--panel); border: 1px solid var(--line-hot);
+    padding: 16px 18px 14px; margin-bottom: 16px; position: relative;
+    transition: border-color 0.15s ease;
+  }
+  .cast-card:hover { border-color: var(--text); }
+  /* 索引卡打孔位 */
+  .cast-card::before { content: ""; position: absolute; top: 12px; right: 14px; width: 9px; height: 9px; border-radius: 50%; border: 1px solid var(--line-hot); }
+  .cast-card .slotline { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: 0.08em; margin-bottom: 8px; }
+  .cast-card h3 { font-family: var(--serif); font-size: 18px; font-weight: 600; margin-bottom: 5px; }
+  .cast-card p { font-size: 12px; color: var(--muted); line-height: 1.6; }
+  .cast-card .foot { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; font-family: var(--mono); font-size: 10px; color: var(--muted); }
+  .vis-pub { color: var(--signal); }
+  .new-card { border-style: dashed; display: flex; align-items: center; justify-content: center; min-height: 90px; color: var(--muted); font-family: var(--mono); font-size: 12px; letter-spacing: 0.14em; }
+  .detail-sheet { background: var(--panel); border: 1px solid var(--line-hot); border-top: 3px solid var(--text); padding: 22px 26px; margin-top: 20px; }
+  .detail-sheet .eyebrow { font-family: var(--mono); font-size: 11px; color: var(--copper); letter-spacing: 0.14em; }
+  .detail-sheet h2 { font-family: var(--serif); font-size: 26px; margin: 8px 0 4px; }
+  .detail-sheet .sum { font-size: 13px; color: var(--muted); margin-bottom: 14px; }
+  .sheet-cols { display: grid; grid-template-columns: 1.5fr 1fr; gap: 26px; border-top: 1px solid var(--line); padding-top: 16px; }
+  .persona-print { font-size: 13px; line-height: 1.9; }
+  .sheet-k { font-family: var(--mono); font-size: 10px; letter-spacing: 0.16em; color: var(--muted); margin-bottom: 8px; }
+  .tool-lines { font-family: var(--mono); font-size: 12px; line-height: 2.1; }
+  .sheet-actions { display: flex; gap: 12px; margin-top: 18px; border-top: 1px solid var(--line); padding-top: 14px; }
+  .a-btn { background: none; border: 1px solid var(--line-hot); padding: 8px 16px; font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em; }
+  .a-btn.primary { border-color: var(--signal); color: var(--signal); }
+  .a-btn.danger { border-color: var(--danger); color: var(--danger); }
+
+  /* ═══ 页 2 · 角色锻造: 铸造蓝图 ═══ */
+  .blueprint { border: 1px dashed var(--line-hot); padding: 20px 22px; position: relative; background: var(--panel); }
+  .blueprint::before, .blueprint::after { content: ""; position: absolute; width: 10px; height: 10px; border-color: var(--muted); border-style: solid; border-width: 0; }
+  .blueprint::before { top: -6px; left: -6px; border-top-width: 1px; border-left-width: 1px; }
+  .blueprint::after { bottom: -6px; right: -6px; border-bottom-width: 1px; border-right-width: 1px; }
+  .bp-head { display: flex; justify-content: space-between; align-items: baseline; border-bottom: 1px solid var(--line); padding-bottom: 10px; margin-bottom: 16px; }
+  .bp-head b { font-family: var(--serif); font-size: 17px; }
+  .bp-head .no { font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: 0.16em; }
+  .cap-row { display: flex; gap: 12px; margin-bottom: 18px; }
+  .cap-row input { flex: 1; border: none; border-bottom: 1px solid var(--line-hot); background: none; padding: 8px 2px; font-size: 14px; outline: none; font-family: var(--mono); }
+  .cap-row input:focus { border-bottom-color: var(--copper); }
+  .cap-row .go { background: var(--text); color: var(--panel); border: none; padding: 9px 18px; font-family: var(--mono); font-size: 12px; letter-spacing: 0.1em; }
+  .bp-grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 26px; }
+  .bp-field { margin-bottom: 16px; }
+  .bp-field label { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; color: var(--muted); margin-bottom: 6px; }
+  .bp-field input, .bp-field textarea { width: 100%; border: none; border-bottom: 1px solid var(--line); background: none; padding: 7px 2px; font-size: 13.5px; outline: none; }
+  .bp-field textarea { border: 1px solid var(--line); padding: 10px 12px; min-height: 92px; resize: vertical; line-height: 1.8; font-size: 12.5px; }
+  .dim-note { border: 1px dashed var(--warn); padding: 10px 13px; font-size: 12px; color: var(--warn); line-height: 1.6; margin-bottom: 14px; }
+  .dim-note .k { font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; display: block; margin-bottom: 4px; }
+  .dim-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-top: 1px dashed var(--line); font-size: 12.5px; }
+  .dim-row .score { font-family: var(--mono); color: var(--warn); }
+  .stamp { display: inline-block; border: 2px solid var(--stamp); color: var(--stamp); font-family: var(--mono); font-size: 11px; letter-spacing: 0.2em; padding: 4px 10px; transform: rotate(-3deg); }
+
+  /* ═══ 页 3 · 小群: 剧本对白页 ═══ */
+  .script-sheet { background: var(--panel); border: 1px solid var(--line-hot); padding: 26px 30px; }
+  .script-head { text-align: center; border-bottom: 1px solid var(--line-hot); padding-bottom: 14px; margin-bottom: 6px; }
+  .script-head b { font-family: var(--serif); font-size: 19px; letter-spacing: 0.06em; }
+  .script-head .cast { display: block; margin-top: 8px; font-family: var(--mono); font-size: 10.5px; color: var(--muted); letter-spacing: 0.06em; }
+  .turn { display: grid; grid-template-columns: 150px 1fr; gap: 20px; padding: 15px 0; }
+  .turn + .turn { border-top: 1px dashed var(--line); }
+  .turn .who { text-align: right; font-family: var(--serif); font-size: 14px; font-weight: 600; }
+  .turn .who small { display: block; font-family: var(--mono); font-size: 9.5px; color: var(--copper); letter-spacing: 0.12em; margin-top: 3px; }
+  .turn p { font-size: 13.5px; line-height: 1.9; }
+  .conclusion-block { margin-top: 18px; border-top: 1px solid var(--line-hot); padding-top: 18px; display: flex; gap: 22px; align-items: flex-start; }
+  .conclusion-block p { font-size: 13.5px; line-height: 1.8; flex: 1; }
+  .scene-stamp { flex: none; border: 2px solid var(--signal); color: var(--signal); font-family: var(--mono); font-size: 11px; letter-spacing: 0.24em; padding: 8px 12px; transform: rotate(-2deg); }
+  .rail { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+  .rail button { background: var(--panel); border: 1px solid var(--line-hot); padding: 8px 14px; font-size: 12px; text-align: left; }
+  .rail button.on { border-color: var(--text); border-top: 3px solid var(--text); }
+  .rail button .s { display: block; font-family: var(--mono); font-size: 9.5px; color: var(--muted); margin-top: 3px; }
+
+  /* ═══ 页 4 · 决策中心: 加急电报 ═══ */
+  .telegram { background: var(--panel); border: 1px solid var(--line-hot); margin-bottom: 18px; }
+  .tg-head { display: flex; align-items: center; gap: 14px; border-bottom: 1px solid var(--line-hot); padding: 10px 18px; font-family: var(--mono); font-size: 10.5px; color: var(--muted); letter-spacing: 0.1em; }
+  .tg-head .urgent { color: var(--stamp); border: 1.5px solid var(--stamp); padding: 2px 8px; letter-spacing: 0.24em; transform: rotate(-1.5deg); }
+  .tg-head .limit { margin-left: auto; color: var(--warn); }
+  .tg-body { padding: 18px 20px; }
+  .tg-q { font-family: var(--serif); font-size: 18px; font-weight: 600; line-height: 1.6; margin-bottom: 8px; }
+  .tg-ctx { font-size: 12.5px; color: var(--muted); line-height: 1.7; margin-bottom: 12px; }
+  .tg-meta { font-family: var(--mono); font-size: 11px; color: var(--muted); padding: 9px 0; border-top: 1px dashed var(--line); border-bottom: 1px dashed var(--line); margin-bottom: 12px; }
+  .tg-meta .fb { color: var(--stamp); }
+  .tg-answer { display: flex; gap: 12px; }
+  .tg-answer input { flex: 1; border: none; border-bottom: 1px solid var(--line-hot); background: none; padding: 8px 2px; font-size: 14px; outline: none; font-family: var(--mono); }
+  .tg-answer .go { background: var(--text); color: var(--panel); border: none; padding: 9px 20px; font-family: var(--mono); font-size: 12px; letter-spacing: 0.1em; }
+  .telegram.done { opacity: 0.7; }
+  .telegram.done .tg-body { padding: 13px 20px; }
+</style>
+</head>
+<body data-theme="paper">
+<header class="topbar">
+  <div class="brand"><b>Sortie Deck</b><small>建缩小镇 · 印厂夜班</small></div>
+  <nav class="nav" id="nav">
+    <button data-page="agents" class="on">角色工坊</button>
+    <button data-page="forge">角色锻造</button>
+    <button data-page="subrooms">小群</button>
+    <button data-page="decisions">决策中心</button>
+  </nav>
+  <div class="spacer"></div>
+  <span class="folio">FIG. 03 — NIGHT PRESS</span>
+  <button class="theme-btn" id="themeBtn">◈ 主题</button>
+</header>
+
+<!-- ═══ 页 1 · 角色工坊: 演员名册 ═══ -->
+<main class="page on" id="page-agents">
+  <div class="page-head">
+    <h2>角色名册</h2>
+    <span class="fig">ROSTER · 编制 7</span>
+    <span class="hint">领域专家发布专业角色，任务组建时点名上阵</span>
+  </div>
+  <div class="castwall">
+    <button class="cast-card">
+      <span class="slotline"><span>deploy</span><span class="vis-pub">公开 · v3</span></span>
+      <h3>Deploy Officer</h3>
+      <p>Auto-created by mission briefing · 作 Mission Briefing</p>
+      <span class="foot"><span>SlotDeploy</span><span>kb-search ×3</span></span>
+    </button>
+    <button class="cast-card">
+      <span class="slotline"><span>qa</span><span class="vis-pub">公开 · v2</span></span>
+      <h3>QA Gatekeeper</h3>
+      <p>门槛拦截官: 用相似收雇算法 pass/fail</p>
+      <span class="foot"><span>Sortie</span><span>sim-check ×2</span></span>
+    </button>
+    <button class="cast-card">
+      <span class="slotline"><span>eng_agent</span><span class="vis-pub">公开 · v4</span></span>
+      <h3>Agent Raider</h3>
+      <p>Agent 开发突击: 工具、提示、评测门槛</p>
+      <span class="foot"><span>Sortie</span><span>prompt-lab ×2</span></span>
+    </button>
+    <button class="cast-card">
+      <span class="slotline"><span>eng_backend</span><span class="vis-pub">公开 · v5</span></span>
+      <h3>Backend Raider</h3>
+      <p>后端突击: API、数据模型、可观测</p>
+      <span class="foot"><span>Sortie</span><span>api-tools ×2</span></span>
+    </button>
+    <button class="cast-card">
+      <span class="slotline"><span>eng_web</span><span class="vis-pub">公开 · v3</span></span>
+      <h3>Web Raider</h3>
+      <p>Web 前端突击: 组件、可访问、起设计</p>
+      <span class="foot"><span>Sortie</span><span>dom ×2</span></span>
+    </button>
+    <button class="cast-card">
+      <span class="slotline"><span>eng_android</span><span>仅自己 · v1</span></span>
+      <h3>Android Raider</h3>
+      <p>Android 突击: Kotlin/Jetpack，并对设计与验收</p>
+      <span class="foot"><span>Sortie</span><span>gradle ×1</span></span>
+    </button>
+    <button class="cast-card new-card">＋ 发布角色</button>
+  </div>
+  <div class="detail-sheet">
+    <div class="eyebrow">deploy · deploy-officer · PUBLIC · v3</div>
+    <h2>Deploy Officer</h2>
+    <p class="sum">Auto-created by mission briefing · 作 Mission Briefing · 作者 SlotDeploy</p>
+    <div class="sheet-cols">
+      <div>
+        <div class="sheet-k">人设 / 系统提示</div>
+        <p class="persona-print">你是前线部署官。任务 brief 进来时，你负责把它拆成可执行的任务卡：明确目标、产出物、验收口径与交接对象。口径不清楚就停下提问，不要自行脑补。输出始终使用中文，产出物命名遵循任务卡编号。</p>
+      </div>
+      <div>
+        <div class="sheet-k">已挂工具</div>
+        <div class="tool-lines">kb-search<br>mission-brief<br>task-split</div>
+        <div class="sheet-k" style="margin-top:14px">标签</div>
+        <div class="tool-lines">部署 / 任务拆解 / brief</div>
+      </div>
+    </div>
+    <div class="sheet-actions">
+      <button class="a-btn">编辑</button>
+      <button class="a-btn danger">删除</button>
+    </div>
+  </div>
+</main>
+
+<!-- ═══ 页 2 · 角色锻造: 铸造蓝图 ═══ -->
+<main class="page" id="page-forge">
+  <div class="page-head">
+    <h2>角色锻造</h2>
+    <span class="fig">FORGE · DWG 04-1</span>
+    <span class="hint">大模型现场生成的待审核角色，审核通过后才入编</span>
+  </div>
+  <div class="blueprint">
+    <div class="bp-head"><b>输入能力 → 生成 → 自检 → 人工审核</b><span class="no">SHEET 1 / 1 · 生成方式 deepseek-v3</span></div>
+    <div class="cap-row">
+      <input type="text" value="能写数据迁移脚本并在测试库演练通过">
+      <button class="go">生成角色 →</button>
+    </div>
+    <div class="bp-grid">
+      <div>
+        <div class="bp-field"><label><span>角色名</span><span>eng_data</span></label><input type="text" value="Data Raider"></div>
+        <div class="bp-field"><label><span>简介</span><span>PENDING REVIEW</span></label><input type="text" value="数据突击: 迁移脚本、演练、回滚预案 · 作者 Forge"></div>
+        <div class="bp-field"><label><span>人设 / 系统提示</span><span>↺ 撤销优化</span></label><textarea>你是数据突击手。拿到迁移需求后：先读现有 schema，再写迁移脚本，在测试库演练并给出回滚脚本。演练不通过不得提交。产出物：迁移 SQL、演练记录、回滚 SQL。</textarea></div>
+        <div style="display:flex;gap:12px;">
+          <button class="a-btn">保存</button>
+          <button class="a-btn primary">审核通过并发布</button>
+          <button class="a-btn danger">驳回</button>
+        </div>
+      </div>
+      <div>
+        <div class="dim-note"><span class="k">自检问题 · ISSUES</span>⚠ 人设缺少输出格式约定（产出物命名规则未定义）</div>
+        <div class="dim-note" style="border-color:var(--line-hot);color:var(--muted)"><span class="k" style="color:var(--muted)">疑似重复 · SIMILAR</span>
+          <span class="dim-row" style="border-top:none;padding-top:2px"><span class="mono">eng_backend · Backend Raider</span><span class="score">0.82</span></span>
+          <span class="dim-row"><span class="mono">qa · QA Gatekeeper</span><span class="score">0.41</span></span>
+        </div>
+        <div class="dim-row" style="border-top:none"><span class="sheet-k" style="margin:0">产出</span><span class="mono" style="font-size:11px">迁移 SQL · 演练 · 回滚</span></div>
+        <div class="dim-row"><span class="sheet-k" style="margin:0">交接</span><span class="mono" style="font-size:11px">QA Gatekeeper · Deploy Officer</span></div>
+        <div style="margin-top:18px;text-align:right"><span class="stamp">待 审</span></div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<!-- ═══ 页 3 · 小群: 剧本对白页 ═══ -->
+<main class="page" id="page-subrooms">
+  <div class="page-head">
+    <h2>小群</h2>
+    <span class="fig">SCENES · 场记</span>
+    <span class="hint">小群讨论记录不回流大群，只有结论作为记忆注入</span>
+  </div>
+  <div class="rail">
+    <button class="on">集成 → Deploy Officer<span class="s">open · 实时</span></button>
+    <button>放行 → QA Gatekeeper<span class="s">closed</span></button>
+    <button>集成 → Backend Raider<span class="s">timeout</span></button>
+  </div>
+  <div class="script-sheet">
+    <div class="script-head">
+      <b>第一场 · 集成（in1_360c79）</b>
+      <span class="cast">出场: Deploy Officer（发起）· Agent Raider（主持）· QA Gatekeeper · Backend Raider</span>
+      <span class="cast">预算 tokens 12,000/24,000 · rounds 3/6 · timeout 600s</span>
+    </div>
+    <div class="turn">
+      <span class="who">Agent Raider<small>主持</small></span>
+      <p>现有方案 A 是整库切换，风险集中在发布窗口；方案 B 双写过渡表，迁移期间两边都在写。我倾向 B，代价是多一轮数据校验。</p>
+    </div>
+    <div class="turn">
+      <span class="who">Backend Raider</span>
+      <p>B 可行，但校验脚本要挂在 QA Gatekeeper 的验收清单里，否则过渡期结束我们不敢摘旧表。</p>
+    </div>
+    <div class="turn">
+      <span class="who">QA Gatekeeper</span>
+      <p>可以，我把「双写一致性校验」加为 pass/fail 硬门槛，连续两轮绿才允许摘除。</p>
+    </div>
+    <div class="turn">
+      <span class="who">Deploy Officer<small>发起</small></span>
+      <p>那就定 B。发布窗口不用改，回滚路径是现成的。</p>
+    </div>
+    <div class="conclusion-block">
+      <p><span class="sheet-k">本场结论 · 将注入记忆</span>采用方案 B：双写过渡表。QA 增加双写一致性硬门槛，连续两轮绿后摘除旧表；回滚沿用现有关卡。</p>
+      <span class="scene-stamp">本场结论</span>
+    </div>
+  </div>
+</main>
+
+<!-- ═══ 页 4 · 决策中心: 加急电报 ═══ -->
+<main class="page" id="page-decisions">
+  <div class="page-head">
+    <h2>决策中心</h2>
+    <span class="fig">WIRES · 电报</span>
+    <span class="hint">Agent 与 Manager 都无法拍板时，交由真人决定</span>
+  </div>
+  <div class="telegram">
+    <div class="tg-head">
+      <span class="urgent">加急</span>
+      <span>in1_98a7ddb · 待放行</span>
+      <span>决策人 @admin</span>
+      <span class="limit">限 12:34 内回复</span>
+    </div>
+    <div class="tg-body">
+      <p class="tg-q">客户通知中心 V2 的发布窗口选哪个？</p>
+      <p class="tg-ctx">QA 已连续两轮绿；运营侧倾向避开周一早高峰推送时段。可选: 周二晚 / 周四晚。</p>
+      <div class="tg-meta">超时未回复将执行 <span class="fb">auto_postpone</span>（自动顺延发布窗口）</div>
+      <div class="tg-answer">
+        <input type="text" placeholder="回复决策（Enter 提交）…">
+        <button class="go">回复 →</button>
+      </div>
+    </div>
+  </div>
+  <div class="telegram done">
+    <div class="tg-head"><span>in1_1708d3 · 已通关</span><span class="limit">已回复</span></div>
+    <div class="tg-body"><p class="tg-ctx" style="margin:0">通知模板文案由谁终审？ → <b style="color:var(--text)">由 Deploy Officer 终审，Ops 抽检</b></p></div>
+  </div>
+  <div class="telegram done">
+    <div class="tg-head"><span>in1_9e8a4db · 出击中</span><span class="limit" style="color:var(--stamp)">已超时 · 执行 fallback keep_10pct</span></div>
+    <div class="tg-body"><p class="tg-ctx" style="margin:0">灰度比例是否提升到 50%？ → 超时未回复，按 fallback 保持 10% 灰度。</p></div>
+  </div>
+</main>
+
+<script>
+  // 页签切换 + hash 直达
+  var nav = document.getElementById("nav");
+  function go(name) {
+    document.querySelectorAll(".page").forEach(function (pg) { pg.classList.remove("on"); });
+    document.getElementById("page-" + name).classList.add("on");
+    nav.querySelectorAll("button").forEach(function (b) { b.classList.toggle("on", b.dataset.page === name); });
+  }
+  nav.addEventListener("click", function (e) {
+    var btn = e.target.closest("button");
+    if (btn) { location.hash = btn.dataset.page; go(btn.dataset.page); }
+  });
+  if (location.hash) go(location.hash.slice(1));
+  document.getElementById("themeBtn").addEventListener("click", function () {
+    document.body.dataset.theme = document.body.dataset.theme === "ink" ? "paper" : "ink";
+  });
+</script>
+</body>
+</html>

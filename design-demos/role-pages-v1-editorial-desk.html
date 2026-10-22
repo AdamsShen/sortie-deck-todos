@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<!--
+  Sortie Deck · 四页重设计 V1 — 「编辑部工位」精修版
+  ============================================================
+  Assumptions:
+  1. 覆盖 角色工坊/角色锻造/小群/决策中心 四页，hash 切换（#agents/#forge/#subrooms/#decisions）。
+  2. 功能以调研报告为准（App.tsx:4283-4563, ForgeReview.tsx, SubRoomPanel.tsx, DecisionCenter.tsx），
+     内容全部来自真实数据结构字段与截图中的角色。
+  设计逻辑: 现有体系精修 —— 保留 340px 侧栏 + 详情范式，重做三件事:
+  ① 列表按「状态/编制位」分组并强化 mono 元信息层级; ② 详情页用 eyebrow + 契约块
+  替代平铺; ③ 四页统一「待办优先」的顶部计数条，让每页第一眼看到阻塞项。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sortie Deck · 四页 V1 编辑部工位</title>
+<style>
+  :root {
+    --void: #f6f9fc; --deep: #edf1f7; --panel: #ffffff; --panel-2: #f8fafd;
+    --line: #e3e8ee; --line-hot: #cbd2dc; --text: #1a1f36; --muted: #697386;
+    --signal: #0e9f6e; --signal-dim: #dff2e9; --copper: #3b5bdb; --danger: #c9503a;
+    --warn: #b7791f; --warn-dim: #fdf3e0;
+    --serif: "Songti SC", "Noto Serif SC", "Source Han Serif SC", Georgia, serif;
+    --font: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --radius: 10px;
+  }
+  [data-theme="ink"] {
+    --void: #171a21; --deep: #1c2029; --panel: #20242d; --panel-2: #262b35;
+    --line: #32363f; --line-hot: #454a55; --text: #ece9e1; --muted: #8b8a80;
+    --signal: #3fd68f; --signal-dim: #24422f; --copper: #7b96f0; --danger: #e57760;
+    --warn: #e2b04c; --warn-dim: #3a3222;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { font-family: var(--font); color: var(--text); background: var(--void); min-height: 100vh; transition: background-color 0.35s ease, color 0.25s ease; }
+  button { cursor: pointer; font: inherit; color: inherit; }
+  input, textarea { font: inherit; color: inherit; }
+
+  /* ── 顶栏 ── */
+  .topbar { display: flex; align-items: center; gap: 18px; padding: 10px 22px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 10; }
+  .brand { display: flex; align-items: center; gap: 9px; }
+  .brand-mark { width: 28px; height: 28px; border-radius: 7px; background: var(--text); color: var(--panel); display: grid; place-items: center; font-family: var(--serif); font-size: 14px; }
+  .brand b { font-family: var(--serif); font-size: 15px; }
+  .brand small { display: block; font-size: 10px; color: var(--muted); }
+  .nav { display: flex; gap: 2px; }
+  .nav button { border: none; background: none; padding: 7px 11px; border-radius: 7px; font-size: 13px; color: var(--muted); }
+  .nav button.on { color: var(--signal); background: var(--signal-dim); }
+  .spacer { flex: 1; }
+  .theme-btn { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line-hot); background: var(--panel-2); border-radius: 7px; padding: 6px 10px; }
+
+  /* ── 页头: 待办优先计数条 ── */
+  .page { max-width: 1180px; margin: 0 auto; padding: 20px 22px 48px; display: none; }
+  .page.on { display: block; }
+  .page-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 6px; }
+  .page-head h2 { font-family: var(--serif); font-size: 21px; font-weight: 600; }
+  .page-head .hint { font-size: 12px; color: var(--muted); }
+  .todo-strip { display: flex; gap: 10px; margin: 12px 0 18px; }
+  .todo-chip {
+    display: flex; align-items: center; gap: 8px; padding: 8px 13px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 9px;
+    font-size: 12px; cursor: pointer;
+  }
+  .todo-chip .n { font-family: var(--mono); font-size: 13px; font-weight: 600; }
+  .todo-chip.hot { border-color: var(--warn); background: var(--warn-dim); }
+  .todo-chip.hot .n { color: var(--warn); }
+  .todo-chip.cool .n { color: var(--copper); }
+
+  .st { font-family: var(--mono); font-size: 10px; letter-spacing: 0.05em; padding: 2px 7px; border-radius: 5px; border: 1px solid var(--line); color: var(--muted); flex: none; }
+  .st.green { color: var(--signal); border-color: color-mix(in srgb, var(--signal) 40%, transparent); background: var(--signal-dim); }
+  .st.copper { color: var(--copper); border-color: color-mix(in srgb, var(--copper) 40%, transparent); background: color-mix(in srgb, var(--copper) 8%, transparent); }
+  .st.red { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); background: color-mix(in srgb, var(--danger) 8%, transparent); }
+  .st.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); background: var(--warn-dim); }
+  .mono { font-family: var(--mono); }
+
+  /* ═══ 角色工坊 ═══ */
+  .workbench { display: grid; grid-template-columns: 330px 1fr; gap: 18px; align-items: start; }
+  .sidebar .side-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .side-head h3 { font-family: var(--serif); font-size: 15px; }
+  .btn-primary { background: var(--signal); color: #fff; border: none; border-radius: 8px; padding: 8px 14px; font-size: 13px; font-weight: 500; }
+  .role-item {
+    width: 100%; text-align: left; display: flex; gap: 10px; align-items: flex-start;
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 11px 12px; margin-bottom: 8px; transition: border-color 0.15s ease;
+  }
+  .role-item:hover { border-color: var(--line-hot); }
+  .role-item.active { border-color: var(--signal); box-shadow: 0 0 0 3px var(--signal-dim); }
+  .avatar { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-family: var(--mono); font-size: 11px; flex: none; }
+  .role-item .meta { min-width: 0; flex: 1; }
+  .role-item .row1 { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+  .role-item .slot { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+  .role-item b { font-size: 13.5px; display: block; margin-top: 3px; }
+  .role-item p { font-size: 11.5px; color: var(--muted); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .detail { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 22px 24px; }
+  .eyebrow { font-family: var(--mono); font-size: 11px; color: var(--copper); letter-spacing: 0.08em; }
+  .detail h2 { font-family: var(--serif); font-size: 24px; margin: 8px 0 4px; }
+  .detail .summary { font-size: 13.5px; color: var(--muted); margin-bottom: 16px; }
+  .kv-block { border-top: 1px solid var(--line); padding: 14px 0; }
+  .kv-block .k { font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; color: var(--muted); margin-bottom: 8px; }
+  .persona { font-size: 13px; line-height: 1.75; white-space: pre-wrap; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line-hot); border-radius: 6px; padding: 3px 9px; color: var(--muted); }
+  .detail-actions { display: flex; gap: 10px; margin-top: 18px; }
+  .btn-ghost { background: none; border: 1px solid var(--line-hot); border-radius: 8px; padding: 8px 14px; font-size: 13px; }
+  .btn-danger { background: none; border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent); color: var(--danger); border-radius: 8px; padding: 8px 14px; font-size: 13px; }
+
+  /* ═══ 角色锻造 ═══ */
+  .forge-grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 18px; align-items: start; }
+  .cap-box { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; margin-bottom: 16px; }
+  .cap-row { display: flex; gap: 10px; margin-top: 12px; }
+  .cap-row input { flex: 1; border: 1px solid var(--line-hot); border-radius: 8px; padding: 9px 12px; font-size: 13px; background: var(--panel-2); outline: none; }
+  .cap-row input:focus { border-color: var(--copper); }
+  .draft-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px 22px; }
+  .draft-card .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+  .field { margin-bottom: 14px; }
+  .field label { display: block; font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; color: var(--muted); margin-bottom: 6px; }
+  .field input, .field textarea { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; font-size: 13px; background: var(--panel-2); outline: none; }
+  .field textarea { min-height: 96px; resize: vertical; line-height: 1.7; }
+  .draft-actions { display: flex; gap: 10px; }
+  .side-panel { display: flex; flex-direction: column; gap: 14px; }
+  .check-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; }
+  .check-card h4 { font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; color: var(--muted); margin-bottom: 10px; }
+  .issue { display: flex; gap: 8px; font-size: 12.5px; color: var(--danger); margin-bottom: 7px; line-height: 1.5; }
+  .sim-row { display: flex; justify-content: space-between; align-items: center; font-size: 12.5px; padding: 7px 0; border-top: 1px solid var(--line); }
+  .sim-row:first-of-type { border-top: none; }
+  .score { font-family: var(--mono); font-size: 11px; color: var(--warn); }
+  .contract-row { font-size: 12.5px; margin-bottom: 6px; }
+  .contract-row .k { color: var(--muted); font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; margin-right: 8px; }
+  .history-strip { margin-top: 20px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .history-strip .h { font-family: var(--mono); font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; background: var(--panel); }
+
+  /* ═══ 小群 ═══ */
+  .subroom-grid { display: grid; grid-template-columns: 360px 1fr; gap: 18px; align-items: start; }
+  .sub-item { width: 100%; text-align: left; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 13px 14px; margin-bottom: 8px; }
+  .sub-item:hover { border-color: var(--line-hot); }
+  .sub-item.active { border-color: var(--signal); box-shadow: 0 0 0 3px var(--signal-dim); }
+  .sub-item .head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .sub-item .head b { font-size: 13px; font-family: var(--serif); }
+  .sub-item .goal { font-size: 12px; color: var(--muted); margin-top: 5px; line-height: 1.5; }
+  .sub-item .budget { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-top: 7px; }
+  .live { font-family: var(--mono); font-size: 10px; color: var(--signal); }
+  .live::before { content: "● "; }
+  .chat-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px 22px; }
+  .chat-head { display: flex; justify-content: space-between; align-items: baseline; border-bottom: 1px solid var(--line); padding-bottom: 12px; margin-bottom: 14px; }
+  .chat-head b { font-family: var(--serif); font-size: 16px; }
+  .members { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+  .member { font-size: 11.5px; border: 1px solid var(--line-hot); border-radius: 999px; padding: 3px 10px; color: var(--muted); }
+  .member.lead { color: var(--copper); border-color: color-mix(in srgb, var(--copper) 40%, transparent); }
+  .turn { display: flex; gap: 12px; padding: 10px 0 10px 14px; border-left: 2px solid var(--line); margin-bottom: 4px; }
+  .turn .who { font-family: var(--mono); font-size: 11px; color: var(--copper); flex: none; width: 110px; padding-top: 2px; }
+  .turn p { font-size: 13px; line-height: 1.7; }
+  .conclusion { margin-top: 16px; border: 1px solid color-mix(in srgb, var(--signal) 35%, transparent); background: var(--signal-dim); border-radius: 8px; padding: 12px 14px; font-size: 13px; line-height: 1.6; }
+  .conclusion .k { font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; color: var(--signal); display: block; margin-bottom: 5px; }
+
+  /* ═══ 决策中心 ═══ */
+  .dec-item { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; margin-bottom: 10px; border-left: 3px solid var(--warn); }
+  .dec-item.answered { border-left-color: var(--signal); opacity: 0.75; }
+  .dec-head { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .dec-head .id { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .dec-head .count { margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--warn); }
+  .dec-q { font-size: 14.5px; font-weight: 500; line-height: 1.6; margin-bottom: 6px; }
+  .dec-ctx { font-size: 12px; color: var(--muted); line-height: 1.6; margin-bottom: 10px; }
+  .dec-meta { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-bottom: 12px; }
+  .answer-row { display: flex; gap: 10px; }
+  .answer-row input { flex: 1; border: 1px solid var(--line-hot); border-radius: 8px; padding: 8px 12px; font-size: 13px; background: var(--panel-2); outline: none; }
+</style>
+</head>
+<body data-theme="paper">
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark">缩</div>
+    <div><b>Sortie Deck</b><small>建缩小镇 · 共交付，无传话</small></div>
+  </div>
+  <nav class="nav" id="nav">
+    <button data-page="agents" class="on">角色工坊</button>
+    <button data-page="forge">角色锻造</button>
+    <button data-page="subrooms">小群</button>
+    <button data-page="decisions">决策中心</button>
+  </nav>
+  <div class="spacer"></div>
+  <button class="theme-btn" id="themeBtn">◈ 主题</button>
+</header>
+
+<!-- ═══════════ 页 1 · 角色工坊 ═══════════ -->
+<main class="page on" id="page-agents">
+  <div class="page-head">
+    <h2>角色工坊</h2>
+    <span class="hint">领域专家发布专业角色，任务组建时点名上阵</span>
+  </div>
+  <div class="todo-strip">
+    <button class="todo-chip cool"><span class="n">7</span>已发布角色</button>
+    <button class="todo-chip"><span class="n">2</span>仅自己可见</button>
+    <button class="todo-chip hot"><span class="n">1</span>锻造待审 →</button>
+  </div>
+  <div class="workbench">
+    <aside class="sidebar">
+      <div class="side-head">
+        <h3>编制名册</h3>
+        <button class="btn-primary">发布角色</button>
+      </div>
+      <button class="role-item active">
+        <span class="avatar" style="background:#0e9f6e">DH</span>
+        <span class="meta">
+          <span class="row1"><span class="slot">deploy</span><span class="st green">public</span></span>
+          <b>Deploy Officer</b>
+          <p>Auto-created by mission briefing · 作 Mission Briefing</p>
+        </span>
+      </button>
+      <button class="role-item">
+        <span class="avatar" style="background:#805ad5">QA</span>
+        <span class="meta">
+          <span class="row1"><span class="slot">qa</span><span class="st green">public</span></span>
+          <b>QA Gatekeeper</b>
+          <p>门槛拦截官: 用相似收雇算法 pass/fail · 作者 Sortie</p>
+        </span>
+      </button>
+      <button class="role-item">
+        <span class="avatar" style="background:#b83280">AR</span>
+        <span class="meta">
+          <span class="row1"><span class="slot">eng_agent</span><span class="st green">public</span></span>
+          <b>Agent Raider</b>
+          <p>Agent 开发突击: 工具、提示、评测门槛 · 作者 Sortie</p>
+        </span>
+      </button>
+      <button class="role-item">
+        <span class="avatar" style="background:#2b6cb0">BR</span>
+        <span class="meta">
+          <span class="row1"><span class="slot">eng_backend</span><span class="st green">public</span></span>
+          <b>Backend Raider</b>
+          <p>后端突击: API、数据模型、可观测 · 作者 Sortie</p>
+        </span>
+      </button>
+      <button class="role-item">
+        <span class="avatar" style="background:#2c7a7b">WR</span>
+        <span class="meta">
+          <span class="row1"><span class="slot">eng_web</span><span class="st green">public</span></span>
+          <b>Web Raider</b>
+          <p>Web 前端突击: 组件、可访问、起设计 · 作者 Sortie</p>
+        </span>
+      </button>
+      <button class="role-item">
+        <span class="avatar" style="background:#38a169">AN</span>
+        <span class="meta">
+          <span class="row1"><span class="slot">eng_android</span><span class="st copper">private</span></span>
+          <b>Android Raider</b>
+          <p>Android 突击: Kotlin/Jetpack · 作者 Sortie</p>
+        </span>
+      </button>
+    </aside>
+    <section class="detail">
+      <div class="eyebrow">deploy · deploy-officer · v3</div>
+      <h2>Deploy Officer</h2>
+      <p class="summary">Auto-created by mission briefing · 作 Mission Briefing · 作者 SlotDeploy</p>
+      <div class="kv-block">
+        <div class="k">人设 / 系统提示</div>
+        <div class="persona">你是前线部署官。任务 brief 进来时，你负责把它拆成可执行的任务卡：明确目标、产出物、验收口径与交接对象。口径不清楚就停下提问，不要自行脑补。输出始终使用中文，产出物命名遵循任务卡编号。</div>
+      </div>
+      <div class="kv-block">
+        <div class="k">已挂工具</div>
+        <div class="chips">
+          <span class="chip">kb-search</span>
+          <span class="chip">mission-brief</span>
+          <span class="chip">task-split</span>
+        </div>
+      </div>
+      <div class="kv-block">
+        <div class="k">标签</div>
+        <div class="chips"><span class="chip">部署</span><span class="chip">任务拆解</span><span class="chip">brief</span></div>
+      </div>
+      <div class="detail-actions">
+        <button class="btn-ghost">编辑</button>
+        <button class="btn-danger">删除</button>
+      </div>
+    </section>
+  </div>
+</main>
+
+<!-- ═══════════ 页 2 · 角色锻造 ═══════════ -->
+<main class="page" id="page-forge">
+  <div class="page-head">
+    <h2>角色锻造</h2>
+    <span class="hint">大模型现场生成的待审核角色，审核通过后才入编</span>
+  </div>
+  <div class="todo-strip">
+    <button class="todo-chip hot"><span class="n">1</span>待审核草稿</button>
+    <button class="todo-chip cool"><span class="n">10</span>历史草稿</button>
+  </div>
+  <div class="forge-grid">
+    <section>
+      <div class="cap-box">
+        <div class="eyebrow">FORGE · 输入能力</div>
+        <div class="cap-row">
+          <input type="text" value="能写数据迁移脚本并在测试库演练通过" placeholder="描述一种当前缺少的能力…">
+          <button class="btn-primary">生成角色</button>
+        </div>
+      </div>
+      <div class="draft-card">
+        <div class="head">
+          <span class="st warn">待审核</span>
+          <span class="mono" style="font-size:11px;color:var(--muted)">eng_data · 生成方式 deepseek-v3</span>
+        </div>
+        <div class="field">
+          <label>角色名</label>
+          <input type="text" value="Data Raider">
+        </div>
+        <div class="field">
+          <label>简介</label>
+          <input type="text" value="数据突击: 迁移脚本、演练、回滚预案 · 作者 Forge">
+        </div>
+        <div class="field">
+          <label>人设 / 系统提示</label>
+          <textarea>你是数据突击手。拿到迁移需求后：先读现有 schema，再写迁移脚本，在测试库演练并给出回滚脚本。演练不通过不得提交。产出物：迁移 SQL、演练记录、回滚 SQL。</textarea>
+        </div>
+        <div class="draft-actions">
+          <button class="btn-ghost">保存</button>
+          <button class="btn-primary">审核通过并发布</button>
+          <button class="btn-danger">驳回</button>
+        </div>
+      </div>
+    </section>
+    <aside class="side-panel">
+      <div class="check-card">
+        <h4>自检问题</h4>
+        <div class="issue">⚠ 人设缺少输出格式约定（产出物命名规则未定义）</div>
+      </div>
+      <div class="check-card">
+        <h4>疑似重复角色</h4>
+        <div class="sim-row"><span class="mono">eng_backend · Backend Raider</span><span class="score">0.82</span></div>
+        <div class="sim-row"><span class="mono">qa · QA Gatekeeper</span><span class="score">0.41</span></div>
+      </div>
+      <div class="check-card">
+        <h4>契约</h4>
+        <div class="contract-row"><span class="k">产出</span>迁移 SQL · 演练记录 · 回滚 SQL</div>
+        <div class="contract-row"><span class="k">交接</span>QA Gatekeeper · Deploy Officer</div>
+      </div>
+    </aside>
+  </div>
+  <div class="history-strip">
+    <span class="mono" style="font-size:10px;letter-spacing:0.14em;color:var(--muted)">历史</span>
+    <span class="h">eng_data · pending-review</span>
+    <span class="h">eng_perf · approved</span>
+    <span class="h">eng_docs · rejected</span>
+  </div>
+</main>
+
+<!-- ═══════════ 页 3 · 小群 ═══════════ -->
+<main class="page" id="page-subrooms">
+  <div class="page-head">
+    <h2>小群</h2>
+    <span class="hint">小群讨论记录不回流大群，只有结论作为记忆注入</span>
+  </div>
+  <div class="todo-strip">
+    <button class="todo-chip hot"><span class="n">1</span>进行中</button>
+    <button class="todo-chip cool"><span class="n">2</span>已关闭</button>
+  </div>
+  <div class="subroom-grid">
+    <aside>
+      <button class="sub-item active">
+        <span class="head"><b>集成 → Deploy Officer</b><span class="live">实时</span></span>
+        <span class="goal">敲定 in1_360c79 集成阶段的双写过渡方案</span>
+        <span class="budget">tokens 12,000/24,000 · rounds 3/6 · timeout 600s</span>
+      </button>
+      <button class="sub-item">
+        <span class="head"><b>放行 → QA Gatekeeper</b><span class="st green">closed</span></span>
+        <span class="goal">客户通知中心 V2 验收口径</span>
+        <span class="budget">tokens 8,400/16,000 · rounds 4/4 · timeout 300s</span>
+      </button>
+      <button class="sub-item">
+        <span class="head"><b>集成 → Backend Raider</b><span class="st red">timeout</span></span>
+        <span class="goal">灰度发布脚本回滚分支取舍</span>
+        <span class="budget">tokens 16,000/16,000 · rounds 6/6 · timeout 300s</span>
+      </button>
+    </aside>
+    <section class="chat-card">
+      <div class="chat-head">
+        <b>集成 → Deploy Officer</b>
+        <span class="mono" style="font-size:11px;color:var(--muted)">in1_360c79</span>
+      </div>
+      <div class="members">
+        <span class="member lead">Deploy Officer · 发起</span>
+        <span class="member lead">Agent Raider · 主持</span>
+        <span class="member">QA Gatekeeper</span>
+        <span class="member">Backend Raider</span>
+      </div>
+      <div class="turn"><span class="who">Agent Raider</span><p>现有方案 A 是整库切换，风险集中在发布窗口；方案 B 双写过渡表，迁移期间两边都在写。我倾向 B，代价是多一轮数据校验。</p></div>
+      <div class="turn"><span class="who">Backend Raider</span><p>B 可行，但校验脚本要挂在 QA Gatekeeper 的验收清单里，否则过渡期结束我们不敢摘旧表。</p></div>
+      <div class="turn"><span class="who">QA Gatekeeper</span><p>可以，我把「双写一致性校验」加为 pass/fail 硬门槛，连续两轮绿才允许摘除。</p></div>
+      <div class="turn"><span class="who">Deploy Officer</span><p>那就定 B。发布窗口不用改，回滚路径是现成的。</p></div>
+      <div class="conclusion"><span class="k">结论</span>采用方案 B：双写过渡表。QA 增加双写一致性硬门槛，连续两轮绿后摘除旧表；回滚沿用现有关卡。</div>
+    </section>
+  </div>
+</main>
+
+<!-- ═══════════ 页 4 · 决策中心 ═══════════ -->
+<main class="page" id="page-decisions">
+  <div class="page-head">
+    <h2>决策中心</h2>
+    <span class="hint">Agent 与 Manager 都无法拍板时，交由真人决定</span>
+  </div>
+  <div class="todo-strip">
+    <button class="todo-chip hot"><span class="n">1</span>等待真人回复</button>
+    <button class="todo-chip cool"><span class="n">8</span>已关闭</button>
+  </div>
+  <div class="dec-item">
+    <div class="dec-head">
+      <span class="st warn">等待真人回复</span>
+      <span class="id">in1_98a7ddb · stage 待放行</span>
+      <span class="count">⏱ 12:34</span>
+    </div>
+    <p class="dec-q">客户通知中心 V2 的发布窗口选哪个？</p>
+    <p class="dec-ctx">QA 已连续两轮绿；运营侧倾向避开周一早高峰推送时段。</p>
+    <div class="dec-meta">决策人 @admin · 可选: 周二晚 / 周四晚 · 超时 fallback: <span class="mono">auto_postpone</span></div>
+    <div class="answer-row">
+      <input type="text" value="" placeholder="回复决策（Enter 提交）…">
+      <button class="btn-primary">回复</button>
+    </div>
+  </div>
+  <div class="dec-item answered">
+    <div class="dec-head">
+      <span class="st green">answered</span>
+      <span class="id">in1_1708d3 · stage 已通关</span>
+    </div>
+    <p class="dec-q">通知模板文案由谁终审？</p>
+    <p class="dec-meta">回复: 由 Deploy Officer 终审，Ops 抽检 · <span class="mono">d-0x3f</span></p>
+  </div>
+  <div class="dec-item answered">
+    <div class="dec-head">
+      <span class="st red">expired</span>
+      <span class="id">in1_9e8a4db · stage 出击中</span>
+    </div>
+    <p class="dec-q">灰度比例是否提升到 50%？</p>
+    <p class="dec-meta">超时未回复 · 已执行 fallback <span class="mono">keep_10pct</span></p>
+  </div>
+</main>
+
+<script>
+  // 页签切换: hash 支持直达（#agents/#forge/#subrooms/#decisions）
+  var nav = document.getElementById("nav");
+  function go(name) {
+    document.querySelectorAll(".page").forEach(function (pg) { pg.classList.remove("on"); });
+    document.getElementById("page-" + name).classList.add("on");
+    nav.querySelectorAll("button").forEach(function (b) { b.classList.toggle("on", b.dataset.page === name); });
+  }
+  nav.addEventListener("click", function (e) {
+    var btn = e.target.closest("button");
+    if (btn) { location.hash = btn.dataset.page; go(btn.dataset.page); }
+  });
+  if (location.hash) go(location.hash.slice(1));
+  // 纸/墨主题切换
+  document.getElementById("themeBtn").addEventListener("click", function () {
+    var ink = document.body.dataset.theme !== "ink";
+    document.body.dataset.theme = ink ? "ink" : "paper";
+  });
+</script>
+</body>
+</html>
