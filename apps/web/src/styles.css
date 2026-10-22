@@ -1498,6 +1498,10 @@ textarea {
   padding-top: 0;
   border-top: 0;
 }
+/* 上传按钮保持内容宽度，不随纵向容器 stretch 拉满整行 */
+.agent-avatar-actions > .btn {
+  align-self: flex-start;
+}
 .role-avatar.has-img {
   background: var(--panel-2);
 }
