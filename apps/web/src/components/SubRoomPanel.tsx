@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getSubRoomTranscript, listSubRooms } from "../api";
 import { t } from "../i18n";
+import { MOCK_SUBROOMS, MOCK_TRANSCRIPTS } from "../mock";
+import { RoleAvatar } from "./RoleAvatar";
 import type { Lang, SubRoomRecord } from "../types";
 
 type Props = {
@@ -78,6 +80,11 @@ export function SubRoomPanel({
 
   const loadTranscript = useCallback(
     async (subroomId: string) => {
+      // mock 小群没有后端会话，直接取本地演示对白
+      if (MOCK_TRANSCRIPTS[subroomId]) {
+        setTranscript(MOCK_TRANSCRIPTS[subroomId]);
+        return;
+      }
       try {
         setTranscript(await getSubRoomTranscript(token, subroomId));
       } catch (err) {
@@ -89,7 +96,13 @@ export function SubRoomPanel({
 
   const refresh = useCallback(async (): Promise<SubRoomRecord[]> => {
     try {
-      const rows = await listSubRooms(token, initiativeId ?? undefined);
+      let rows = await listSubRooms(token, initiativeId ?? undefined);
+      // 接口为空时回退 mock 演示数据；badge 仍按真实数据计数，避免误导
+      if (rows.length === 0) {
+        setSubrooms(MOCK_SUBROOMS);
+        setError("");
+        return MOCK_SUBROOMS;
+      }
       setSubrooms(rows);
       onCountRef.current?.(rows.length);
       setError("");
@@ -150,14 +163,24 @@ export function SubRoomPanel({
 
   function renderTurns() {
     if (transcript.length === 0) return <p className="tiny">—</p>;
+    const display = (role?: string | null) => roleTitles?.[role ?? ""] || role || "?";
     return (
       <>
         {transcript.map((turn, idx) => (
-          <div className="subroom-turn" key={`${openId}-${idx}`}>
-            <div className="subroom-turn-who">
-              {roleTitles?.[turn.role ?? ""] || turn.role || "?"}
-            </div>
-            <div className="subroom-turn-text">{turn.text}</div>
+          <div className="wr-msg" key={`${openId}-${idx}`}>
+            <RoleAvatar role={turn.role ?? ""} title={display(turn.role)} size={34} />
+            <span>
+              <span className="who">
+                {display(turn.role)}
+                {turn.role && turn.role === active?.initiator_role && (
+                  <small>{t(lang, "subroomInitiator")}</small>
+                )}
+                {turn.role && turn.role === active?.lead_role && (
+                  <small>{t(lang, "subroomLead")}</small>
+                )}
+              </span>
+              <p>{turn.text}</p>
+            </span>
           </div>
         ))}
         <div ref={endRef} />
@@ -188,15 +211,127 @@ export function SubRoomPanel({
     );
   }
 
+  // V2 作战室：page 变体改为「窄轨道 + 对话时间线」布局；dock 变体沿用下方卡片列表
+  if (variant === "page") {
+    // token 预算进度：estimate/max 封顶 100%，防预估超限把条撑爆
+    const tokenPct = active
+      ? Math.min(100, Math.round(((active.token_estimate || 0) / Math.max(1, active.max_tokens || 1)) * 100))
+      : 0;
+    return (
+      <>
+        <div className="wr-page-head">
+          <h2>{t(lang, "subrooms")}</h2>
+          <span className="wr-hint">{t(lang, "subroomsHint")}</span>
+          <div className="wr-head-right">
+            {liveSignal > 0 && <span className="st green">● {t(lang, "subroomLive")}</span>}
+          </div>
+        </div>
+        {error && <p style={{ color: "var(--danger, #d33)" }}>{error}</p>}
+        {subrooms.length === 0 && <p className="tiny">{t(lang, "noSubrooms")}</p>}
+        <div className="wr-subroom-layout">
+          <aside>
+            {subrooms.map((sub) => (
+              <button
+                className={`wr-rail-item${openId === sub.id ? " active" : ""}`}
+                key={sub.id}
+                type="button"
+                onClick={() => void toggle(sub)}
+              >
+                <span className="wr-t">
+                  <span className="wr-tt">
+                    {sub.initiator_role} → {sub.parent_stage}
+                  </span>
+                  <em className="subroom-status">{sub.status}</em>
+                </span>
+                <span className="wr-g">{sub.goal}</span>
+              </button>
+            ))}
+          </aside>
+          <section className="wr-timeline">
+            {active ? (
+              <>
+                <div className="wr-tl-head">
+                  <b>{active.initiator_role} → {active.parent_stage}</b>
+                  <span style={{ display: "flex", gap: 8 }}>
+                    <button
+                      className="btn ghost tiny"
+                      type="button"
+                      onClick={() => void toggle(active)}
+                    >
+                      {t(lang, "close")}
+                    </button>
+                    <button
+                      className="btn ghost tiny subroom-fs-btn"
+                      type="button"
+                      onClick={() => setFullscreen(true)}
+                      title={t(lang, "subroomFullscreen")}
+                    >
+                      ⛶ {t(lang, "subroomFullscreen")}
+                    </button>
+                  </span>
+                </div>
+                <span className="mono" style={{ fontSize: "0.7rem", color: "var(--muted)" }}>
+                  {active.initiative_id.slice(0, 10)}
+                </span>
+                <div className="wr-budget">
+                  <span className="wr-lab">
+                    tokens ≈ {active.token_estimate}/{active.max_tokens}
+                  </span>
+                  <span className="wr-track">
+                    <span className="wr-fill" style={{ width: `${tokenPct}%` }} />
+                  </span>
+                  <span className="wr-lab">
+                    rounds ≤ {active.max_rounds} · {active.timeout_seconds}s
+                  </span>
+                </div>
+                {renderMembers(active)}
+                <div>{renderTurns()}</div>
+                {active.conclusion && (
+                  <div className="wr-conclusion-bar">
+                    <span className="k">{t(lang, "conclusion")}</span>
+                    <p>{active.conclusion}</p>
+                  </div>
+                )}
+                {active.reason && (
+                  <p className="tiny" style={{ marginTop: 8, opacity: 0.75 }}>
+                    {active.reason}
+                  </p>
+                )}
+              </>
+            ) : (
+              <p className="tiny">{t(lang, "wrPickSubroom")}</p>
+            )}
+          </section>
+        </div>
+        {fullscreen && active && (
+          <section className="subroom-fullscreen">
+            <header className="subroom-fs-head">
+              <div>
+                <span className="panel-label">
+                  {active.initiator_role} → {active.parent_stage}
+                </span>
+                <span className="tiny subroom-fs-goal">{active.goal}</span>
+              </div>
+              <button
+                className="btn ghost tiny"
+                type="button"
+                onClick={() => setFullscreen(false)}
+                title={`${t(lang, "subroomExitFullscreen")} (Esc)`}
+              >
+                ⤡ {t(lang, "subroomExitFullscreen")}
+              </button>
+            </header>
+            <div className="subroom-fs-side">{renderMembers(active)}</div>
+            <div className="subroom-chat subroom-fs-body">{renderTurns()}</div>
+          </section>
+        )}
+      </>
+    );
+  }
+
+  // dock 变体：任务内抽屉形态，沿用紧凑卡片列表
   return (
     <>
-      {variant === "page" && <div className="panel-label">{t(lang, "subrooms")}</div>}
-      {variant === "page" && (
-        <p className="tiny" style={{ opacity: 0.75, margin: "4px 0 12px" }}>
-          {t(lang, "subroomsHint")}
-        </p>
-      )}
-
       {error && <p style={{ color: "var(--danger, #d33)" }}>{error}</p>}
       {subrooms.length === 0 && <p className="tiny">{t(lang, "noSubrooms")}</p>}
 
