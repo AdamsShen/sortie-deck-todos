@@ -33,13 +33,20 @@ Return ONLY JSON.
 _LOADOUT_SYSTEM_TEMPLATE = """You are Sortie Deck's squad loadout planner.
 Given a mission brief, a role catalog, and proposed pipeline stages, return JSON:
   needed_slots: array of role ids chosen from the provided role catalog
+  missing_slots: array (at most 2) of roles the mission clearly needs but the catalog lacks,
+                 each {"role_key": "<snake_case ascii>", "title": "<name>",
+                       "capability": "<what it delivers>", "why": "<why the catalog cannot cover it>"}
   rationale: short explanation in the same language as the brief
-Only include slots that the stages / brief actually need. Always include product, qa, deploy
-when those stages exist.
+Only include needed_slots that the stages / brief actually need. Always include product, qa,
+deploy when those stages exist.
 Use specific eng_* roles (eng_backend, eng_web, eng_ios, eng_android, eng_agent) whenever the
 requirement needs more than one engineering discipline — never collapse them into the generic eng.
 Reserve the generic eng role for cases where exactly ONE engineering role can deliver the whole
-build. Never invent a role id that is not in the catalog.
+build.
+needed_slots must ONLY contain catalog roles — never invent an id there. missing_slots is the
+only place for a genuinely new discipline (e.g. a domain specialist); use it sparingly (at most
+2), never for something an existing role already covers, and never duplicate a catalog role.
+Missing slots become review-pending agent drafts, so a wrong one costs a human review.
 Return ONLY JSON.
 """
 
@@ -61,6 +68,9 @@ Return ONLY JSON.
 # Built-in fallback used when the role registry is unavailable.
 _BUILTIN_SLOTS: frozenset[str] = frozenset(m.value for m in RoleId)
 
+# 单次建队最多登记多少个「目录外角色」（每个都会产生一条待审草稿，多了就失控）
+_MAX_MISSING_SLOTS = 2
+
 
 def valid_loadout_slots() -> set[str]:
     """Role keys the loadout planner may pick — registry-driven, not a closed set."""
@@ -70,6 +80,58 @@ def valid_loadout_slots() -> set[str]:
         return set(get_role_registry().known_role_keys())
     except Exception:  # noqa: BLE001 — registry failure must not block planning
         return set(_BUILTIN_SLOTS)
+
+
+def clean_missing_slots(raw: Any, allowed: set[str]) -> list[dict[str, Any]]:
+    """校验规划官提出的「目录外角色」，只保留确实需要新建的条目。
+
+    输入示例（模型返回）：``[{"role_key": "pet_funeral", "title": "宠物殡葬策划",
+    "capability": "...", "why": "..."}]``
+    输出示例：``[{"role_key": "pet_funeral", "title": "...", "capability": "...", "why": "..."}]``
+
+    规则（缺失即降级，绝不阻塞建队）：
+    - role_key 必须是 snake_case 可归一化的键；与目录内角色同名 → 丢弃（应走 needed_slots）
+    - 与已有角色语义高度相似 → 丢弃（find_similar 去重，避免重复造轮子）
+    - 最多 ``_MAX_MISSING_SLOTS`` 条，重复键去重
+    """
+    rows = raw if isinstance(raw, list) else []
+    if not rows:
+        return []
+    try:
+        from sortie_deck.roles import get_role_registry, normalize_role_key
+
+        registry = get_role_registry()
+    except Exception:  # noqa: BLE001 — registry unavailable → cannot validate, so refuse all
+        return []
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in rows:
+        if isinstance(item, str):
+            item = {"role_key": item}
+        if not isinstance(item, dict):
+            continue
+        key = normalize_role_key(str(item.get("role_key") or item.get("slot") or ""))
+        title = str(item.get("title") or "").strip()
+        if not key or key in seen or key in allowed:
+            continue
+        capability = str(item.get("capability") or "").strip()
+        why = str(item.get("why") or "").strip()
+        similar = registry.find_similar(title=title or key, summary=capability)[:1]
+        if similar and similar[0][1] >= 0.55:
+            # 高度相似说明目录里已有能胜任的角色，交给 needed_slots 而非新建
+            continue
+        seen.add(key)
+        out.append(
+            {
+                "role_key": key,
+                "title": title or key,
+                "capability": capability or why or title or key,
+                "why": why,
+            }
+        )
+        if len(out) >= _MAX_MISSING_SLOTS:
+            break
+    return out
 
 
 async def plan_pipeline_llm(
@@ -157,7 +219,8 @@ async def propose_loadout_llm(
     except Exception:
         return None
     slots = [str(s) for s in (data.get("needed_slots") or []) if str(s) in allowed]
-    if not slots:
+    missing = clean_missing_slots(data.get("missing_slots"), allowed)
+    if not slots and not missing:
         return None
     seen: set[str] = set()
     ordered: list[str] = []
@@ -167,6 +230,7 @@ async def propose_loadout_llm(
             ordered.append(s)
     return {
         "needed_slots": ordered,
+        "missing_slots": missing,
         "rationale": str(data.get("rationale") or ""),
         "planner": "llm",
         "planner_backend": llm.backend,

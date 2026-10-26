@@ -82,6 +82,9 @@ class Settings(BaseSettings):
     # Codex `exec --sandbox` 档位（read-only | workspace-write | danger-full-access）。
     # 默认 workspace-write：编码阶段需要写文件；会话续跑沿用首次档位。
     codex_sandbox: str = "workspace-write"
+    # 建队规划官发现目录外能力时会生成 forge 草稿；草稿未经人工审核前禁止出击。
+    # 关闭后退化为旧行为（未发布 agent 直接随任务跑），仅建议临时排障时使用。
+    forge_require_review: bool = True
     # OpenCode server (deployed alongside the app in the cloud, started via
     # `opencode serve`). The provider talks HTTP to it — never a local CLI.
     opencode_base_url: str | None = None

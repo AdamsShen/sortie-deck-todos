@@ -21,6 +21,7 @@ from sortie_deck.models import (
     ConfirmPipelineRequest,
     CreateInitiativeRequest,
     ExternalMaterial,
+    ForgeReviewRequiredError,
     HarnessLockedError,
     HitlAction,
     HitlDecision,
@@ -1249,12 +1250,36 @@ class Orchestrator:
         except Exception:  # noqa: BLE001 — mission memory must never block start
             pass
 
+    def _pending_forge_drafts(self, ini: Initiative) -> list[str]:
+        """本任务建队时生成的、仍待人工审核的 forge 草稿 id。
+
+        只读任务 meta 里记录过的草稿 id（不扫全库），并直读任务目录下的
+        forge 存储，避免调用全局单例（其数据目录可能与本 Orchestrator 不同）。
+        读取失败视为无待审草稿：审核门禁不能因存储问题把任务永久卡死。
+        """
+        ids = [str(x) for x in (ini.meta.get("forge_drafts") or []) if str(x).strip()]
+        if not ids:
+            return []
+        try:
+            from sortie_deck.agent_forge import ForgeStore
+
+            store = ForgeStore(self.cfg.data_dir / "forge.json")
+            return [draft_id for draft_id in ids if store.get(draft_id).status == "pending-review"]
+        except Exception:  # noqa: BLE001 — 草稿缺失/损坏时放行，由审核页兜底
+            logger.warning("forge 草稿状态读取失败（按无待审处理）: %s", ini.id, exc_info=True)
+            return []
+
     async def start_pipeline(self, initiative_id: str, author_name: str = "Operator") -> Initiative:
         ini = self.store.get(initiative_id)
         if not ini:
             raise KeyError(initiative_id)
         if not ini.meta.get("pipeline_confirmed"):
             raise PipelineNotConfirmedError()
+        # 自动创建 ≠ 自动放行：目录外角色必须先审核注册，否则任务拒绝出击
+        if bool(getattr(self.cfg, "forge_require_review", True)):
+            pending = self._pending_forge_drafts(ini)
+            if pending:
+                raise ForgeReviewRequiredError(pending)
         if ini.status not in {InitiativeStatus.DRAFT, InitiativeStatus.STOPPED, InitiativeStatus.FAILED}:
             if ini.status == InitiativeStatus.RUNNING:
                 return ini

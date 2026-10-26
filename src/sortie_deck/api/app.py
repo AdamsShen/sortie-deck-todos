@@ -54,6 +54,7 @@ from sortie_deck.models import (
     CreateInitiativeRequest,
     DiscussParticipateRequest,
     ExternalMaterial,
+    ForgeReviewRequiredError,
     HitlAction,
     HitlDecision,
     HitlSubmitRequest,
@@ -1994,6 +1995,16 @@ async def start_initiative(
         return (orch().get(ini.id) or ini).model_dump(mode="json")
     except KeyError:
         raise HTTPException(404, "Initiative not found") from None
+    except ForgeReviewRequiredError as exc:
+        # 409：任务本身合法，只是缺一步人工审核（审核通过后可直接重试 /start）
+        raise HTTPException(
+            409,
+            detail={
+                "code": exc.code,
+                "message": exc.message,
+                "draft_ids": exc.draft_ids,
+            },
+        ) from exc
     except PipelineNotConfirmedError as exc:
         raise HTTPException(
             400,

@@ -318,6 +318,8 @@ class MissionBriefingAgent:
                     state.context["stages"] = result.data.get("stages") or []
                 elif name == "propose_loadout":
                     state.context["needed_slots"] = result.data.get("needed_slots") or []
+                    # 目录外角色（待 forge + 人工审核），随编制位一起进入建队
+                    state.context["missing_slots"] = result.data.get("missing_slots") or []
                     state.context["role_agents"] = result.data.get("role_agents") or {}
                     state.context["loadout_planner"] = result.data.get("loadout_planner") or {}
                     state.context["stages"] = state.context.get("stages") or []
@@ -411,7 +413,14 @@ class MissionBriefingAgent:
             {"brief": discussion, "stages": state.context.get("stages") or []},
         )
         harness.emit(state, EventKind.WATERFALL, "⑤ 补齐缺失角色", step="roles")
-        await run_tool("ensure_missing_roles", {"slots": state.context.get("needed_slots") or []})
+        await run_tool(
+            "ensure_missing_roles",
+            {
+                "slots": state.context.get("needed_slots") or [],
+                # 目录外角色的标题/能力描述：forge 草稿据此生成，比裸 slot 名可读
+                "missing": state.context.get("missing_slots") or [],
+            },
+        )
 
         draft = {
             "title": sess.title,
@@ -549,6 +558,19 @@ class MissionBriefingAgent:
                 maybe = self._save_initiative(ini)
                 if hasattr(maybe, "__await__"):
                     await maybe  # type: ignore[misc]
+        # 待审 forge 草稿写入任务 meta：出击门禁据此阻断未审核角色的任务
+        # （Orchestrator.start_pipeline → forge_review_required）
+        forged = [f for f in (draft.get("forged_agents") or []) if f.get("draft_id")]
+        if forged:
+            ini.meta = {
+                **ini.meta,
+                "forge_drafts": [str(f["draft_id"]) for f in forged],
+                "forge_pending_roles": [str(f.get("role_key") or "") for f in forged],
+            }
+            if self._save_initiative:
+                maybe = self._save_initiative(ini)
+                if hasattr(maybe, "__await__"):
+                    await maybe  # type: ignore[misc]
         sess.initiative_id = ini.id
         sess.status = "done"
         state.status = "done"
@@ -627,17 +649,26 @@ class MissionBriefingAgent:
         brief = str(args.get("brief") or "")
         loadout_meta: dict[str, Any] = {"planner": "heuristic"}
         roles: list[str] = []
+        missing: list[dict[str, Any]] = []
         if self.cfg.pipeline_llm:
             llm_loadout = await propose_loadout_llm(
                 brief=brief, stages=stages if isinstance(stages, list) else [], client=self._llm()
             )
             if llm_loadout:
                 roles = list(llm_loadout.get("needed_slots") or [])
+                missing = list(llm_loadout.get("missing_slots") or [])
                 loadout_meta = {
                     "planner": "llm",
                     "planner_backend": llm_loadout.get("planner_backend"),
                     "rationale": llm_loadout.get("rationale") or "",
+                    "missing_slots": missing,
                 }
+        # 目录外角色也占编制位：先让 ensure_missing_roles 生成待审草稿，
+        # 而不是悄悄用一个相近角色顶替（那会把"缺角色"伪装成"角色齐全"）。
+        for item in missing:
+            key = str(item.get("role_key") or "").strip()
+            if key and key not in roles:
+                roles.append(key)
         if not roles:
             roles = sorted({str(s.get("role") or "eng") for s in stages if isinstance(s, dict)})
             for r in ("product", "qa", "deploy"):
@@ -651,9 +682,13 @@ class MissionBriefingAgent:
                     role_agents[slot] = cands[0].id
         return ToolResult(
             ok=True,
-            summary=f"编制位 {len(roles)}：{', '.join(roles)} · {loadout_meta.get('planner')}",
+            summary=(
+                f"编制位 {len(roles)}：{', '.join(roles)} · {loadout_meta.get('planner')}"
+                + (f" · 待 forge {len(missing)}" if missing else "")
+            ),
             data={
                 "needed_slots": roles,
+                "missing_slots": missing,
                 "role_agents": role_agents,
                 "loadout_planner": loadout_meta,
             },
@@ -662,6 +697,12 @@ class MissionBriefingAgent:
 
     async def _tool_ensure_roles(self, args: dict[str, Any]) -> ToolResult:
         slots = [str(s) for s in (args.get("slots") or []) if str(s).strip()]
+        # 规划官给出的目录外角色元数据（标题/能力/理由），用于生成可读的 forge 草稿
+        missing_meta = {
+            str(m.get("role_key")): m
+            for m in (args.get("missing") or [])
+            if isinstance(m, dict) and str(m.get("role_key") or "").strip()
+        }
         created: list[dict[str, str]] = []
         forged: list[dict[str, Any]] = []
         if self.agents is None:
@@ -672,7 +713,12 @@ class MissionBriefingAgent:
         for slot in slots:
             if self.agents.list(slot=slot):
                 continue
-            title = _SLOT_TITLES.get(slot) or (registry.maybe(slot).title if registry.maybe(slot) else "")
+            meta = missing_meta.get(slot) or {}
+            title = (
+                _SLOT_TITLES.get(slot)
+                or (registry.maybe(slot).title if registry.maybe(slot) else "")
+                or str(meta.get("title") or "")
+            )
             title = title or f"{slot} specialist"
             try:
                 persona = load_persona(slot)
@@ -682,10 +728,13 @@ class MissionBriefingAgent:
             # Unknown role key → forge a pending-review draft instead of faking a persona
             if self.forge is not None and not registry.is_known(slot):
                 try:
+                    capability = str(meta.get("capability") or "").strip()
                     draft = await self.forge.propose(
                         ForgeRequest(
-                            capability=f"{slot} role for mission: {(self._current_brief or title)[:400]}",
+                            capability=capability
+                            or f"{slot} role for mission: {(self._current_brief or title)[:400]}",
                             title=title,
+                            summary=str(meta.get("why") or "").strip(),
                             role_key=slot,
                             requested_by="mission-briefing",
                         )

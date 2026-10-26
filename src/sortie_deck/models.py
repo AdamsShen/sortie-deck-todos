@@ -122,6 +122,28 @@ class HarnessLockedError(RuntimeError):
         self.message = message
 
 
+class ForgeReviewRequiredError(RuntimeError):
+    """建队时自动 forge 的角色仍待人工审核，出击被拒。
+
+    自动创建 ≠ 自动发布：目录外角色由规划官生成 `pending-review` 草稿，
+    必须经 `/api/forge/drafts/{id}/approve` 审核注册后才能启动任务。
+    """
+
+    code = "forge_review_required"
+
+    def __init__(self, draft_ids: list[str], message: str | None = None) -> None:
+        self.draft_ids = list(draft_ids)
+        super().__init__(
+            message
+            or (
+                "Agent forge drafts still pending review: "
+                + ", ".join(self.draft_ids)
+                + " — approve them before starting the mission"
+            )
+        )
+        self.message = str(self)
+
+
 class UnknownHarnessError(RuntimeError):
     code = "unknown_harness"
 
