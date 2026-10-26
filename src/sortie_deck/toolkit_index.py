@@ -199,12 +199,13 @@ def weknora_recall(
     # 多取一倍留出过滤损耗（停用/类型/白名单过滤后仍够 limit 条）
     hits = client.hybrid_search(kb, (query or "").strip(), match_count=max(limit * 2, limit))
     rows: list[tuple[ToolkitItem, float]] = []
+    seen: set[str] = set()  # hybrid_search 是 chunk 级命中，同一条目可能命中多个 chunk
     for hit in hits:
         title = hit.knowledge_title or ""
         if not title.startswith(TITLE_PREFIX + "/") or "#" not in title:
             continue
         item_id = title.rsplit("#", 1)[-1]
-        if not item_id:
+        if not item_id or item_id in seen:
             continue
         try:
             item = store.get(item_id)
@@ -216,6 +217,7 @@ def weknora_recall(
             continue
         if allowed_ids is not None and item.id not in allowed_ids:
             continue
+        seen.add(item.id)
         # WeKnora 复合评分（rerank 模型分 + 检索分加权）已归一到 0-1，直接沿用
         rows.append((item, min(1.0, max(0.0, hit.score))))
         if len(rows) >= limit:

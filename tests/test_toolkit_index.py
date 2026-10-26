@@ -55,6 +55,8 @@ def weknora_on(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "toolkit_recall_backend", "weknora")
     monkeypatch.setattr(settings, "toolkit_weknora_kb_id", "kb_toolkit")
     monkeypatch.setattr(settings, "weknora_base_url", "http://127.0.0.1:8080")
+    # _add() 会触发镜像同步：默认注入空替身，避免用例打到真实 WeKnora（需要命中的用例自行覆盖）
+    monkeypatch.setattr(toolkit_index, "build_client", lambda: FakeClient())
 
 
 def _add(store: ToolkitStore, **kwargs: Any) -> ToolkitItem:
@@ -191,6 +193,18 @@ def test_recall_falls_back_to_local_on_weknora_error(
     monkeypatch.setattr(toolkit_index, "build_client", lambda: BoomClient())
     rows = recall(store, query="postgres")
     assert [r[0].id for r in rows] == [item.id], "WeKnora 异常必须降级本地打分而非抛出"
+
+
+def test_recall_falls_back_to_local_on_empty_hits(
+    store: ToolkitStore, weknora_on: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """WeKnora 命中为空（如镜像刚建、解析尚未完成）时必须回退本地打分，而不是返回空。"""
+    fake = FakeClient(hits=[])
+    monkeypatch.setattr(toolkit_index, "build_client", lambda: fake)
+    item = _add(store, kind="mcp", name="pg", summary="postgres 工具", transport="stdio", command="npx")
+
+    rows = recall(store, query="postgres")
+    assert [r[0].id for r in rows] == [item.id], "空命中必须由本地三层打分兜住"
 
 
 def test_recall_uses_weknora_when_enabled(store: ToolkitStore, weknora_on: None, monkeypatch: pytest.MonkeyPatch) -> None:

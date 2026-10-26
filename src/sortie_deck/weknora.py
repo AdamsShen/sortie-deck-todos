@@ -200,11 +200,23 @@ class WeKnoraClient:
         title: str,
         content: str,
         channel: str = "sortie",
+        status: str = "publish",
     ) -> WeKnoraKnowledge:
+        """创建手工知识（Markdown）。
+
+        status 必须显式传 publish：WeKnora 手工知识默认落 draft，draft 条目
+        不进解析/分块/向量化流水线（实测 parse_status 恒为 draft），
+        hybrid-search 永远召回不到，镜像即失效。
+        """
         payload = self._request(
             "POST",
             f"/knowledge-bases/{knowledge_base_id}/knowledge/manual",
-            json_body={"title": title, "content": content, "channel": channel},
+            json_body={
+                "title": title,
+                "content": content,
+                "channel": channel,
+                "status": status,
+            },
         )
         data = payload.get("data") if isinstance(payload, dict) else payload
         return self._parse_knowledge(data or {}, knowledge_base_id)

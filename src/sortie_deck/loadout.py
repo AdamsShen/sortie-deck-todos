@@ -109,8 +109,9 @@ def recall(
     allowed_ids 传入时做硬过滤（org_policy 白名单），None 表示不过滤。
 
     召回后端（方案 A）：TDT_TOOLKIT_RECALL_BACKEND=weknora 时先走 WeKnora
-    hybrid-search（向量+BM25→RRF→rerank，条目经 toolkit_index 镜像），任何
-    异常/未配置都静默降级到本地三层加权打分。
+    hybrid-search（向量+BM25→RRF→rerank，条目经 toolkit_index 镜像）；未配置、
+    抛异常、或命中为空（镜像刚建尚未解析完成 / 查询词只与本地标签匹配）时，
+    一律降级本地三层加权打分，保证召回不因外部检索缺席而归零。
     """
     if store is None:
         return []
@@ -127,7 +128,9 @@ def recall(
                     allowed_ids=allowed_ids,
                     limit=limit,
                 )
-                if rows is not None:
+                # 命中为空不等于"本地也没有"：镜像解析是异步的，新建条目短时间检索不到；
+                # 放行到本地打分兜底（本地永远持有全量条目）
+                if rows:
                     return rows
         except Exception as exc:  # noqa: BLE001 — 混合检索失败降级本地打分
             logging.getLogger(__name__).warning(
