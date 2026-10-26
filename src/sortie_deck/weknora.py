@@ -369,12 +369,14 @@ class WeKnoraClient:
         folder_path: str,
         knowledge_base_id: str | None = None,
     ) -> Any:
+        # 字段名必须是 kb_id：WeKnora 的 MoveKnowledgeToFolderRequest 只认它，
+        # 传 knowledge_base_id 会 400（KBID required），调用方若 suppress 就会静默不生效
         body: dict[str, Any] = {
             "knowledge_ids": knowledge_ids,
             "folder_path": folder_path,
         }
         if knowledge_base_id:
-            body["knowledge_base_id"] = knowledge_base_id
+            body["kb_id"] = knowledge_base_id
         return self._request("POST", "/knowledge/folder", json_body=body)
 
     @staticmethod

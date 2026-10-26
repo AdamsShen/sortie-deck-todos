@@ -41,15 +41,24 @@ class FakeWeKnoraClient:
     def hybrid_search(self, kb_id: str, query: str, *, match_count: int = 6, **kwargs):
         if self.fail_hybrid:
             raise mm.WeKnoraError("boom")
-        hits = []
+        scored: list[tuple[int, WeKnoraHit]] = []
         for title, doc in self.docs.items():
-            if title.startswith("mem:") and any(
-                w and w in (doc.raw or {}).get("content", "") for w in query.split()
-            ):
-                hits.append(
-                    WeKnoraHit(knowledge_id=doc.id, knowledge_title=title, content="", score=1.0)
+            if not title.startswith("mem:"):
+                continue
+            content = (doc.raw or {}).get("content", "")
+            # 命中词数即相关性：否语序（插入序）会让"无关但先建"的条目排到前面
+            matched = sum(1 for w in query.split() if w and w in content)
+            if matched:
+                scored.append(
+                    (
+                        matched,
+                        WeKnoraHit(
+                            knowledge_id=doc.id, knowledge_title=title, content="", score=1.0
+                        ),
+                    )
                 )
-        return hits[:match_count]
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        return [hit for _n, hit in scored][:match_count]
 
 
 @pytest.fixture()

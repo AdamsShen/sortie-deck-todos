@@ -98,12 +98,16 @@ class MemoryMirror:
             title=f"{_MEM_TITLE_PREFIX}{entry.id}",
             content=self.body_for(entry),
         )
-        with contextlib.suppress(WeKnoraError):
+        try:
             self.client.move_to_folder(
                 knowledge_ids=[doc.id],
                 folder_path=self.folder_for(entry),
                 knowledge_base_id=self.kb_id,
             )
+        except WeKnoraError as exc:
+            # 目录只影响归组、不影响召回，失败不中断镜像；但必须留痕，
+            # 否则字段名/权限这类硬错误会被静默吞掉（曾因此整库 folder 全为空）
+            logger.warning("记忆镜像 move_to_folder 失败(忽略): id=%s: %s", entry.id, exc)
         self._state[entry.id] = doc.id
         self._save_state()
 
