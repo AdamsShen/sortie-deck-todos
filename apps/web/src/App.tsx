@@ -1245,16 +1245,6 @@ export default function App() {
     }
   }
 
-  async function joinSquad() {
-    await api(`/api/initiatives/${selectedId}/squad/join`, {
-      token,
-      method: "POST",
-      body: JSON.stringify({ name: user?.display_name, title: user?.role }),
-    });
-    const data = await api<Initiative>(`/api/initiatives/${selectedId}`, { token });
-    setDetail(data);
-  }
-
   async function toggleDiscussing(participantId: string, next: boolean) {
     if (!selectedId) return;
     setBusy(true);
@@ -3041,9 +3031,6 @@ export default function App() {
                   {tr("startPipeline")}
                 </button>
               )}
-              <button className="btn ghost" type="button" onClick={joinSquad}>
-                {tr("joinSquad")}
-              </button>
               <button className="btn danger" type="button" disabled={busy} onClick={() => void stopPipeline()}>
                 {tr("stop")}
               </button>
