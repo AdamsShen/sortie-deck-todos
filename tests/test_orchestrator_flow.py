@@ -19,7 +19,15 @@ from sortie_deck.settings import Settings
 
 @pytest.mark.asyncio
 async def test_create_edit_confirm_start_hitl_until_done(tmp_path):
-    cfg = Settings(data_dir=tmp_path / "data", deploy_executor="mock")
+    cfg = Settings(
+        data_dir=tmp_path / "data",
+        deploy_executor="mock",
+        # 测试不依赖外部 WeKnora / LLM：本地知识库 + 关掉 LLM 规划与房间讨论，
+        # 阶段摘要与反思走规则回退，保证结果确定且不被网络耗时影响
+        kb_backend="local",
+        pipeline_llm=False,
+        room_llm=False,
+    )
     orch = Orchestrator(cfg)
     await orch.startup()
     try:
@@ -28,6 +36,8 @@ async def test_create_edit_confirm_start_hitl_until_done(tmp_path):
                 title="Flow demo",
                 brief="Build notification center",
                 coding_executor="mock",
+                # 显式 mock harness：默认 harness 会拉起真实 CLI，测试只需验证图与门禁
+                harness="mock",
                 creator_name="Ada",
             )
         )
@@ -55,7 +65,7 @@ async def test_create_edit_confirm_start_hitl_until_done(tmp_path):
         ini = await orch.start_pipeline(ini.id, author_name="Ada")
         assert ini.status.value in {"running", "waiting_hitl"}
 
-        for _ in range(40):
+        for _ in range(140):
             await asyncio.sleep(0.1)
             ini = orch.get(ini.id)
             assert ini
