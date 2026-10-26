@@ -207,8 +207,8 @@ def _parse_jsonl(stdout: str) -> tuple[str, str, bool, dict[str, Any]]:
             if itype == "agent_message":
                 text_chunks.append(str(item.get("text") or ""))
             elif itype == "error":
-                # 单项错误只告警：同一轮可能仍产出了可用的 agent_message
-                errored = True
+                # 单项错误只告警、不判失败：实测 codex 会把配置告警也发成
+                # item.type=error，同一轮通常仍有可用的 agent_message。
                 logger.warning("codex item error: %s", str(item.get("message") or "")[:300])
             continue
         if etype in {"error", "stream_error"}:

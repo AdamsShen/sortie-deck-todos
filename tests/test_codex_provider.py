@@ -47,15 +47,23 @@ def test_parse_legacy_protocol_still_supported() -> None:
     assert usage == {}
 
 
-def test_parse_item_error_flags_but_keeps_text() -> None:
+def test_parse_item_error_is_a_warning_not_a_failure() -> None:
+    # 实测 codex 会把配置告警也发成 item.type=error；正文仍可用时不应判失败
     stdout = "\n".join(
         [
             _line({"type": "item.completed", "item": {"type": "agent_message", "text": "partial"}}),
-            _line({"type": "item.completed", "item": {"type": "error", "message": "tool failed"}}),
+            _line({"type": "item.completed", "item": {"type": "error", "message": "config typo"}}),
         ]
     )
     text, _, errored, _ = _parse_jsonl(stdout)
     assert text == "partial"
+    assert errored is False
+
+
+def test_parse_stream_error_marks_failure() -> None:
+    stdout = _line({"type": "error", "message": "stream broke"})
+    text, _, errored, _ = _parse_jsonl(stdout)
+    assert text == ""
     assert errored is True
 
 
