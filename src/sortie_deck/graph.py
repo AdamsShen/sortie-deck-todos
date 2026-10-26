@@ -1953,7 +1953,9 @@ def build_graph_from_template(
                     update["human_instruction"] = decision.instruction
 
             # approve
-            if stage == "qa_verify" and not bool(result.get("qa_passed")):
+            # 只有 QA 明确宣告失败才打回；未宣告（真实 harness 没给结论 / 旧执行器）
+            # 交由人工门禁决定，否则"批准了却永远回到开发"会形成死循环
+            if stage == "qa_verify" and result.get("qa_passed") is False:
                 update["handoff_target"] = on_fail
             else:
                 update["handoff_target"] = approve_next

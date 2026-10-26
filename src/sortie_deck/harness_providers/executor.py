@@ -75,6 +75,38 @@ skip it when you can decide alone."""
 
 _CONTROL_BLOCK_RE = re.compile(r"```control\s*(.*?)```", re.DOTALL)
 
+# QA 结论协议：图的门禁需要 qa_passed 才能区分「放行」与「打回重做」。
+# 真实 harness 不写这个块时图不再默认打回（由人工门禁决定），但 QA 阶段仍应主动声明。
+_QA_BLOCK_RE = re.compile(r"```qa\s*(.*?)```", re.DOTALL)
+
+_QA_PROTOCOL = """Verification verdict (QA stage):
+End your reply with ONE ```qa fenced block declaring the outcome:
+```qa
+{"passed": true, "summary": "<why it passes, or what blocks release>"}
+```
+Set passed=false when acceptance criteria are not met — the verdict decides whether the
+mission loops back to build or continues to release. Omit the block only if you cannot judge."""
+
+
+def _is_qa_stage(stage: str) -> bool:
+    return stage == "qa_verify" or stage.endswith("_verify")
+
+
+def _parse_qa_verdict(text: str) -> bool | None:
+    """解析 QA 结论块；无块 / 非 bool 返回 None（不臆断通过与否）。"""
+    for block in _QA_BLOCK_RE.findall(text or ""):
+        try:
+            data = json.loads(block.strip())
+        except ValueError:
+            continue
+        if isinstance(data, dict) and isinstance(data.get("passed"), bool):
+            return bool(data["passed"])
+    return None
+
+
+def _strip_qa_block(text: str) -> str:
+    return _QA_BLOCK_RE.sub("", text or "").strip()
+
 # 控制平面协议：跨 agent 的交接与升级必须由编排层执行（模型只声明意图），
 # 与 toolkit_intent / subroom 保持同一"声明-兑现"范式。
 _CONTROL_PROTOCOL_HEAD = """Control-plane intent (hand-off / escalation):
@@ -452,6 +484,13 @@ class HarnessStageExecutor:
                 update={"text": _strip_control_block(getattr(reply, "text", "") or "")}
             )
 
+        # QA 结论：图的门禁靠它决定放行还是打回；块本身不进产物
+        qa_passed = _parse_qa_verdict(getattr(reply, "text", "") or "")
+        if qa_passed is not None:
+            reply = reply.model_copy(
+                update={"text": _strip_qa_block(getattr(reply, "text", "") or "")}
+            )
+
         mm = get_mission_memory()
         mm.record_turn(
             ctx.initiative_id,
@@ -524,6 +563,7 @@ class HarnessStageExecutor:
             ),
             artifacts=artifacts,
             proposed_next=proposed_next or fallback_next,
+            qa_passed=qa_passed,
             meta={**meta, **({"control_intent": control_meta} if control_meta else {})},
         )
 
@@ -804,6 +844,9 @@ class HarnessStageExecutor:
             sections.append(_SUBROOM_PROTOCOL)
         # 控制平面协议始终注入：即使没有可交接目标，升级真人仍是 agent 的兜底能力
         sections.append(_control_protocol(ctx))
+        # QA 阶段额外要求结论块：否则图无法区分"测试通过"与"需要打回"
+        if _is_qa_stage(ctx.stage):
+            sections.append(_QA_PROTOCOL)
         if repo_section:
             sections.append(repo_section.strip())
         artifact_index = list(pack.get("artifact_index") or [])

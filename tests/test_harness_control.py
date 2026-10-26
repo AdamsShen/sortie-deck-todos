@@ -14,8 +14,10 @@ from sortie_deck.harness_providers.executor import (
     HarnessStageExecutor,
     _control_protocol,
     _parse_control_intent,
+    _parse_qa_verdict,
     _resolve_handoff_target,
     _strip_control_block,
+    _strip_qa_block,
 )
 from sortie_deck.models import StageContext, StageResult
 from sortie_deck.registry import ExecutorRegistry
@@ -99,6 +101,25 @@ def test_control_protocol_without_targets_still_allows_escalation() -> None:
     text = _control_protocol(_ctx(next_targets=[]))
     assert "No autonomous hand-off target" in text
     assert "escalate" in text
+
+
+# --- QA 结论协议 ------------------------------------------------------------
+
+
+def test_parse_qa_verdict_true_and_false() -> None:
+    assert _parse_qa_verdict('ok\n```qa\n{"passed": true}\n```') is True
+    assert _parse_qa_verdict('ok\n```qa\n{"passed": false, "summary": "缺用例"}\n```') is False
+
+
+def test_parse_qa_verdict_ignores_missing_or_invalid() -> None:
+    assert _parse_qa_verdict("plain reply") is None
+    assert _parse_qa_verdict('```qa\n{"passed": "yes"}\n```') is None
+    assert _parse_qa_verdict("```qa\nnot json\n```") is None
+
+
+def test_strip_qa_block_removes_json() -> None:
+    text = 'passed\n```qa\n{"passed": true}\n```\n'
+    assert _strip_qa_block(text) == "passed"
 
 
 # --- 图侧：可交接目标生成 ---------------------------------------------------
@@ -352,6 +373,63 @@ async def test_harness_escalation_is_answered_by_the_manager(tmp_path, monkeypat
     assert result.meta["control_intent"]["escalation"] == {"level": "manager", "resolution": "选 A"}
     assert len(provider.calls) == 2
     assert "final answer" in result.artifacts["reply.md"]
+
+
+class _QaVerdict:
+    """QA 执行器：按 executor 名返回 True / False / 未声明。"""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    async def run(self, ctx: StageContext) -> StageResult:
+        verdict = {"qa_pass": True, "qa_fail": False}.get(self.name)
+        return StageResult(
+            status="ok",
+            message="qa done",
+            artifacts={"test_report.json": "{}", "test_cases.md": "cases"},
+            qa_passed=verdict,
+        )
+
+
+async def _approve_qa(executor_name: str, tmp_path) -> dict[str, Any]:
+    stages = [
+        {"name": "start", "role": "product", "executor": "start"},
+        {"name": "build", "role": "eng", "executor": "build"},
+        {
+            "name": "qa_verify",
+            "role": "qa",
+            "executor": executor_name,
+            "hitl_after": True,
+            "on_fail": "build",
+        },
+        {"name": "done", "role": "product", "executor": "done"},
+    ]
+    registry = ExecutorRegistry()
+    registry.register(_Pass("start"))
+    registry.register(_Pass("build"))
+    registry.register(_Pass("done"))
+    registry.register(_QaVerdict(executor_name))
+    builder = build_graph_from_template(
+        {"name": "qa-gate", "stages": stages}, registry, ArtifactStore(tmp_path / "artifacts")
+    )
+    compiled = builder.compile(checkpointer=InMemorySaver())
+    config = {"configurable": {"thread_id": f"t-{executor_name}"}}
+    await compiled.ainvoke(_payload(), config)
+    resumed = await compiled.ainvoke(Command(resume={"action": "approve"}), config)
+    return dict(resumed)
+
+
+async def test_qa_verdict_false_loops_back_to_build(tmp_path) -> None:
+    resumed = await _approve_qa("qa_fail", tmp_path)
+    # 打回后重新走 build → qa，又一次停在门禁：用 build 的执行次数断言回环
+    build_runs = [e for e in resumed.get("events") or [] if e.get("stage") == "build"]
+    assert len(build_runs) >= 2
+
+
+async def test_qa_without_verdict_follows_human_approval(tmp_path) -> None:
+    # 未声明结论时不再默认打回：真人批准即继续（否则真实 harness 会无限回环）
+    resumed = await _approve_qa("qa_undeclared", tmp_path)
+    assert resumed.get("stage") == "done"
 
 
 async def test_harness_escalation_without_manager_answer_waits_for_a_human(
