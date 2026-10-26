@@ -72,6 +72,36 @@ always decides.
   `TDT_MANAGER_JOIN_DECISION` were removed) — it *is* the collaboration model,
   not an option.
 
+## Control-plane protocol (real harnesses)
+
+Real harness agent loops run inside the provider process, so cross-agent routing and
+human escalation must stay in the orchestration layer. The executor advertises the
+protocol; the model only declares intent in fenced blocks, which are stripped from
+artifacts and memory before storage:
+
+| Block | Purpose | Fulfilled by |
+|-------|---------|--------------|
+| ` ```control {"handoff": {...}} ` | hand the next step to a role | `ctx.next_targets` (plan successor ∩ contract whitelist ∩ non-HITL) → `proposed_next` → conditional edge; out-of-scope targets are recorded as `rejected` and the default edge runs |
+| ` ```control {"escalate": {...}} ` | needs a decision | `MissionManager.advise` first; otherwise the human decision centre (DingTalk/Feishu) pauses the mission, and the reply re-enters the stage as `human_instruction` **without** granting permissions |
+| ` ```subroom {...} ` | pull teammates into a sub-room | `StageSessionHost.open_subroom`, then a second provider turn folds the conclusion in |
+| ` ```toolkit_intent {...} ` | missing tool / skill / memory | orchestration recalls, floats and executes, writing `toolkit_meta.json` / `skill_runs.json` |
+| ` ```qa {"passed": bool} ` | QA verdict | `StageResult.qa_passed`; only `false` bounces to `on_fail`, an undeclared verdict follows the human gate |
+
+## Autonomous forge at intake
+
+`propose_loadout_llm` now returns `missing_slots` (≤ 2 entries with
+`role_key` / `title` / `capability` / `why`) separately from `needed_slots`:
+catalog roles stay strictly whitelisted, genuinely new disciplines can only come
+through `missing_slots`. `clean_missing_slots()` normalises keys, folds near-duplicates
+(`find_similar` ≥ 0.55) and caps the list; the briefing merges them into the squad and
+`ensure_missing_roles` turns each into a `pending-review` forge draft.
+
+The draft ids land in `Initiative.meta.forge_drafts`; `/start` raises
+`ForgeReviewRequiredError` (API 409 `forge_review_required` with `draft_ids`) while any
+draft is still pending. Approving via `/api/forge/drafts/{id}/approve` registers the role
+and releases the gate. `TDT_FORGE_REQUIRE_REVIEW=false` disables the gate (troubleshooting
+only).
+
 ## API
 
 | Method | Path | Purpose |
@@ -132,4 +162,18 @@ Three additive views, with no change to the existing page structure:
 | `tests/test_decisions.py` | Redaction, DingTalk signing, timeout degradation, duplicate-answer idempotency, unauthorised rejection |
 | `tests/test_im_escalation.py` | DingTalk inbound parsing, escalate-pause-reply loop, timeout sweep |
 | `tests/test_guardrails.py` | Budget dimensions, deadlock detection, causal chain, sub-room budget refusal |
+| `tests/test_harness_control.py` | Control-block parsing, hand-off mapping, escalation pause, QA verdict gating |
+| `tests/test_forge_gate.py` | `missing_slots` validation/dedupe, `/start` forge review gate, release after approval |
+| `tests/test_codex_provider.py` | Codex JSONL parsing (new + legacy), login-file probe |
+
+## Verification script
+
+`scripts/verify_collab.py` produces per-capability evidence under
+`data/verify/<run_id>/`:
+
+```bash
+python scripts/verify_collab.py --harness mock          # scripted control-plane regression
+python scripts/verify_collab.py --harness claude_code   # real harness, Express track
+python scripts/verify_collab.py --harness codex --scenario basic
+```
 | `tests/test_research_track.py` | The non-engineering sample track (research → conclusion → recommendation) |

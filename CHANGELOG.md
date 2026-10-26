@@ -39,6 +39,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Mission code repos**: `CreateInitiativeRequest.role_repos` (slot → list of `RepoConfig{url, branch, name, token}`) — dev agents clone & read the configured git/github repos into their workspace (`workspace/repos/<name>`) before iterating; diffs from those checkouts are collected into `diff.patch`; briefing UI lets you bind repos & branches per dev slot before confirming (`PATCH /api/briefing/sessions/{id}/repos`)
 - Docs: `design/multi-agent-collaboration.md` and `modules/collaboration.md` (ZH/EN)
 
+- **Collaboration acceptance script**: `scripts/verify_collab.py` — scripted mock mode exercises hand-off / sub-room / JIT loadout / escalation / parallel join / forge gate end to end, real mode runs the Express track on `claude_code` / `codex`; evidence lands in `data/verify/<run_id>/`
+- **QA verdict protocol**: real harnesses declare `{"passed": bool}` in a ```qa block → `StageResult.qa_passed`; only an explicit `false` bounces to `on_fail`
+- **Autonomous forge at intake**: loadout planner returns `missing_slots` (≤ 2, validated + de-duplicated) → briefing creates `pending-review` drafts → `/start` returns 409 `forge_review_required` until a human approves (`TDT_FORGE_REQUIRE_REVIEW`, default on)
+
+### Fixed
+
+- **Codex provider**: probe accepts `$CODEX_HOME/auth.json` (no more false `auth_required`), parses the `item.completed` JSONL protocol (legacy format kept), runs with `stdin=DEVNULL` and `TDT_CODEX_SANDBOX` (default `workspace-write`), and maps credential failures to `needs_auth`
+- **Orchestrator singleton**: an explicitly constructed `Orchestrator` now becomes the active instance, so graph-level sub-room / escalation hosts resolve the mission instead of a lazily created default instance (CLI and embedded runs)
+- **QA gate loop**: approving a `qa_verify` gate without a declared verdict no longer bounces back to build forever
+- **HITL resume race**: in-flight runs re-saved a stale initiative snapshot and wiped `pending_decision_id`, so an answered escalation left the mission paused; each stream step now refreshes from the store and `submit_hitl` waits for the run lock before resuming
+- **Codex item-level errors**: configuration warnings emitted as `item.type=error` no longer fail an otherwise successful turn (only stream-level errors do)
+
 ### Changed
 
 - Product rename: **Rally** → **Sortie Deck**; Python package `trusted-dev-teams` → `sortie-deck` (`sortie_deck`); CLI `sortie` (legacy `tdt` alias); legacy `rally_*` storage keys / `rally.executors` still accepted

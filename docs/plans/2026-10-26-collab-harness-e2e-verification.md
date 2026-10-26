@@ -1,6 +1,6 @@
 # 多人协作 + Agent Harness 真机验收方案
 
-> 状态：**G1/G2/G5 已实施**（`tests/test_harness_control.py` 覆盖）；G3/G4 与验收脚本待做
+> 状态：**G1–G5 已实施，验收脚本已落地**（`scripts/verify_collab.py`；mock 全绿，见 §10）
 > 日期：2026-10-26
 > 范围：`src/sortie_deck/harness_providers/`、`graph.py`、`pipeline_llm.py`、`mission_briefing.py`、`orchestrator.py`、验收脚本与测试。
 
@@ -184,3 +184,49 @@ initiative.json              # 任务快照（状态、timeline、pending_hitl�
 2. P0：G4（loadout `missing_slots` + forge 审核门禁）→ 单测。
 3. P1：`scripts/verify_collab.py` + S1–S8；`--harness mock` 全绿后跑 `claude_code` 真机，最后跑 `codex`。
 4. P1：文档与 CHANGELOG；产出 `data/verify/<run_id>/report.md` 作为验收证据。
+
+## 10. 实施记录
+
+| 项 | 结果 | 位置 |
+|----|------|------|
+| G1/G2/G5 控制意图 + escalation 分支 | 完成 | `harness_providers/executor.py`、`graph.py`、`models.py` |
+| G3 Codex provider | 完成：登录态探测、`--sandbox`、`stdin=DEVNULL`、新旧 JSONL 解析、`needs_auth` | `harness_providers/codex.py`、`tests/test_codex_provider.py` |
+| G4 自主 forge | 完成：`missing_slots` 校验/去重、编制合并、`forge_drafts` 写入 meta、`/start` 409 门禁 | `pipeline_llm.py`、`mission_briefing.py`、`orchestrator.py`、`api/app.py`、`tests/test_forge_gate.py` |
+| 验收脚本 | 完成：`basic/handoff/subroom/loadout/escalate/forge/manager` + probe | `scripts/verify_collab.py` |
+
+实施中新发现并修复的两个问题（原方案未覆盖）：
+
+1. **QA 门禁回环**：`graph.hitl_gate` 把「未声明 qa_passed」当失败，真实 harness 批准后
+   会无限回到 build。现改为只有 `qa_passed is False` 才打回，并给 harness 注入
+   ` ```qa ` 结论协议（`StageResult.qa_passed`）。
+2. **活动编排器未绑定**：图内 `get_orchestrator()` 会懒创建一个默认实例，显式构造的
+   `Orchestrator`（CLI / 验收脚本 / 嵌入式）里小群与升级 host 因此静默失效。现在构造即
+   绑定（`set_orchestrator`）。
+3. **运行中旧快照覆盖并发写入**：阶段循环在每一步用运行开始时的 `Initiative` 快照
+   `upsert`，会把升级真人刚写入的 `pending_decision_id` 抹掉，导致「钉钉/决策中心答复
+   成功但任务不再恢复」。现在每步先取最新快照（`_fresh_initiative`），`submit_hitl`
+   也会等运行锁释放后再投递 resume（避免 resume 打到尚未挂起的图）。
+4. **Codex item error 误判**：实测 Codex 把配置告警也发成 `item.type=error`，原实现据此
+   把整轮判失败。现在 item 级错误只告警，只有 stream 级 error 才判失败。
+
+验证命令与结果：
+
+```bash
+python scripts/verify_collab.py --harness mock            # 8/8 pass
+python scripts/verify_collab.py --harness claude_code     # Express 真机
+python scripts/verify_collab.py --harness codex --scenario basic
+```
+
+实测结果（2026-10-26）：
+
+| 模式 | 结果 | 证据 |
+|------|------|------|
+| `mock` 剧本化 | C1/C1b/C2/C3/C4/C5/C6/C7 **8/8 pass** | `data/verify/20261026-185509-mock/report.md` |
+| `claude_code` 真机 | C1/C1b **2/2 pass**：`intake → eng_implement → qa_verify → deploy_preview` 4 阶段完成，2 次 HITL 放行，`final=done`；任务内出现 **2 次真实自主 handoff**（`product→eng_implement`、`eng→qa_verify`，均为模型自己声明，非脚本注入） | `data/verify/20261026-183535-claude_code/report.md` |
+| `codex` 真机 | C1/C1b **2/2 pass**：同样 4 阶段 + 2 次 HITL，`final=done`；修复了 item 级 error 误判后稳定 | `data/verify/20261026-184319-codex/report.md` |
+| `opencode` / `cursor` | 探测 `error` / `auth_required`，脚本显式 skip，不误报 | 同上 probes |
+
+真机 `handoff` 专项场景（要求开发阶段主动交接并跳过自测节点）在 900s 窗口内未跑完
+（真实 agent 把 build 当成了真实功能开发，耗时超出验收窗口）；C2 的真实证据来自
+`basic` 场景：Claude 自行发出两次 handoff（`product→eng_implement`、`eng→qa_verify`）。
+专项场景的确定性回归由 `mock` 剧本化模式覆盖。

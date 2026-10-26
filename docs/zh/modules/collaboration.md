@@ -45,7 +45,7 @@ You are a QA engineer …
 | `TimelineEvent` | `kind` 增加 `handoff`、`subroom` |
 | `PipelineState` | `plan_digest`、`handoff_target`、`pending_escalation`、`handoff_counts`、`handoff_total`、`wave_attempts`、`halt` |
 | `ToolkitItem` | `capabilities`、`executable`、`read_only`（供 loadout 召回与降级判断） |
-| `Initiative.meta` | `plan_digest`、`loadout_plans`、`guardrails`、`pending_decision_id`、`forged_agents` |
+| `Initiative.meta` | `plan_digest`、`loadout_plans`、`guardrails`、`pending_decision_id`、`forged_agents`、`forge_drafts`、`forge_pending_roles` |
 
 ## 路由实现要点
 
@@ -69,6 +69,35 @@ You are a QA engineer …
 - **escalate**：先由 `MissionManager.advise` 尝试裁决（低置信度不放行，避免 Manager 编答案），裁决不了才进真人决策中心并挂起任务。真人回答作为 `human_instruction` 重入本阶段，且**不注入 `bypassPermissions`、不置 `publish_pending`**。
 - **询问前移**：升级的人工询问放在 `run_stage` 之前（`pending_escalation` + 节点自环）。LangGraph 恢复会重放 `interrupt()` 之前的代码，若先跑阶段再问人，重放会用空答复再跑一次并丢掉回答。
 - **降级**：无 host / IM 未配置时仍返回 `needs_hitl`，落到工作台门禁而不是静默继续。
+
+### QA 结论块
+
+QA 阶段（`qa_verify` / `*_verify`）额外注入结论协议，模型在回复末尾写：
+
+```json
+{"passed": true, "summary": "验收用例全部通过"}
+```
+
+执行器解析为 `StageResult.qa_passed`，块本身从产物剥离。图的裁决规则：
+**只有 `qa_passed is False` 才打回 `on_fail`**；未声明结论时按人工门禁的批准继续
+（此前把所有非 True 都当失败，会让真实 harness 的 QA 门禁无限回环）。
+
+## 建队期自主 forge（角色不足 → 待审草稿）
+
+`pipeline_llm.propose_loadout_llm` 的返回新增 `missing_slots`（最多 2 条，含
+`role_key` / `title` / `capability` / `why`），与 `needed_slots` 分离：目录内角色仍严格
+白名单校验，目录外能力只能走 `missing_slots`。校验链路：
+
+1. `clean_missing_slots()`：snake_case 归一化；与目录同名或语义高度相似（`find_similar`
+   ≥ 0.55）→ 折叠丢弃；去重 + 上限 2。
+2. `mission_briefing._tool_loadout` 把 `missing_slots` 一并并入编制位。
+3. `ensure_missing_roles` 对未知 slot 调 `AgentForge.propose`，生成 `pending-review`
+   草稿与未发布 agent（标题/能力来自规划官的元数据）。
+4. `_commit` 把草稿 id 写入 `Initiative.meta.forge_drafts`；`/start` 时
+   `Orchestrator._pending_forge_drafts()` 检查状态，仍有待审草稿则抛
+   `ForgeReviewRequiredError`（API 409 `forge_review_required`，附 `draft_ids`）。
+5. 人工走 `/api/forge/drafts/{id}/approve` 审核注册后，`/start` 放行。
+   `TDT_FORGE_REQUIRE_REVIEW=false` 可关闭门禁（仅建议排障时使用）。
 
 ## API
 
@@ -124,3 +153,21 @@ You are a QA engineer …
 | `tests/test_im_escalation.py` | 钉钉入站解析、升级-暂停-回复闭环、超时结算 |
 | `tests/test_guardrails.py` | 预算各维度、死锁检测、因果链、小群预算拦截 |
 | `tests/test_research_track.py` | 非工程航线样例（研究 → 结论 → 建议） |
+| `tests/test_harness_control.py` | 控制块解析、handoff 映射、升级挂起、QA 结论与门禁回环 |
+| `tests/test_forge_gate.py` | `missing_slots` 校验/去重、出击审核门禁、审核后放行 |
+| `tests/test_codex_provider.py` | Codex 新旧 JSONL 解析、登录态探测 |
+
+## 验收脚本
+
+`scripts/verify_collab.py` 按 C1–C7 逐项产出可复核证据（报告写入
+`data/verify/<run_id>/`）：
+
+```bash
+python scripts/verify_collab.py --harness mock          # 剧本化回归：控制平面链路全绿
+python scripts/verify_collab.py --harness claude_code   # 真机：Express 精简航线
+python scripts/verify_collab.py --harness codex --scenario basic
+```
+
+`mock` 模式把 provider 换成剧本化实现（复用 mock 名字），按阶段返回含
+`control` / `subroom` / `toolkit_intent` / `qa` 块的固定回复，断言的是**编排层兑现能力**；
+真机模式只跑 `basic` / `handoff` / `subroom` / `escalate` 四个短场景，其余显式 skip。

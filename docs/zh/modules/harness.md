@@ -34,7 +34,7 @@ HarnessProvider(Protocol)
 |------|----------|------|
 | `claude_code` | `claude-agent-sdk`（`query()` + `resume`） | 权限模式取 `TDT_CODING_PERMISSION_MODE`；需 `ANTHROPIC_API_KEY` |
 | `opencode` | HTTP 调云端部署的 `opencode serve`（`TDT_OPENCODE_BASE_URL`） | 服务端接入，不起本地 CLI |
-| `codex` | 云端容器内 `codex exec --json` | 会话续用 `codex exec resume` |
+| `codex` | 云端容器内 `codex exec --json` | 会话续用 `codex exec resume`；凭据认 `OPENAI_API_KEY` / `CODEX_API_KEY` 或 `$CODEX_HOME/auth.json`（`codex login`）；沙箱取 `TDT_CODEX_SANDBOX`（默认 `workspace-write`）；兼容 `item.completed` 新版事件与旧版 `agent_message` |
 | `cursor` | `cursor-agent -p --output-format json`（云端容器） | `CURSOR_API_KEY` / `cursor-agent login` |
 | `mock` | 内置回声 | 永远可用的回退 |
 
@@ -59,6 +59,25 @@ HarnessProvider(Protocol)
 5. provider 不可用且 `TDT_HARNESS_FALLBACK=true` 时降级到既有阶段执行器
    （mock / 编码 CLI）；
 6. 始终产出各阶段契约要求的产物（`contracts.REQUIRED`）。
+
+## 3.1 控制平面意图（跨 agent 能力）
+
+真实 harness 的 agent loop 在 provider 进程里，跨阶段路由与升级必须由编排层执行。
+执行器在提示词中下发协议，模型只在回复里声明意图，块从产物与记忆中剥离：
+
+| 块 | 用途 | 兑现 |
+|----|------|------|
+| ` ```control {"handoff": {...}} ` | 交给某个角色 | 查 `ctx.next_targets`（plan 后继 ∩ 契约白名单 ∩ 非 HITL）→ `proposed_next` → 图条件边跳转；越界记 `rejected` 并回落默认边 |
+| ` ```control {"escalate": {...}} ` | 需要拍板 | 先 `MissionManager.advise`；裁决不了进决策中心（钉钉/飞书）并挂起，回复后作为 `human_instruction` 重入，不提权 |
+| ` ```subroom {...} ` | 拉小群讨论 | 经 `StageSessionHost.open_subroom` 立即开会，结论回注后二次调用 provider 收尾 |
+| ` ```toolkit_intent {...} ` | 缺工具/Skill/记忆 | 编排层检索、上浮、执行脚本并落 `toolkit_meta.json` / `skill_runs.json` |
+| ` ```qa {"passed": bool} ` | QA 结论 | `StageResult.qa_passed`；仅 `false` 打回，未声明按人工门禁批准继续 |
+
+`run_session(ctx, host)` 才会注入小群协议；`run(ctx)` 保持单发语义。无 host 时
+升级仍返回 `needs_hitl`（落到工作台门禁），不静默继续。
+
+验收：`scripts/verify_collab.py`（mock 剧本化回归 + 真机精简航线），报告落
+`data/verify/<run_id>/`。
 
 ## 4. 需求绑定记忆
 

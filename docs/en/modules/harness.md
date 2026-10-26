@@ -34,7 +34,7 @@ HarnessProvider(Protocol)
 |------|-----------|-------|
 | `claude_code` | `claude-agent-sdk` (`query()` + `resume`) | Permission mode from `TDT_CODING_PERMISSION_MODE`; needs `ANTHROPIC_API_KEY` |
 | `opencode` | HTTP to a deployed `opencode serve` (`TDT_OPENCODE_BASE_URL`) | server-side, no local CLI |
-| `codex` | `codex exec --json` inside the cloud container | session resume via `codex exec resume` |
+| `codex` | `codex exec --json` inside the cloud container | session resume via `codex exec resume`; credentials from `OPENAI_API_KEY` / `CODEX_API_KEY` or `$CODEX_HOME/auth.json` (`codex login`); sandbox from `TDT_CODEX_SANDBOX` (default `workspace-write`); parses both `item.completed` and legacy `agent_message` events |
 | `cursor` | `cursor-agent -p --output-format json` (cloud container) | `CURSOR_API_KEY` / `cursor-agent login` |
 | `mock` | builtin echo | always-available fallback |
 
@@ -60,6 +60,21 @@ mission state carries a non-empty `harness`. `HarnessStageExecutor` then:
 5. degrades to the legacy stage executors (mock / coding CLIs) when the provider
    is unavailable and `TDT_HARNESS_FALLBACK=true`;
 6. always emits the stage-contract artifacts (`contracts.REQUIRED`).
+
+## 3.1 Control-plane intents
+
+Cross-agent routing and escalation must be executed by the orchestration layer, so the
+executor advertises a declaration protocol and the model only states intent:
+
+| Block | Fulfilled by |
+|-------|--------------|
+| ` ```control {"handoff": {...}} ` | `ctx.next_targets` lookup → `proposed_next` → conditional edge (contract whitelist / budget / HITL still enforced) |
+| ` ```control {"escalate": {...}} ` | Manager advice first, then the human decision centre; the mission pauses until answered |
+| ` ```subroom {...} ` | `StageSessionHost.open_subroom`, conclusion folded into a second turn (only `run_session`) |
+| ` ```toolkit_intent {...} ` | JIT recall / float / skill execution by the orchestration layer |
+| ` ```qa {"passed": bool} ` | `StageResult.qa_passed`; only `false` bounces to `on_fail`, undeclared follows the human gate |
+
+Acceptance: `scripts/verify_collab.py` (scripted mock regression + real harness tracks).
 
 ## 4. Mission-bound memory
 
