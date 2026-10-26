@@ -9,7 +9,7 @@ import pytest
 
 from sortie_deck import roles as roles_module
 from sortie_deck.agent_contract import AgentContract
-from sortie_deck.agent_forge import ForgeStore, ForgedAgentDraft
+from sortie_deck.agent_forge import ForgedAgentDraft, ForgeStore
 from sortie_deck.models import (
     CreateInitiativeRequest,
     ForgeReviewRequiredError,
