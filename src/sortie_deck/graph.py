@@ -42,6 +42,8 @@ from sortie_deck.plugins.queue import ENG_QUEUE
 from sortie_deck.registry import ExecutorRegistry, run_executor
 from sortie_deck.templates import load_agent_contract, load_persona, load_pipeline_template
 
+logger = logging.getLogger(__name__)
+
 
 async def _maybe_publish(
     state: dict[str, Any],
@@ -582,6 +584,10 @@ class PipelineState(TypedDict, total=False):
     stage: str
     human_instruction: str | None
     coding_executor: str
+    # 任务级 agent harness：LangGraph 按本 schema 过滤输入，缺字段会让
+    # orchestrator 传入的 harness 被静默丢弃，所有阶段退化为 mock 执行器
+    harness: str
+    harness_locked: bool
     deploy_executor: str
     artifact_root: str
     workspace_dir: str | None
@@ -612,6 +618,10 @@ class PipelineState(TypedDict, total=False):
     plan_digest: str
     # Node the current step routes to (agent handoff / manager join decision)
     handoff_target: str
+    # 待真人裁决的升级问题。agent 声明 escalate 后由节点写值并自环，
+    # 下次进入本节点时在 run_stage 之前 interrupt：LangGraph 恢复会重放
+    # interrupt 之前的代码，先执行阶段再问人会导致回答丢失、阶段白跑一次。
+    pending_escalation: dict[str, Any] | None
     # Autonomous handoff budget per target node (prevents A→B→A loops)
     handoff_counts: dict[str, int]
     # Mission-wide handoff budget (runaway protection)
@@ -731,6 +741,47 @@ def _resolve_goto(stages: list[dict[str, Any]], target: str | None) -> str:
     if group and target not in {"intake", "done"}:
         return wave_node_name(group)
     return target
+
+
+def _handoff_next_targets(
+    stages: list[dict[str, Any]],
+    current_stage: str,
+    contract_targets: list[str],
+) -> list[dict[str, str]]:
+    """本阶段可自主交接的落点（提示词下发 + 角色→阶段映射用）。
+
+    规则（与设计文档一致）：落点必须同时满足「plan 已声明节点」+
+    「源角色契约白名单」，且只取当前节点之后最近的同角色节点，避免回跳与歧义。
+    并行成员返回空：并行环节的下一步由 Manager 汇合决策，agent 不自行交接；
+    ``hitl_after`` 节点也不作为自主目标，防止 agent 绕过人工门禁。
+    """
+    allowed = {t.strip() for t in contract_targets if t and t.strip()}
+    if not allowed:
+        return []
+    current = next((s for s in stages if s.get("name") == current_stage), None)
+    if current is None or (current.get("parallel_group") or "").strip():
+        return []
+    idx = stages.index(current)
+    seen_roles: set[str] = set()
+    out: list[dict[str, str]] = []
+    for stage in stages[idx + 1 :]:
+        name = str(stage.get("name") or "")
+        role = str(stage.get("role") or "")
+        if not name or name == "done" or not role:
+            continue
+        if role not in allowed or role in seen_roles:
+            continue
+        if stage.get("hitl_after"):
+            continue
+        seen_roles.add(role)
+        out.append(
+            {
+                "stage": name,
+                "role": role,
+                "label": str(stage.get("label") or stage.get("label_en") or name),
+            }
+        )
+    return out
 
 
 def _wave_next(stages: list[dict[str, Any]], last_member_name: str) -> str:
@@ -1017,7 +1068,23 @@ def build_graph_from_template(
                 subroom_events.append({"stage": stage, "role": role.value, **payload})
 
             async def _escalate(question: str) -> str:
-                """Hand the question to a human (pauses the mission until answered)."""
+                """升级链：Manager 先裁决，裁决不了才升级真人。
+
+                返回值约定（执行器据此区分两级）：
+                - ``manager: <裁决>`` → agent 在本阶段内继续，不挂起；
+                - ``escalated to a human — decision ...`` → 图挂起等真人回复；
+                - 其余（含空串）→ 无可用通道，执行器降级为工作台门禁。
+                """
+                try:
+                    advice = await mission_manager.advise(
+                        stage=stage,
+                        question=question,
+                        brief=str(state.get("brief") or ""),
+                    )
+                except Exception:  # noqa: BLE001 — Manager 异常等价于裁决不了
+                    advice = None
+                if advice is not None and advice.resolution:
+                    return f"manager: {advice.resolution}"
                 decision = await orch.escalate_to_human(
                     ini.id, question, stage=stage, requested_by=role.value
                 )
@@ -1255,6 +1322,9 @@ def build_graph_from_template(
         contract = load_agent_contract(role.value)
         if contract is not None:
             contract_targets = list(contract.handoff_targets)
+        # 提示词里让模型用「角色」表达交接意图；这里预先把角色解析成 plan 阶段，
+        # 执行器只做查表，避免模型编造阶段名（二次校验仍在 _apply_handoff）。
+        next_targets = _handoff_next_targets(stages, stage, contract_targets)
 
         ctx = StageContext(
             initiative_id=state["initiative_id"],
@@ -1281,6 +1351,7 @@ def build_graph_from_template(
             harness=str(state.get("harness") or ""),
             harness_locked=bool(state.get("harness_locked")),
             handoff_targets=contract_targets,
+            next_targets=next_targets,
         )
 
         # Session-capable executors get a host so they can pull a sub-room
@@ -1615,6 +1686,57 @@ def build_graph_from_template(
 
     def make_stage_node(stage_name: str):
         async def node(state: PipelineState) -> PipelineState:
+            # 升级链最后一级：上一轮 agent 声明 escalate，先问人再执行本阶段。
+            # interrupt 必须发生在 run_stage 之前——恢复时节点会重放，若先跑阶段
+            # 再问人，重放会用空答复再跑一次并丢弃 human_instruction。
+            pending = state.get("pending_escalation")
+            if pending:
+                payload = {
+                    "stage": stage_name,
+                    "prompt": str(pending.get("message") or "")
+                    or f"`{stage_name}` escalated a question for a human decision.",
+                    "message": str(pending.get("message") or ""),
+                    "artifacts": list((state.get("upstream") or {}).keys()),
+                    "allowed_actions": [a.value for a in HitlAction],
+                    "kind": "escalation",
+                    "question": str(pending.get("question") or ""),
+                    "options": list(pending.get("options") or []),
+                }
+                decision_raw = interrupt(payload)
+                if isinstance(decision_raw, dict):
+                    raw = dict(decision_raw)
+                    if hasattr(raw.get("action"), "value"):
+                        raw["action"] = raw["action"].value
+                    decision = HitlDecision.model_validate(raw)
+                else:
+                    decision = HitlDecision(action=HitlAction.APPROVE)
+                events = list(state.get("events") or [])
+                events.append(
+                    {
+                        "stage": stage_name,
+                        "kind": "hitl",
+                        "message": f"HITL {decision.action.value} (escalation)",
+                        "data": decision.model_dump(mode="json"),
+                    }
+                )
+                state = {**state, "events": events, "pending_escalation": None}
+                if decision.action == HitlAction.STOP:
+                    return {**state, "stopped": True, "status": "stopped"}
+                if decision.action == HitlAction.REJECT:
+                    return {**state, "halt": True}
+                if decision.action == HitlAction.SWITCH_HARNESS:
+                    target = (decision.harness or "").strip()
+                    if target:
+                        state = {**state, "harness": target}
+                # 回答是业务指令，不是权限放行：不提权、不触发 publish。
+                # 空回答给兜底文案，避免 agent 认为仍无人答复而再次升级。
+                state = {
+                    **state,
+                    "human_instruction": (
+                        decision.instruction or "（操作员已阅，无补充指令，请自行决断）"
+                    ),
+                }
+
             if stage_name == "qa_verify":
                 attempt = int(state.get("qa_attempt", 1))
                 st = await run_stage({**state, "qa_attempt": attempt}, stage_name)
@@ -1627,10 +1749,50 @@ def build_graph_from_template(
                 # Serial step: the agent itself may hand off (contract-checked);
                 # otherwise the frozen plan's default edge decides.
                 _apply_handoff(stage_name, st)
+                # Manager 不参与这条路由，只在事后标注"该步完成"（纯记录，零 LLM）。
+                events = list(st.get("events") or [])
+                events.append(
+                    {
+                        "stage": stage_name,
+                        "kind": "info",
+                        "message": mission_manager.completion_note(
+                            stage=stage_name,
+                            status=str(result.get("status") or "ok"),
+                            role=_stage_role(stage_name),
+                        ),
+                        "data": {"manager": "completion"},
+                    }
+                )
+                st["events"] = events
                 return st
 
             # Coding / tool permission block → force HITL so Teams can prompt
             meta = result.get("meta") or {}
+            if meta.get("kind") == "escalation":
+                # 先记录问题并自环一次；下次进入本节点时在 run_stage 之前问人
+                # （见函数开头的 pending 分支），避免 LangGraph 重放丢掉回答。
+                events = list(st.get("events") or [])
+                events.append(
+                    {
+                        "stage": stage_name,
+                        "kind": "hitl",
+                        "message": "escalation requested — waiting for a human",
+                        "data": {
+                            "kind": "escalation",
+                            "question": str(meta.get("question") or ""),
+                        },
+                    }
+                )
+                st["events"] = events
+                st["pending_escalation"] = {
+                    "question": str(meta.get("question") or ""),
+                    "options": [str(o) for o in (meta.get("options") or [])],
+                    "message": result.get("message", ""),
+                }
+                st["handoff_target"] = stage_name
+                st["status"] = "running"
+                return st
+
             payload = {
                 "stage": stage_name,
                 "prompt": result.get("message")

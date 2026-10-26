@@ -193,6 +193,9 @@ class Settings(BaseSettings):
     weknora_retrieval_mode: str = "hybrid"  # hybrid | graph
     # graph 模式下 knowledge-chat SSE 流的超时（秒）
     weknora_chat_timeout: float = 90.0
+    # 阶段入口 RAG 召回的上限（秒）：知识库是增强项，graph 模式单次可达数十秒，
+    # 超时即降级为空 brief，绝不能让检索拖住整个阶段执行
+    harness_rag_timeout_seconds: float = 5.0
     # Chat bridges
     slack_signing_secret: str | None = None
     feishu_verification_token: str | None = None

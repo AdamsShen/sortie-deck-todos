@@ -24,6 +24,8 @@ async def _smoke(brief: str, auto_approve: bool) -> int:
                 title="CLI smoke",
                 brief=brief,
                 coding_executor="mock",
+                # 冒烟契约是 mock 管线：显式固定 harness，否则会走默认真实 CLI
+                harness="mock",
                 auto_start=True,
             )
         )

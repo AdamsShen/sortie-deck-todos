@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from langgraph.types import Command
+from pydantic import ValidationError
 
 from sortie_deck.agents import AgentCatalog
 from sortie_deck.artifacts_s3 import build_artifact_store
@@ -213,12 +214,15 @@ class Orchestrator:
         fallback = str(getattr(self.cfg, "decision_fallback_action", "pause") or "pause")
         if fallback not in {"pause", "continue", "abort"}:
             fallback = "pause"
+        # 同一个 Notifier 复用于两处真人触达：决策升级（sub-room escalate）与
+        # HITL 门禁通知。门禁只写工作台时，没人盯着页面就会一直卡住。
+        self.notifier = Notifier(
+            channels=channels, timeout=self.cfg.webhook_timeout, enabled=enabled
+        )
         set_decision_service(
             DecisionService(
                 store=DecisionStore(self.cfg.data_dir / "decisions.json"),
-                notifier=Notifier(
-                    channels=channels, timeout=self.cfg.webhook_timeout, enabled=enabled
-                ),
+                notifier=self.notifier,
                 default_sla_seconds=float(
                     getattr(self.cfg, "decision_sla_seconds", 1800) or 1800
                 ),
@@ -477,16 +481,30 @@ class Orchestrator:
             for k in ("executor", "status", "proposed_next", "qa_attempt"):
                 if k in ev and k not in data:
                     data[k] = ev[k]
-            self._append_timeline(
-                ini,
-                TimelineEvent(
+            try:
+                event = TimelineEvent(
                     stage=ev.get("stage", ini.current_stage),
                     role=ev.get("role"),
                     kind=ev.get("kind", "info"),
                     message=ev.get("message", ""),
                     data=data,
-                ),
-            )
+                )
+            except ValidationError:
+                # graph 侧若先上线了未登记的 kind，降级为 info 落地：
+                # 单个可观测事件不允许打挂整条流水线（会连带任务判 failed）
+                logging.getLogger(__name__).warning(
+                    "未知 timeline 事件类型已降级: kind=%s stage=%s",
+                    ev.get("kind"),
+                    ev.get("stage"),
+                )
+                event = TimelineEvent(
+                    stage=ev.get("stage", ini.current_stage),
+                    role=ev.get("role"),
+                    kind="info",
+                    message=ev.get("message", ""),
+                    data=data,
+                )
+            self._append_timeline(ini, event)
             role_name = ev.get("role") or "system"
             agent = next((r for r in ini.roles if r.role.value == role_name), None)
             await self._post_room(
@@ -1698,6 +1716,16 @@ class Orchestrator:
                 {"initiative_id": ini.id, "stage": stage},
                 timeout=self.cfg.webhook_timeout,
             )
+            # 全局 IM 通道（钉钉/飞书）：门禁必须真正触达真人，而不是只在工作台里等待。
+            # 通道失败由 Notifier 内部降级（返回 ok=False），绝不阻塞门禁本身。
+            notifier = getattr(self, "notifier", None)
+            if notifier is not None:
+                await notifier.send(
+                    title=f"【门禁】{ini.title} · {stage}",
+                    body=hitl_text,
+                    meta={"initiative_id": ini.id, "stage": stage, "kind": kind},
+                    level="hitl",
+                )
             await self._index_mission_artifacts(ini)
             return ini
 

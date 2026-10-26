@@ -41,6 +41,18 @@ Never invent a stage id.
 Return ONLY JSON.
 """
 
+_ADVISE_SYSTEM = """You are the mission manager for a multi-agent delivery mission.
+An executing agent hit a decision it cannot settle on its own. Answer only with
+what the mission brief and the agent's question actually support:
+  resolution: a concrete, directly actionable decision (one or two sentences)
+  confidence: number between 0 and 1
+If the question needs human authority (scope change, budget, compliance, an
+unstated business fact), return an empty resolution and confidence 0 — the
+mission will then escalate to a human.
+Never invent requirements, numbers, deadlines or approvals.
+Return ONLY JSON.
+"""
+
 
 def plan_digest(stages: list[dict[str, Any]]) -> str:
     """Stable hash over the frozen plan (node ids, roles, parallel grouping).
@@ -79,6 +91,9 @@ class ManagerDecision(BaseModel):
     action: ManagerAction = "continue"
     target_stage: str | None = None
     rationale: str = ""
+    # 升级裁决的正文（仅 trigger=conflict 且 Manager 能自行裁决时非空）；
+    # 空串表示 Manager 也判断不了，调用方应继续升级真人。
+    resolution: str = ""
     confidence: float = 0.5
     plan_digest: str = ""
 
@@ -246,6 +261,66 @@ class MissionManager:
             target_stage=None,
             rationale=question,
             confidence=0.0,
+            plan_digest=self.digest,
+        )
+
+    async def advise(
+        self,
+        *,
+        stage: str,
+        question: str,
+        brief: str = "",
+        options: list[str] | None = None,
+    ) -> ManagerDecision | None:
+        """升级链第一级：Manager 先尝试把 agent 的问题裁决掉。
+
+        返回 ``None`` 表示 Manager 也判断不了（无 LLM / 无把握 / 问题需要人类授权），
+        调用方据此继续升级真人。任何异常都按"裁决不了"处理，绝不阻塞任务。
+        """
+        if not self.use_llm:
+            return None
+        client = self._client
+        if client is None:
+            try:
+                from sortie_deck.llm import LlmClient
+
+                client = LlmClient(cli_fallback=True)
+            except Exception:  # noqa: BLE001 — 无客户端等价于裁决不了
+                return None
+        if not getattr(client, "enabled", False):
+            return None
+        user = json.dumps(
+            {
+                "stage": stage,
+                "role": self.role_of(stage),
+                "question": question,
+                "options": options or [],
+                "brief": (brief or "")[:2000],
+            },
+            ensure_ascii=False,
+        )
+        try:
+            data = await client.chat_json(system=_ADVISE_SYSTEM, user=user)
+        except Exception:  # noqa: BLE001 — 裁决失败就交给真人
+            return None
+        if not isinstance(data, dict):
+            return None
+        resolution = str(data.get("resolution") or "").strip()
+        try:
+            confidence = float(data.get("confidence") or 0.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        # 低置信度不放行：宁可升真人，也不要 Manager 编一个答案
+        if not resolution or confidence < 0.6:
+            return None
+        return ManagerDecision(
+            trigger="conflict",
+            stage=stage,
+            action="continue",
+            target_stage=None,
+            rationale=resolution,
+            resolution=resolution,
+            confidence=confidence,
             plan_digest=self.digest,
         )
 

@@ -40,10 +40,10 @@ You are a QA engineer …
 | 模型 | 新增 |
 |------|------|
 | `RoleId` | `_missing_` 让未注册的角色键成为一等成员（`parenting`、`stocks` …），`.value` 与 `== RoleId.X` 语义不变 |
-| `StageContext` | `memory_brief`（分层记忆 + 小群结论）、`handoff_targets` |
+| `StageContext` | `memory_brief`（分层记忆 + 小群结论）、`handoff_targets`（角色白名单）、`next_targets`（角色→阶段的可交接落点） |
 | `RoomMessage` | `room_key`（`main` 为大群）、`msg_type` 增加 `subroom` |
 | `TimelineEvent` | `kind` 增加 `handoff`、`subroom` |
-| `PipelineState` | `plan_digest`、`handoff_target`、`handoff_counts`、`handoff_total`、`wave_attempts`、`halt` |
+| `PipelineState` | `plan_digest`、`handoff_target`、`pending_escalation`、`handoff_counts`、`handoff_total`、`wave_attempts`、`halt` |
 | `ToolkitItem` | `capabilities`、`executable`、`read_only`（供 loadout 召回与降级判断） |
 | `Initiative.meta` | `plan_digest`、`loadout_plans`、`guardrails`、`pending_decision_id`、`forged_agents` |
 
@@ -55,6 +55,20 @@ You are a QA engineer …
 - **HITL 优先**：`hitl_after` 节点不参与自主 handoff，默认分支指向 `hitl__<stage>`。
 - **落点校验**：目标必须是 plan 节点；同一目标 handoff 上限 3 次，任务级上限 40 次；`done` 不允许被直接跳到。
 - **不可关**：路由没有开关（`TDT_AGENT_HANDOFF` / `TDT_MANAGER_JOIN_DECISION` 已移除）——这就是协作模型本身，不是可选项。
+
+## 控制平面协议（真实 harness）
+
+真实 harness 的 agent loop 在 provider 进程内，编排层无法直接调用，因此沿用 `toolkit_intent` / `subroom` 的「声明-兑现」范式：模型在回复里写一个 `control` 围栏块，执行器解析后交给编排层执行，块本身从产物与记忆中剥离。
+
+```json
+{"handoff": {"role": "qa", "reason": "实现完成，需要测试"}}
+{"escalate": {"question": "两个验收口径冲突，选哪个？", "options": ["A", "B"]}}
+```
+
+- **handoff**：`StageContext.next_targets` 由图按「plan 后继节点 ∩ 契约白名单 ∩ 非 HITL 节点」生成（同角色只取最近一个节点；并行成员不提供目标，交给 Manager 汇合决策）。执行器只做角色→阶段查表，落点仍由 `_apply_handoff` 二次校验：白名单、预算、不得跳 `done`、不得绕 HITL。
+- **escalate**：先由 `MissionManager.advise` 尝试裁决（低置信度不放行，避免 Manager 编答案），裁决不了才进真人决策中心并挂起任务。真人回答作为 `human_instruction` 重入本阶段，且**不注入 `bypassPermissions`、不置 `publish_pending`**。
+- **询问前移**：升级的人工询问放在 `run_stage` 之前（`pending_escalation` + 节点自环）。LangGraph 恢复会重放 `interrupt()` 之前的代码，若先跑阶段再问人，重放会用空答复再跑一次并丢掉回答。
+- **降级**：无 host / IM 未配置时仍返回 `needs_hitl`，落到工作台门禁而不是静默继续。
 
 ## API
 

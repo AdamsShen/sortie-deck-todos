@@ -208,8 +208,20 @@ class TimelineEvent(BaseModel):
     at: datetime = Field(default_factory=utc_now)
     stage: str
     role: str | None = None
+    # toolkit_usage / toolkit_meta / memory_meta 由 graph 的元工具链路写入，
+    # 缺失会让阶段收尾的 timeline 合并直接抛校验异常、整个 run 判失败
     kind: Literal[
-        "info", "artifact", "hitl", "error", "transition", "consult", "handoff", "subroom"
+        "info",
+        "artifact",
+        "hitl",
+        "error",
+        "transition",
+        "consult",
+        "handoff",
+        "subroom",
+        "toolkit_usage",
+        "toolkit_meta",
+        "memory_meta",
     ] = "info"
     message: str
     data: dict[str, Any] = Field(default_factory=dict)
@@ -330,6 +342,10 @@ class StageContext(BaseModel):
     harness_locked: bool = False
     # Roles this agent's contract allows it to hand off to (read-only hint)
     handoff_targets: list[str] = Field(default_factory=list)
+    # 本阶段可自主交接的落点：[{stage, role, label}]。
+    # 由图按「plan 后继节点 ∩ 契约白名单 ∩ 非 HITL 节点」生成，提示词据此
+    # 让模型用角色表达交接意图，执行器再把角色解析成阶段名写回 proposed_next。
+    next_targets: list[dict[str, str]] = Field(default_factory=list)
 
 
 class StageResult(BaseModel):
