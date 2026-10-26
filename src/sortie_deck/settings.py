@@ -79,6 +79,9 @@ class Settings(BaseSettings):
     # 单阶段 memory_read 预算与单条全文截断（防上下文堆积）
     memory_read_budget_per_stage: int = 4
     memory_read_max_chars: int = 2000
+    # Codex `exec --sandbox` 档位（read-only | workspace-write | danger-full-access）。
+    # 默认 workspace-write：编码阶段需要写文件；会话续跑沿用首次档位。
+    codex_sandbox: str = "workspace-write"
     # OpenCode server (deployed alongside the app in the cloud, started via
     # `opencode serve`). The provider talks HTTP to it — never a local CLI.
     opencode_base_url: str | None = None
