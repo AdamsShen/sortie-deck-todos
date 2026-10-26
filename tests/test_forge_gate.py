@@ -112,7 +112,9 @@ def _seed_draft(data_dir: Path, status: str = "pending-review") -> str:
 
 
 async def test_start_pipeline_blocks_pending_forge_draft(tmp_path: Path) -> None:
-    cfg = Settings(data_dir=tmp_path / "data", deploy_executor="mock", pipeline_llm=False, room_llm=False)
+    cfg = Settings(
+        data_dir=tmp_path / "data", deploy_executor="mock", pipeline_llm=False, room_llm=False
+    )
     orch = Orchestrator(cfg)
     await orch.startup()
     try:
@@ -148,7 +150,9 @@ async def test_start_pipeline_blocks_pending_forge_draft(tmp_path: Path) -> None
 
 
 async def test_start_pipeline_still_requires_confirmation_first(tmp_path: Path) -> None:
-    cfg = Settings(data_dir=tmp_path / "data", deploy_executor="mock", pipeline_llm=False, room_llm=False)
+    cfg = Settings(
+        data_dir=tmp_path / "data", deploy_executor="mock", pipeline_llm=False, room_llm=False
+    )
     orch = Orchestrator(cfg)
     await orch.startup()
     try:
