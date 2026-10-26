@@ -340,6 +340,10 @@ class StageContext(BaseModel):
     # Initiative-level agent harness (claude_code | opencode | codex | cursor | mock)
     harness: str = ""
     harness_locked: bool = False
+    # 任务运行根目录：由编排器按自身配置注入（data_dir / 任务沙盒根）。
+    # 执行器不得直接读全局 settings，否则单测、多实例会写到进程级真实数据目录。
+    data_dir: str = ""
+    worktrees_dir: str = ""
     # Roles this agent's contract allows it to hand off to (read-only hint)
     handoff_targets: list[str] = Field(default_factory=list)
     # 本阶段可自主交接的落点：[{stage, role, label}]。

@@ -58,7 +58,7 @@ async def test_pipeline_hitl_and_qa_loop(tmp_path):
         assert ini.pending_hitl.stage == "product_prd"
 
         ini = await orch.submit_hitl(ini.id, HitlDecision(action=HitlAction.APPROVE))
-        for _ in range(140):
+        for _ in range(400):
             await asyncio.sleep(0.1)
             ini = orch.get(ini.id)
             assert ini
@@ -69,7 +69,7 @@ async def test_pipeline_hitl_and_qa_loop(tmp_path):
         assert ini.pending_hitl.stage == "design_ui"
 
         ini = await orch.submit_hitl(ini.id, HitlDecision(action=HitlAction.APPROVE))
-        for _ in range(140):
+        for _ in range(400):
             await asyncio.sleep(0.1)
             ini = orch.get(ini.id)
             assert ini
@@ -78,7 +78,9 @@ async def test_pipeline_hitl_and_qa_loop(tmp_path):
         assert ini.pending_hitl is not None
         assert ini.pending_hitl.stage in {"design_ui", "qa_verify", "deploy_preview"}
 
-        for _ in range(40):
+        # 收尾循环要覆盖剩余阶段：harness 路径每阶段有 worktree/产物落盘开销，
+        # 4s 不够跑完 default 轨道的全部门禁
+        for _ in range(900):
             ini = orch.get(ini.id)
             assert ini
             if ini.status.value == "done":

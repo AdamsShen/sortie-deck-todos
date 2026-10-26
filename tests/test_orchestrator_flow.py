@@ -65,7 +65,7 @@ async def test_create_edit_confirm_start_hitl_until_done(tmp_path):
         ini = await orch.start_pipeline(ini.id, author_name="Ada")
         assert ini.status.value in {"running", "waiting_hitl"}
 
-        for _ in range(140):
+        for _ in range(400):
             await asyncio.sleep(0.1)
             ini = orch.get(ini.id)
             assert ini

@@ -176,6 +176,7 @@ class Orchestrator:
             self.artifacts,
             self.cfg.checkpoint_db,
             postgres_uri=self.cfg.postgres_uri,
+            cfg=self.cfg,
         )
         self.graph = self.graphs.get("default")
         for ini in self.store.list():
@@ -392,7 +393,7 @@ class Orchestrator:
         if saver is None:
             raise RuntimeError("checkpointer not ready")
         tpl = materialize_template(specs, name=f"custom-{ini.id}")
-        builder = build_graph_from_template(tpl, self.registry, self.artifacts)
+        builder = build_graph_from_template(tpl, self.registry, self.artifacts, cfg=self.cfg)
         self.graphs[f"custom:{ini.id}"] = builder.compile(checkpointer=saver)
 
     def _apply_pipeline_specs(

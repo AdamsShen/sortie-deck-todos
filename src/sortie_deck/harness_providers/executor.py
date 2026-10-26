@@ -322,9 +322,11 @@ class HarnessStageExecutor:
         )
         from sortie_deck.settings import settings
 
-        workspace = ensure_worktree(
-            settings.data_dir.parent, ctx.initiative_id, settings.worktrees_dir
-        )
+        # 目录优先取编排器注入值（ctx），只有旧调用方/直接单测才回退全局 settings：
+        # 否则测试与多实例场景会把任务沙盒写进进程级真实数据目录
+        data_dir = Path(ctx.data_dir) if ctx.data_dir else settings.data_dir
+        worktrees_dir = Path(ctx.worktrees_dir) if ctx.worktrees_dir else settings.worktrees_dir
+        workspace = ensure_worktree(data_dir.parent, ctx.initiative_id, worktrees_dir)
         repo_section, repo_log = await clone_repos(ctx.repos, workspace, ctx.initiative_id)
 
         pack = await self._build_context_pack(ctx)
@@ -834,7 +836,7 @@ class HarnessStageExecutor:
         needs_diff = "diff.patch" in REQUIRED.get(ctx.stage, [])
         diff = ""
         if needs_diff:
-            repo_root = settings.data_dir.parent
+            repo_root = (Path(ctx.data_dir) if ctx.data_dir else settings.data_dir).parent
             diff = await _git_diff(workspace, repo_root, ctx.repos)
         log = "\n".join(log_lines)
         reply_md = (

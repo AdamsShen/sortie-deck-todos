@@ -830,6 +830,8 @@ def build_graph_from_template(
     template: dict[str, Any],
     registry: ExecutorRegistry,
     artifact_store: ArtifactStore,
+    *,
+    cfg: Any = None,
 ):
     stages: list[dict[str, Any]] = list(template.get("stages") or [])
     if not stages:
@@ -1352,6 +1354,9 @@ def build_graph_from_template(
             harness_locked=bool(state.get("harness_locked")),
             handoff_targets=contract_targets,
             next_targets=next_targets,
+            # 编排器配置注入：执行器据此定位任务沙盒，不再读进程级全局 settings
+            data_dir=str(getattr(cfg, "data_dir", "") or ""),
+            worktrees_dir=str(getattr(cfg, "worktrees_dir", "") or ""),
         )
 
         # Session-capable executors get a host so they can pull a sub-room
@@ -2230,9 +2235,15 @@ def build_graph_from_template(
     return graph
 
 
-def build_graph(registry: ExecutorRegistry, artifact_store: ArtifactStore, template_name: str = "default"):
+def build_graph(
+    registry: ExecutorRegistry,
+    artifact_store: ArtifactStore,
+    template_name: str = "default",
+    *,
+    cfg: Any = None,
+):
     tpl = load_pipeline_template(template_name)
-    return build_graph_from_template(tpl, registry, artifact_store)
+    return build_graph_from_template(tpl, registry, artifact_store, cfg=cfg)
 
 
 async def compile_pipeline(
@@ -2241,6 +2252,8 @@ async def compile_pipeline(
     checkpoint_path: Path,
     postgres_uri: str | None = None,
     template_name: str = "default",
+    *,
+    cfg: Any = None,
 ):
     """Compile one graph; returns (compiled, resources)."""
     graphs, resources = await compile_pipelines(
@@ -2249,6 +2262,7 @@ async def compile_pipeline(
         checkpoint_path,
         postgres_uri=postgres_uri,
         tracks=[template_name],
+        cfg=cfg,
     )
     return graphs[template_name], resources
 
@@ -2259,8 +2273,14 @@ async def compile_pipelines(
     checkpoint_path: Path,
     postgres_uri: str | None = None,
     tracks: list[str] | None = None,
+    *,
+    cfg: Any = None,
 ) -> tuple[dict[str, Any], dict]:
-    """Compile multiple track graphs sharing one checkpointer."""
+    """Compile multiple track graphs sharing one checkpointer.
+
+    ``cfg``（编排器配置）会透传到每个阶段节点，用于把 data_dir / 任务沙盒根
+    注入 StageContext——执行器因此不需要读进程级全局 settings。
+    """
     import aiosqlite
 
     if tracks is None:
@@ -2296,6 +2316,6 @@ async def compile_pipelines(
 
     graphs: dict[str, Any] = {}
     for track in track_list:
-        builder = build_graph(registry, artifact_store, track)
+        builder = build_graph(registry, artifact_store, track, cfg=cfg)
         graphs[track] = builder.compile(checkpointer=saver)
     return graphs, resources
