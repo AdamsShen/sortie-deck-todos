@@ -71,6 +71,10 @@ logger = logging.getLogger(__name__)
 _agent_catalog: AgentCatalog | None = None
 _memory_store: MemoryStore | None = None
 _toolkit_store: ToolkitStore | None = None
+# 当前进程的活动编排器：图内的 host/进度回写按 initiative_id 反查实例，
+# 显式构造的 Orchestrator 必须成为这个实例，否则 CLI / 验收脚本里会查到
+# 另一个用全局 settings 懒创建的默认实例（读不到任务 → 小群/升级能力静默失效）。
+_orch: Orchestrator | None = None
 
 
 def bind_catalogs(
@@ -140,9 +144,17 @@ def mission_memory_brief(
         return ""
 
 
+def set_orchestrator(orch: Orchestrator | None) -> None:
+    """绑定/解绑进程级活动编排器（构造时自动绑定，测试可显式清理）。"""
+    global _orch
+    _orch = orch
+
+
 class Orchestrator:
     def __init__(self, cfg: Settings | None = None) -> None:
         self.cfg = cfg or settings
+        # 显式构造的实例接管为活动编排器（见 _orch 注释）
+        set_orchestrator(self)
         self.cfg.data_dir.mkdir(parents=True, exist_ok=True)
         self.store = build_initiative_store(
             storage=self.cfg.storage,
@@ -1684,7 +1696,20 @@ class Orchestrator:
 
         return craft_discussion_reply_template(ini, role, text, author_name)
 
+    def _fresh_initiative(self, ini: Initiative) -> Initiative:
+        """取存储里的最新任务快照；缺失时退回传入对象。
+
+        运行期间的写者有多个（阶段循环、升级真人、决策中心、API），共享同一个
+        JSON/SQLite 存储。用运行开始时的旧对象直接 upsert 会静默覆盖别人刚写入的
+        字段（实测会把 `pending_decision_id` 抹掉，导致真人答复后任务不再恢复）。
+        """
+        fresh = self.store.get(ini.id)
+        return fresh if fresh is not None else ini
+
     async def _apply_graph_result(self, ini: Initiative, result: dict[str, Any] | Any) -> Initiative:
+        # 运行期间可能有其它写者（升级真人写 pending_decision_id、API 改 meta、
+        # 决策中心回复等）；用最新快照落库，避免把并发写入覆盖丢失。
+        ini = self._fresh_initiative(ini)
         if isinstance(result, dict) and "__interrupt__" in result:
             interrupts = result["__interrupt__"]
             payload = interrupts[0].value if interrupts else {}
@@ -1842,12 +1867,16 @@ class Orchestrator:
                     final = event
                     stage = event.get("stage")
                     if stage and stage != ini.current_stage:
+                        # 阶段中途可能有其它写者（升级真人写 meta、决策中心回复）；
+                        # 先取最新快照再落库，避免用运行开始时的旧对象覆盖
+                        ini = self._fresh_initiative(ini)
                         ini.current_stage = stage
                         self.store.upsert(ini)
                         await self._emit(
                             ini.id, {"type": "progress", "stage": ini.current_stage, "initiative_id": ini.id}
                         )
                     if event.get("upstream"):
+                        ini = self._fresh_initiative(ini)
                         self._sync_artifacts_from_upstream(
                             ini, event["upstream"], event.get("stage", ini.current_stage)
                         )
@@ -1860,6 +1889,7 @@ class Orchestrator:
                     if event.get("events"):
                         # 每个执行步实时合并事件（toolkit_usage / toolkit_meta 等），
                         # 前端经 SSE update 立即看到该阶段的工具调用
+                        ini = self._fresh_initiative(ini)
                         await self._merge_state_events(ini, event["events"])
                         self.store.upsert(ini)
                         await self._emit(
@@ -1903,6 +1933,24 @@ class Orchestrator:
             raise KeyError(initiative_id)
         if ini.status != InitiativeStatus.WAITING_HITL:
             raise RuntimeError("Initiative is not waiting for HITL")
+
+        # 升级真人时状态会先于图的 interrupt 落库（escalate_to_human 立即置
+        # WAITING_HITL），此时用户/钉钉可能已经回复。若上一段运行仍持有运行锁，
+        # 必须等它真正停在门禁后再投递 resume，否则 resume 会打到一个尚未挂起的图。
+        if self._lock.locked():
+            async with self._lock:
+                pass
+            ini = self.store.get(initiative_id)
+            if ini is None:
+                raise KeyError(initiative_id)
+            if ini.status != InitiativeStatus.WAITING_HITL:
+                # 运行已自行结束或继续：这次 HITL 不再成立，按幂等处理
+                logger.info(
+                    "HITL 提交已失效（任务状态 %s）: initiative=%s",
+                    ini.status,
+                    initiative_id,
+                )
+                return ini
 
         self._append_timeline(
             ini,
@@ -2056,6 +2104,13 @@ class Orchestrator:
         if ini is None:
             return outcome
         if (ini.meta or {}).get("pending_decision_id") != decision_id:
+            # 决策已被记录，但任务侧没有对应的等待标记（通常是 HITL 已由其它路径
+            # 恢复/停止）。记一条告警，避免"答复成功但任务不动"难以排查。
+            logger.warning(
+                "决策已答复但任务无匹配 pending_decision_id: decision=%s initiative=%s",
+                decision_id,
+                ini.id,
+            )
             return outcome
         ini.meta = {**(ini.meta or {}), "pending_decision_id": None}
         self.store.upsert(ini)
@@ -2139,9 +2194,6 @@ class Orchestrator:
         )
         await self._emit(ini.id, {"type": "stopped", "initiative": ini.model_dump(mode="json")})
         return ini
-
-
-_orch: Orchestrator | None = None
 
 
 def get_orchestrator() -> Orchestrator:
