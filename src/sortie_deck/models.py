@@ -352,6 +352,9 @@ class StageContext(BaseModel):
     artifact_dir: str
     workspace_dir: str | None = None
     upstream_artifacts: dict[str, str] = Field(default_factory=dict)
+    # 上游产物的绝对路径映射（与 upstream_artifacts 同键）。执行器据此在 prompt 里
+    # 只给「摘要 + 路径」，让 agent 按需 Read，而不是把全文灌进上下文。
+    upstream_paths: dict[str, str] = Field(default_factory=dict)
     persona: str = ""
     permissions: dict[str, Any] = Field(default_factory=dict)
     toolkit_ids: list[str] = Field(default_factory=list)

@@ -93,6 +93,24 @@ _SALVAGE_SKIP_DIRS = frozenset({".git", "node_modules", ".venv", "venv", "dist",
 _SALVAGE_MAX_DEPTH = 2
 
 
+def _absolute_artifact_path(store: ArtifactStore, relative_path: str) -> str:
+    """把产物引用解析成本地绝对路径，供 prompt 里「按需读取」指路。
+
+    本地存储走 ``store.absolute()``；远端存储（S3）没有本地路径，退化为原引用，
+    agent 读不到也不会让阶段失败——prompt 同段落仍给了文件名与字符数。
+    """
+    absolute = getattr(store, "absolute", None)
+    if callable(absolute):
+        try:
+            return str(absolute(relative_path))
+        except Exception:  # noqa: BLE001 — 路径解析属于展示增强，失败不影响执行
+            logger.warning("产物绝对路径解析失败: %s", relative_path, exc_info=True)
+    root = getattr(store, "root", None)
+    if root:
+        return str(Path(str(root)) / relative_path)
+    return relative_path
+
+
 def _workspace_candidates(root: Path, name: str) -> list[Path]:
     """按「顶层优先、深度 ≤2、跳过依赖/仓库目录」列出候选文件。"""
     direct = root / name
@@ -1316,11 +1334,13 @@ def build_graph_from_template(
 
         upstream_paths = state.get("upstream", {})
         upstream_content: dict[str, str] = {}
+        upstream_abs: dict[str, str] = {}
         for kind, rel in upstream_paths.items():
             try:
                 upstream_content[kind] = artifact_store.read_text(rel)
             except FileNotFoundError:
                 upstream_content[kind] = ""
+            upstream_abs[kind] = _absolute_artifact_path(artifact_store, rel)
 
         role_personas = state.get("role_personas") or {}
         role_toolkits = state.get("role_toolkits") or {}
@@ -1474,6 +1494,7 @@ def build_graph_from_template(
             artifact_dir=artifact_dir,
             workspace_dir=state.get("workspace_dir"),
             upstream_artifacts=upstream_content,
+            upstream_paths=upstream_abs,
             persona=persona,
             permissions={
                 "qa_attempt": state.get("qa_attempt", 1),

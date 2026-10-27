@@ -124,7 +124,7 @@ def test_claude_code_returns_needs_hitl_on_permission_block(tmp_path, monkeypatc
         upstream_artifacts={"prd.md": "# PRD\n"},
     )
 
-    async def fake_run(args, cwd, timeout=None):
+    async def fake_run(args, cwd, timeout=None, **_kwargs):
         return (
             0,
             "Claude requested permissions to write, but you haven't granted it yet.",

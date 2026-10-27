@@ -29,7 +29,8 @@ mission toolkit library instead of inventing one:
 2. The orchestrator replies with candidate summaries in your toolkit brief.
 3. To use one, declare: {"toolkit_pick": {"item_id": "<id from candidates>"}}
    Validated items are floated into your context (budget: 8 picks per stage).
-   Picked MCP servers become callable via mcp_calls afterwards.
+   MCP servers picked now are mounted from the NEXT stage on — a running session
+   cannot attach new MCP servers mid-flight, so do not block waiting for them.
 4. To run a script of a picked skill: {"skill_run": {"item_id": "...", "script": "scripts/x.py", "args": []}}
    The item must be picked first; write-looking script names require "confirmed": true.
    Budget: 4 skill runs per stage.
@@ -536,6 +537,16 @@ class HarnessStageExecutor:
             "files_written": _count_impl_files(workspace),
             "context_tokens": int(pack.get("token_estimate") or 0),
         }
+        # provider 侧的会话观测（轮次 / 压缩边界 / 成本）：工作台据此判断
+        # 「这一阶段是否被压缩过、跑了多少轮」，不必翻 SDK 日志
+        reply_meta = getattr(reply, "meta", None)
+        if isinstance(reply_meta, dict) and reply_meta.get("context"):
+            meta["context"] = reply_meta["context"]
+        if pack.get("mcp_notes"):
+            meta["mcp"] = {
+                "servers": sorted((pack.get("mcp_servers") or {}).keys()),
+                "notes": list(pack.get("mcp_notes") or []),
+            }
         # 意图解析层：回复文本里的 ```toolkit_intent 围栏 → StageResult.meta，
         # 编排层（graph.run_toolkit_meta / _run_mcp_calls）据此兑现
         meta.update(_parse_toolkit_intents(reply.text or ""))
@@ -743,14 +754,74 @@ class HarnessStageExecutor:
         if ini is not None:
             artifact_paths = [ref.path for ref in ini.artifacts][-40:]
         pack = await mm.bootstrap_context(ini, artifact_paths=artifact_paths) if ini is not None else None
+        briefs = await self._artifact_briefs(ctx, mm)
+        mcp_servers, mcp_notes = self._mcp_servers(ctx)
         out: dict[str, Any] = {
             "memory_md": pack.memory_md if pack else "",
             "context_files": dict(pack.context_files) if pack else {},
             "artifact_index": list(pack.artifact_index) if pack else [],
             "token_estimate": pack.token_estimate if pack else 0,
             "rag_brief": await self._rag_brief(ctx),
+            # 上游产物「摘要 + 路径」清单（空 dict 表示走旧的全量注入分支）
+            "briefs": briefs,
+            # 本阶段实际挂载的 MCP（strict 关闭时为空，由 SDK 按 setting_sources 全量加载）
+            "mcp_servers": mcp_servers,
+            "mcp_notes": mcp_notes,
         }
         return out
+
+    async def _artifact_briefs(
+        self, ctx: StageContext, mm: Any
+    ) -> dict[str, Any]:
+        """构建上游产物摘要；开关关闭或构建失败时返回空 dict（回落全文注入）。
+
+        摘要本身是增强项：LLM 失败、缓存不可写都已在 artifact_summary 内部降级，
+        这里再兜一层，确保任何异常都不会让阶段失败。
+        """
+        from sortie_deck.artifact_summary import build_artifact_briefs
+        from sortie_deck.settings import settings
+
+        if not settings.prompt_artifact_briefs or not ctx.upstream_artifacts:
+            return {}
+        try:
+            return await build_artifact_briefs(
+                ctx.upstream_artifacts,
+                ctx.upstream_paths,
+                mission_id=ctx.initiative_id,
+                max_tokens=settings.prompt_artifact_summary_max_tokens,
+                inline_chars=settings.prompt_inline_artifact_chars,
+                use_llm=settings.prompt_artifact_summary_llm,
+                timeout=settings.prompt_artifact_summary_timeout,
+                memory_dir=mm.memory_dir(ctx.initiative_id),
+            )
+        except Exception:  # noqa: BLE001 — 摘要失败回落全文，绝不能打挂阶段
+            logger.warning(
+                "产物摘要构建失败，本阶段回落全文注入: initiative=%s stage=%s",
+                ctx.initiative_id,
+                ctx.stage,
+                exc_info=True,
+            )
+            return {}
+
+    def _mcp_servers(self, ctx: StageContext) -> tuple[dict[str, Any], list[str]]:
+        """解析本阶段应挂载的 MCP。
+
+        ``harness_mcp_strict`` 关闭时返回空 dict —— provider 不传 ``mcp_servers``，
+        SDK 按 ``setting_sources`` 全量加载本机 mcpServers（旧行为，用于回退比对）。
+        """
+        from sortie_deck.settings import settings
+
+        if not settings.harness_mcp_strict:
+            return {}, ["strict 关闭：沿用本机全量 MCP"]
+
+        from sortie_deck.harness_providers.mcp_binding import mcp_servers_from_toolkit
+
+        try:
+            from sortie_deck.orchestrator import _toolkit_store
+        except Exception:  # noqa: BLE001 — 单测/早期启动时工具箱可能未就绪
+            return {}, ["工具箱未就绪：本阶段不挂载 MCP"]
+
+        return mcp_servers_from_toolkit(_toolkit_store, list(ctx.toolkit_ids))
 
     async def _rag_brief(self, ctx: StageContext) -> str:
         """阶段入口知识召回（增强项）。
@@ -808,6 +879,7 @@ class HarnessStageExecutor:
         with_subroom: bool = False,
     ) -> str:
         prd = ctx.upstream_artifacts.get("prd.md", ctx.brief)
+        briefs = pack.get("briefs") or {}
         sections: list[str] = [
             ctx.persona or f"You are the {ctx.role} agent in Sortie Deck.",
             (
@@ -818,8 +890,20 @@ class HarnessStageExecutor:
             f"Workspace (cwd): `{workspace}` — you may create/edit files here.",
             f"Human instruction: {ctx.human_instruction or 'none'}",
             f"Mission brief:\n{ctx.brief}",
-            f"Upstream PRD:\n{prd}",
         ]
+        if briefs:
+            from sortie_deck.artifact_summary import render_artifact_briefs
+
+            sections.append(
+                "Upstream artifacts（只给摘要与路径；需要细节时用 Read 打开对应路径，"
+                "不要凭文件名猜内容）:\n"
+                + render_artifact_briefs(briefs)
+                + "\n\n读取建议：只读与本阶段产出直接相关的 1-2 份，其余按需再取，"
+                "不要为了完整性通读全部产物。"
+            )
+        else:
+            # 回退分支：摘要开关关闭 / 无上游产物 / 摘要构建失败时保持旧行为
+            sections.append(f"Upstream PRD:\n{prd}")
         memory_md = str(pack.get("memory_md") or "")
         if memory_md.strip():
             sections.append(f"Rolling mission memory (from bound files):\n{memory_md.strip()}")
@@ -850,7 +934,9 @@ class HarnessStageExecutor:
         if repo_section:
             sections.append(repo_section.strip())
         artifact_index = list(pack.get("artifact_index") or [])
-        if artifact_index:
+        # briefs 已覆盖上游产物时不再列全量索引：索引对「找产物」有用，
+        # 但在已有摘要+路径的阶段属于重复信息，白白占预算
+        if artifact_index and not briefs:
             sections.append(
                 "Mission artifact index:\n" + "\n".join(f"- `{p}`" for p in artifact_index[:20])
             )

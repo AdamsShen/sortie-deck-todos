@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import shutil
@@ -9,6 +10,8 @@ from pathlib import Path
 
 from sortie_deck import observability as obs
 from sortie_deck.models import RepoConfig, StageContext, StageResult
+
+logger = logging.getLogger(__name__)
 
 # 这些 flag 后面跟的是凭据，入 span 前要打码
 _SENSITIVE_FLAGS = {"--api-key", "--token", "--password", "--auth-token", "--secret"}
@@ -73,6 +76,95 @@ def _coding_timeout() -> int:
     return int(getattr(settings, "coding_timeout_seconds", 900) or 900)
 
 
+async def _artifact_brief_section(ctx: StageContext) -> tuple[str, str]:
+    """coding CLI 的上游产物段落：与 harness 共用「摘要 + 路径」口径。
+
+    返回 (prompt 段落, 日志行)；任何异常都回落旧的 PRD 全文，不影响阶段执行。
+    """
+    from sortie_deck.settings import settings
+
+    fallback = f"PRD:\n{ctx.upstream_artifacts.get('prd.md', ctx.brief)}\n"
+    if not settings.prompt_artifact_briefs or not ctx.upstream_artifacts:
+        return fallback, ""
+
+    try:
+        from sortie_deck.artifact_summary import build_artifact_briefs, render_artifact_briefs
+        from sortie_deck.mission_memory import get_mission_memory
+
+        briefs = await build_artifact_briefs(
+            ctx.upstream_artifacts,
+            ctx.upstream_paths,
+            mission_id=ctx.initiative_id,
+            max_tokens=settings.prompt_artifact_summary_max_tokens,
+            inline_chars=settings.prompt_inline_artifact_chars,
+            use_llm=settings.prompt_artifact_summary_llm,
+            timeout=settings.prompt_artifact_summary_timeout,
+            memory_dir=get_mission_memory().memory_dir(ctx.initiative_id),
+        )
+    except Exception:  # noqa: BLE001 — 摘要失败回落全文
+        logger.warning(
+            "coding 产物摘要失败，回落 PRD 全文: initiative=%s stage=%s",
+            ctx.initiative_id,
+            ctx.stage,
+            exc_info=True,
+        )
+        return fallback, "artifact_briefs=failed"
+
+    if not briefs:
+        return fallback, ""
+    section = (
+        "Upstream artifacts（只给摘要与路径；需要细节时自行 Read 对应路径，"
+        "不要凭文件名猜内容）:\n"
+        + render_artifact_briefs(briefs)
+        + "\n读取建议：只读与本阶段产出直接相关的 1-2 份，其余按需再取。\n"
+    )
+    return section, f"artifact_briefs={len(briefs)}"
+
+
+def _compact_env() -> dict[str, str]:
+    """coding CLI 子进程的上下文压缩窗口（与 harness 同一套配置）。"""
+    from sortie_deck.settings import settings
+
+    try:
+        window = int(settings.harness_auto_compact_window or 0)
+    except (TypeError, ValueError):
+        return {}
+    if window <= 0:
+        return {}
+    return {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": str(window)}
+
+
+def _write_mcp_config(workspace: Path, ctx: StageContext) -> tuple[str, list[str]]:
+    """把本阶段绑定的 MCP 落成 claude CLI 的 ``--mcp-config`` 文件。
+
+    返回 (配置文件路径, 说明行)；strict 关闭 / 无绑定 / 写盘失败时都返回空路径，
+    调用方据此退回 CLI 默认行为（读取用户级 MCP 配置）。
+    """
+    from sortie_deck.settings import settings
+
+    if not settings.harness_mcp_strict:
+        return "", ["MCP: strict 关闭，沿用 CLI 默认配置"]
+    try:
+        from sortie_deck.harness_providers.mcp_binding import mcp_servers_from_toolkit
+        from sortie_deck.orchestrator import _toolkit_store
+    except Exception:  # noqa: BLE001 — 工具箱不可用时按「无 MCP」处理
+        logger.warning("coding MCP 绑定跳过：依赖不可用", exc_info=True)
+        return "", ["MCP: 依赖不可用，未挂载"]
+
+    servers, notes = mcp_servers_from_toolkit(_toolkit_store, list(ctx.toolkit_ids))
+    path = workspace / ".tdt" / "mcp-config.json"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps({"mcpServers": servers}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except OSError:
+        logger.warning("MCP 配置文件写入失败（忽略）: %s", path, exc_info=True)
+        return "", [*notes, "MCP: 配置写入失败，未挂载"]
+    return str(path), notes
+
+
 def _permission_mode(ctx: StageContext) -> str:
     from sortie_deck.settings import settings
 
@@ -122,7 +214,13 @@ def _safe_command(args: list[str]) -> str:
     return obs.truncate(" ".join(parts), _MAX_COMMAND_CHARS)
 
 
-async def _run_cmd(args: list[str], cwd: Path, timeout: int | None = None) -> tuple[int, str, str]:
+async def _run_cmd(
+    args: list[str],
+    cwd: Path,
+    timeout: int | None = None,
+    *,
+    extra_env: dict[str, str] | None = None,
+) -> tuple[int, str, str]:
     """执行子进程——coding executor 的唯一子进程出口（含 git diff 等辅助命令）。
 
     CLI 内部行为不可观测，能记的只有命令行、耗时、退出码；这三项足以回答
@@ -142,7 +240,8 @@ async def _run_cmd(args: list[str], cwd: Path, timeout: int | None = None) -> tu
             cwd=str(cwd),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env={**os.environ, "CI": "1"},  # nudge CLIs toward non-interactive
+            # CI=1 让 CLI 走非交互；extra_env 用于注入上下文压缩窗口等增量配置
+            env={**os.environ, "CI": "1", **(extra_env or {})},
         )
         try:
             stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
@@ -381,7 +480,7 @@ class ClaudeCodeExecutor:
 
     async def run(self, ctx: StageContext) -> StageResult:
         workspace = ensure_worktree(self.repo_root, ctx.initiative_id, self.worktrees_root)
-        prd = ctx.upstream_artifacts.get("prd.md", ctx.brief)
+        artifact_section, brief_log = await _artifact_brief_section(ctx)
         mcp_extra, mcp_log = await _mcp_prompt_and_log(ctx)
         repo_section, repo_log = await clone_repos(ctx.repos, workspace, ctx.initiative_id)
         mode = _permission_mode(ctx)
@@ -392,12 +491,14 @@ class ClaudeCodeExecutor:
             f"Write the implementation into this directory (e.g. index.html / src/).\n"
             f"Do not ask the user to approve writes — permission mode is `{mode}`.\n"
             f"Human instruction: {ctx.human_instruction or 'none'}\n\n"
-            f"PRD:\n{prd}\n"
+            f"{artifact_section}"
             f"{repo_section}"
             f"{mcp_extra}"
         )
         claude = _which("claude")
         log_parts: list[str] = []
+        if brief_log:
+            log_parts.append(brief_log)
         if repo_log:
             log_parts.append("\n".join(repo_log))
         if mcp_log:
@@ -418,8 +519,14 @@ class ClaudeCodeExecutor:
             ]
             if mode == "bypassPermissions":
                 args.append("--dangerously-skip-permissions")
+            # 严格模式：只挂本阶段绑定的 MCP，切断用户级 mcpServers 的全量注入
+            mcp_config, mcp_notes = _write_mcp_config(workspace, ctx)
+            if mcp_config:
+                args.extend(["--mcp-config", mcp_config, "--strict-mcp-config"])
+            if mcp_notes:
+                log_parts.append("MCP: " + "; ".join(mcp_notes))
             log_parts.append(f"cmd={' '.join(args[:4])} … --permission-mode {mode}")
-            code, out, err = await _run_cmd(args, cwd=workspace)
+            code, out, err = await _run_cmd(args, cwd=workspace, extra_env=_compact_env())
             combined = f"{out}\n{err}"
             log_parts.append(f"exit={code}\n{combined[:3500]}")
             needs_perm = _looks_like_permission_block(combined)
@@ -534,7 +641,9 @@ class CursorCliExecutor:
 
     async def run(self, ctx: StageContext) -> StageResult:
         workspace = ensure_worktree(self.repo_root, ctx.initiative_id, self.worktrees_root)
+        # prd 仅用于知识库检索（检索需要原文），prompt 里走「摘要 + 路径」
         prd = ctx.upstream_artifacts.get("prd.md", ctx.brief)
+        artifact_section, brief_log = await _artifact_brief_section(ctx)
         repo_section, repo_log = await clone_repos(ctx.repos, workspace, ctx.initiative_id)
         query = f"{ctx.brief}\n{prd}\n{ctx.human_instruction or ''}"
         kb_meta: dict[str, str] = {}
@@ -561,13 +670,15 @@ class CursorCliExecutor:
             f"{ctx.persona}\n\nImplement against PRD in this isolated worktree.\n"
             f"Workspace: {workspace}\n"
             f"You may create/edit files here without asking for write approval.\n"
-            f"Instruction: {ctx.human_instruction or 'none'}\n\n{prd}\n"
+            f"Instruction: {ctx.human_instruction or 'none'}\n\n{artifact_section}"
             f"{repo_section}"
             f"{kb_hint}"
             f"{mcp_extra}"
         )
         binary, prefix = _resolve_cursor_binary()
         log_parts: list[str] = []
+        if brief_log:
+            log_parts.append(brief_log)
         if repo_log:
             log_parts.append("\n".join(repo_log))
         if kb_meta:
@@ -579,8 +690,10 @@ class CursorCliExecutor:
         needs_auth = False
         if binary:
             args = [binary, *prefix, "-p", prompt]
+            # cursor CLI 没有 --mcp-config，严格模式下本阶段就是「无 MCP」
+            log_parts.append("MCP: cursor CLI 不支持 --mcp-config，本阶段未挂载")
             log_parts.append(f"cmd={' '.join(args[:4])}…")
-            code, out, err = await _run_cmd(args, cwd=workspace)
+            code, out, err = await _run_cmd(args, cwd=workspace, extra_env=_compact_env())
             combined = f"{out}\n{err}"
             log_parts.append(f"exit={code}\n{combined[:3500]}")
             needs_auth = _looks_like_auth_block(combined)

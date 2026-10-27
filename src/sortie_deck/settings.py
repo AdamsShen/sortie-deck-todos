@@ -103,6 +103,32 @@ class Settings(BaseSettings):
     # Claude Code --permission-mode for non-interactive -p runs in worktrees
     # acceptEdits | auto | bypassPermissions | default | dontAsk | plan
     coding_permission_mode: str = "acceptEdits"
+    # 传给 claude-agent-sdk 的 setting_sources："" 按 CLI 默认加载
+    # user/project/local；"none" 为 SDK 隔离模式（不加载本机 settings 与插件
+    # hooks，避免开发机的 hook 打断云端 stage）；其余为逗号分隔的 source 列表。
+    harness_setting_sources: str = ""
+    # --- 上下文成本控制（见 docs/plans/2026-10-27-harness-context-cost.md）----
+    # 上游产物在 prompt 里只给「摘要 + 路径」，让 agent 需要时自行 Read。
+    # 关闭后回落为旧行为（prd.md 全文注入），用于灰度对比与回退。
+    prompt_artifact_briefs: bool = True
+    # 小于该字符数的产物直接内联全文，避免为小文件多付一次摘要调用
+    prompt_inline_artifact_chars: int = 1200
+    # 单份产物摘要的 token 上限（估算口径 4 字符 ≈ 1 token）
+    prompt_artifact_summary_max_tokens: int = 200
+    # 单份摘要的 LLM 超时（秒）；超时/异常一律回落规则摘要，不让阶段失败
+    prompt_artifact_summary_timeout: float = 12.0
+    # false 时只用规则摘要（标题大纲/键名/diff 统计），不调 LLM
+    prompt_artifact_summary_llm: bool = True
+    # 严格 MCP 模式：只挂本阶段绑定/召回的 MCP（strict_mcp_config），
+    # 不再从本机 ~/.claude.json 全量加载全局 mcpServers。
+    # 置 false 可回退到旧的全量加载行为。
+    harness_mcp_strict: bool = True
+    # 会话内自动压缩窗口（token）。Claude Code 通过
+    # CLAUDE_CODE_AUTO_COMPACT_WINDOW 控制，官方有效范围 100K–1M；
+    # 0 表示不注入（沿用模型默认阈值，约 200K/967K 才触发）。
+    harness_auto_compact_window: int = 200000
+    # 单阶段最大 agent 轮次；0 表示不限制。用于兜住「反复打磨不收敛」的阶段。
+    harness_max_turns: int = 0
     # Stage timeout for coding CLI (seconds)
     coding_timeout_seconds: float = 900.0
     # When true, coding executors list/call MCP tools from toolkit bindings

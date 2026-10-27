@@ -72,3 +72,46 @@ Resolution: template executor field, else role/stage heuristics in `graph._execu
 ## 7. Dependencies
 
 - Graph stage mapping, Toolkit briefs, Artifacts store, Settings
+
+## 8. Context cost control
+
+A long stage costs roughly `requests × per-request context`. Measured on 2026-10-27: 196 requests
+with a median 287K input tokens per request. Three orthogonal, individually revertible measures:
+
+### 8.1 Upstream artifacts: summary + path only
+
+`artifact_summary.py` builds an `ArtifactBrief` per upstream artifact (name / absolute path / chars /
+summary). The prompt lists briefs instead of full text; the agent reads a path on demand.
+
+- Short artifacts (`TDT_PROMPT_INLINE_ARTIFACT_CHARS`, default 1200 chars) are inlined verbatim
+- Longer ones are summarised concurrently by the LLM (`TDT_PROMPT_ARTIFACT_SUMMARY_TIMEOUT`, default 12s);
+  failures / timeouts / no LLM fall back to a rule summary (markdown outline, JSON keys)
+- `diff.patch` is always rule-summarised (file list + added/removed line counts)
+- Summaries are cached per `path + content sha1` in `data/missions/<id>/memory/artifact_summaries.json`
+- Revert: `TDT_PROMPT_ARTIFACT_BRIEFS=false` restores full PRD injection
+
+`StageContext` therefore gains `upstream_paths` (same keys as `upstream_artifacts`, absolute paths);
+the full-text semantics of `upstream_artifacts` stay unchanged (consult / mock / diff rely on it).
+
+### 8.2 On-demand MCP mounting
+
+`harness_providers/mcp_binding.py` converts MCP items resolved from the stage binding / proactive
+recall / `toolkit_pick` into SDK `mcp_servers` with `strict_mcp_config=True`, instead of loading every
+global `mcpServers` entry from the local `~/.claude.json`.
+
+- Nothing bound means no MCP for the stage — no tool schemas in context
+- The set is fixed before the session starts; MCPs picked mid-stage take effect from the next stage
+- The claude coding CLI writes `.tdt/mcp-config.json` and passes `--mcp-config` + `--strict-mcp-config`;
+  cursor CLI has no such flag and logs that MCP is not mounted
+- Revert: `TDT_HARNESS_MCP_STRICT=false`
+
+### 8.3 In-session auto-compaction
+
+The `claude_code` provider injects `CLAUDE_CODE_AUTO_COMPACT_WINDOW=<TDT_HARNESS_AUTO_COMPACT_WINDOW>`
+(default 200000; official range 100K–1M) through `ClaudeAgentOptions.env`; coding CLI subprocesses get
+the same variable.
+
+- `compact_boundary` events land in `StageResult.meta["context"]` (`compacted` / `at_token` /
+  `post_token` / `trigger`) plus one info log line
+- `num_turns` / `usage` / `cost_usd` / `stop_reason` are recorded too
+- `TDT_HARNESS_MAX_TURNS` (default 0 = unlimited) caps non-converging stages
