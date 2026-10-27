@@ -45,6 +45,9 @@ dependencies = [
   "python-docx>=1.1.0",
   "python-pptx>=1.0.0",
   "openpyxl>=3.1.0",
+  # 全链路追踪：只装 API（纯接口，无传递依赖）。SDK/exporter 在 [otel] extra，
+  # 未安装时 observability 模块自动退化为 no-op（见 sortie_deck/observability.py）。
+  "opentelemetry-api>=1.29.0",
 ]
 
 [project.urls]
@@ -57,6 +60,11 @@ Changelog = "https://github.com/lpliu-art/sortie-deck-todos/blob/dev/CHANGELOG.m
 [project.optional-dependencies]
 postgres = ["langgraph-checkpoint-postgres>=2.0.0", "psycopg[binary]>=3.2.0"]
 s3 = ["boto3>=1.35.0"]
+# 全链路追踪的运行时（SDK + OTLP/HTTP exporter）。不装则 observability 为 no-op。
+otel = [
+  "opentelemetry-sdk>=1.29.0",
+  "opentelemetry-exporter-otlp-proto-http>=1.29.0",
+]
 dev = ["pytest>=8.3.0", "pytest-asyncio>=0.24.0", "ruff>=0.7.0"]
 # Agent harness providers (cloud runtime = the env this app runs in)
 harness-claude = ["claude-agent-sdk>=0.1.0"]

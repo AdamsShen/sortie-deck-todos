@@ -208,6 +208,18 @@ class Settings(BaseSettings):
     # Production polish
     log_level: str = "INFO"
     stage_timeout_seconds: float = 900.0
+    # --- OpenTelemetry 全链路追踪（见 docs/plans/2026-10-27-otel-full-tracing.md）---
+    # 默认关；开启且 otel_endpoint 非空时才真正建 provider 导出 span。
+    # 只装了 opentelemetry-api 没装 [otel] extra 时自动降级为 no-op，不影响启动。
+    otel_enabled: bool = False
+    otel_endpoint: str = ""  # OTLP/HTTP，如 http://127.0.0.1:4318
+    otel_service_name: str = "sortie-deck"
+    # head sampling 比例：本项目单任务 15-30 span，量小，默认全采
+    otel_sample_ratio: float = 1.0
+    # 是否把 prompt/completion 全文写进 span；含 PII，仅排障期临时打开
+    otel_capture_content: bool = False
+    # 形如 "authorization=Bearer xxx"：部分 OTLP 网关需要鉴权
+    otel_headers: str = ""
     # --- git 回写链路（任务分支 + GitLab MR）---------------------------------
     # 任务分支命名前缀：单仓库 sortie/<id>，多仓库 sortie/<id>-<repo>
     git_branch_prefix: str = "sortie"

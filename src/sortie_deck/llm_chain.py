@@ -170,23 +170,69 @@ class LangChainBackend:
     ) -> str:
         from langchain_core.messages import HumanMessage, SystemMessage
 
+        from sortie_deck import observability as obs
+
         messages = [SystemMessage(content=system), HumanMessage(content=user)]
         started = time.monotonic()
-        try:
-            reply = await model.bind(temperature=temperature).ainvoke(messages)
-        except Exception as exc:
-            # 失败路径必须留痕：只记录可定位的上下文，禁止记录 api_key 与完整 prompt
-            logger.warning(
-                "LLM 调用失败：model=%s host=%s json_mode=%s elapsed=%.2fs error=%s: %s",
-                self.model,
-                self.host,
-                json_mode,
-                time.monotonic() - started,
-                type(exc).__name__,
-                exc,
+        # LLM span：全项目 chat 调用的唯一出口（旧 httpx 实现已由 LangChain 取代），
+        # 因此只在这里埋一处即可覆盖所有业务侧调用方。
+        with obs.span(
+            "gen_ai.chat",
+            **{
+                "gen_ai.operation.name": "chat",
+                "sortie.json_mode": json_mode,
+                "sortie.prompt_chars": len(system) + len(user),
+            },
+        ) as sp:
+            try:
+                reply = await model.bind(temperature=temperature).ainvoke(messages)
+            except Exception as exc:
+                # 失败路径必须留痕：只记录可定位的上下文，禁止记录 api_key 与完整 prompt
+                logger.warning(
+                    "LLM 调用失败：model=%s host=%s json_mode=%s elapsed=%.2fs error=%s: %s",
+                    self.model,
+                    self.host,
+                    json_mode,
+                    time.monotonic() - started,
+                    type(exc).__name__,
+                    exc,
+                )
+                raise
+            self._record_span(sp, reply, system=system, user=user)
+            return _content_to_text(getattr(reply, "content", reply))
+
+    def _record_span(self, sp: Any, reply: Any, *, system: str, user: str) -> None:
+        """把模型信息、token 用量、可选的内容写进 span。
+
+        部分 OpenAI 兼容端点不返回 usage_metadata，此时 token 属性缺失是事实，
+        不做字符数估算——估算值混进成本看板比没有更糟。
+        """
+        from sortie_deck import observability as obs
+
+        usage = getattr(reply, "usage_metadata", None)
+        meta = getattr(reply, "response_metadata", None) or {}
+        finish = ""
+        if isinstance(meta, dict):
+            raw_finish = meta.get("finish_reason")
+            if isinstance(raw_finish, str):
+                finish = raw_finish
+        obs.record_llm(
+            sp,
+            model=self.model,
+            provider="openai-compatible",
+            usage=usage if isinstance(usage, dict) else None,
+            finish_reason=finish,
+        )
+        if obs.capture_content():
+            content = _content_to_text(getattr(reply, "content", reply))
+            obs.set_attributes(
+                sp,
+                {
+                    "gen_ai.input.messages": user[:4000],
+                    "gen_ai.system_instructions": system[:2000],
+                    "gen_ai.output.messages": content[:4000],
+                },
             )
-            raise
-        return _content_to_text(getattr(reply, "content", reply))
 
     def _error_text(self, exc: BaseException) -> str:
         return f"LangChain LLM call failed ({self.model}@{self.host}): {type(exc).__name__}: {exc}"

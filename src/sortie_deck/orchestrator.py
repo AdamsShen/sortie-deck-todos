@@ -8,6 +8,7 @@ from typing import Any
 from langgraph.types import Command
 from pydantic import ValidationError
 
+from sortie_deck import observability as obs
 from sortie_deck.agents import AgentCatalog
 from sortie_deck.artifacts_s3 import build_artifact_store
 from sortie_deck.graph import build_graph_from_template, compile_pipelines
@@ -477,6 +478,10 @@ class Orchestrator:
         return msg
 
     def _append_timeline(self, ini: Initiative, event: TimelineEvent) -> None:
+        # 事件与 span 的关联点：前端拿 trace_id 拼 Jaeger/Tempo 深链，从「业务事件」
+        # 一跳直达「执行瀑布图」。未启用追踪时 current_trace_id() 返回空串，字段保持默认。
+        if not event.trace_id:
+            event.trace_id = obs.current_trace_id()
         ini.timeline.append(event)
         ini.updated_at = utc_now()
 
@@ -1350,7 +1355,14 @@ class Orchestrator:
         payload: dict[str, Any] | None = None,
     ) -> None:
         if self.run_queue is not None:
-            self.run_queue.enqueue(initiative_id, kind=kind, payload=payload)
+            # 入队前把 traceparent 写进 payload：sqlite 后端下 worker 可能是另一个
+            # 进程，contextvars 不过去，只能靠 W3C header 续接，否则一条任务会在
+            # 队列处断成两条 trace
+            merged = dict(payload or {})
+            carrier = obs.headers_from_context()
+            if carrier.get("traceparent"):
+                merged["_traceparent"] = carrier["traceparent"]
+            self.run_queue.enqueue(initiative_id, kind=kind, payload=merged or None)
             return
         if kind == "resume" and payload and payload.get("decision"):
             cmd = Command(resume=payload["decision"])
@@ -1412,11 +1424,16 @@ class Orchestrator:
                     await asyncio.sleep(0.4)
                     continue
                 try:
-                    if job.kind == "resume" and job.payload.get("decision"):
-                        cmd = Command(resume=job.payload["decision"])
-                        await self._run_until_interrupt(job.initiative_id, resume=cmd)
-                    else:
-                        await self._run_until_interrupt(job.initiative_id)
+                    # 续接入队时写入的 traceparent，让 worker 里的 span 挂回同一条 trace
+                    raw_traceparent = str((job.payload or {}).get("_traceparent") or "")
+                    with obs.context_from_carrier(
+                        {"traceparent": raw_traceparent} if raw_traceparent else None
+                    ):
+                        if job.kind == "resume" and job.payload.get("decision"):
+                            cmd = Command(resume=job.payload["decision"])
+                            await self._run_until_interrupt(job.initiative_id, resume=cmd)
+                        else:
+                            await self._run_until_interrupt(job.initiative_id)
                     self.run_queue.complete(job.id)
                 except Exception as exc:  # noqa: BLE001
                     self.run_queue.fail(job.id, str(exc))
@@ -1815,7 +1832,38 @@ class Orchestrator:
         await self._emit(ini.id, {"type": "update", "initiative": ini.model_dump(mode="json")})
         return ini
 
-    async def _run_until_interrupt(self, initiative_id: str, resume: Command | None = None) -> Initiative:
+    async def _run_until_interrupt(
+        self, initiative_id: str, resume: Command | None = None
+    ) -> Initiative:
+        """一次 start / resume 对应一条 trace。
+
+        故意不跨越 HITL 人工等待：``interrupt()`` 触发时 astream 正常返回，span
+        随之关闭；恢复执行是新的 trace。跨段检索靠 ``sortie.initiative_id``，
+        否则一条 span 会挂上几小时的人工等待时长，瀑布图失去参考价值。
+        """
+        ini = self.store.get(initiative_id)
+        attrs: dict[str, Any] = {
+            "sortie.initiative_id": initiative_id,
+            "sortie.resume": resume is not None,
+        }
+        if ini is not None:
+            attrs["sortie.track"] = str(
+                (ini.meta or {}).get("pipeline_track") or getattr(ini, "template", "") or ""
+            )
+            attrs["sortie.stage_at_entry"] = ini.current_stage
+        with obs.span("mission.run", **attrs) as mission_span:
+            try:
+                return await self._run_until_interrupt_inner(initiative_id, resume)
+            finally:
+                # 收尾状态在 span 关闭前落属性：done / failed / waiting_hitl 必须能区分，
+                # 否则瀑布图上「跑完了」和「停住等人」长得一样
+                current = self.store.get(initiative_id)
+                if current is not None:
+                    obs.set_attributes(mission_span, {"sortie.status": current.status.value})
+
+    async def _run_until_interrupt_inner(
+        self, initiative_id: str, resume: Command | None = None
+    ) -> Initiative:
         async with self._lock:
             ini = self.store.get(initiative_id)
             if not ini:
@@ -1980,9 +2028,11 @@ class Orchestrator:
 
         decision_payload = decision.model_dump(mode="json")
         if self.run_queue is not None:
-            self.run_queue.enqueue(
-                initiative_id, kind="resume", payload={"decision": decision_payload}
-            )
+            resume_payload: dict[str, Any] = {"decision": decision_payload}
+            carrier = obs.headers_from_context()
+            if carrier.get("traceparent"):
+                resume_payload["_traceparent"] = carrier["traceparent"]
+            self.run_queue.enqueue(initiative_id, kind="resume", payload=resume_payload)
             # Wait briefly for worker to progress so API callers still see updates
             for _ in range(50):
                 await asyncio.sleep(0.1)

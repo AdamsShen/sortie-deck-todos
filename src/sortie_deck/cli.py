@@ -16,6 +16,12 @@ def _fail(message: str, code: int = 1) -> NoReturn:
 
 
 async def _smoke(brief: str, auto_approve: bool) -> int:
+    from sortie_deck import observability as obs
+    from sortie_deck.settings import settings
+
+    # CLI 不走 FastAPI lifespan：追踪必须在这里显式初始化，否则本地跑 smoke
+    # 永远验证不了 span；收尾不 shutdown 的话 BatchSpanProcessor 队列里的会丢。
+    obs.init_tracing(settings)
     orch = Orchestrator()
     await orch.startup()
     try:
@@ -40,8 +46,10 @@ async def _smoke(brief: str, auto_approve: bool) -> int:
             stages = (ini.meta or {}).get("pipeline_stages") or []
             print("pipeline stages:", " → ".join(str(s) for s in stages) or "(none)")
 
-        for step in range(12):
-            await asyncio.sleep(0.4)
+        # 30s 窗口：intake 走真实 LLM（pipeline_llm 默认开）时单阶段就可能几秒，
+        # 原来的 12×0.4s=4.8s 会稳定超时，既看不到终态也看不到完整 trace
+        for step in range(60):
+            await asyncio.sleep(0.5)
             ini = orch.get(ini.id)
             assert ini
             print(f"[{step}] status={ini.status.value} stage={ini.current_stage}")
@@ -73,6 +81,11 @@ async def _smoke(brief: str, auto_approve: bool) -> int:
         return 1
     finally:
         await orch.shutdown()
+        # 编排跑在 asyncio.create_task 里：状态翻到 waiting_hitl 与任务真正返回之间
+        # 还有几个 await。先让出事件循环，否则最后几个 span（含 mission.run）会在
+        # provider 关闭之后才结束，被 BatchSpanProcessor 直接丢弃。
+        await asyncio.sleep(0.05)
+        obs.shutdown_tracing()
 
 
 def main(argv: list[str] | None = None) -> None:

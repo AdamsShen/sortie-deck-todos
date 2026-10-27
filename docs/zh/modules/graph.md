@@ -49,7 +49,7 @@ HITL：`approve` 前进（qa 可能 on_fail）；`reject` → on_reject；`edit_
 
 - 契约版本化
 - JSON Schema 校验 `*.json`
-- 每阶段 OTel span
+- 每阶段 OTel span（已落地：`run_stage` 包 `stage.run`，覆盖串行/并行/QA 重试，见 `src/sortie_deck/observability.py`）
 - 非生产航线可选自动放行
 
 ## 6. 开发计划
@@ -66,7 +66,7 @@ HITL：`approve` 前进（qa 可能 on_fail）；`reject` → on_reject；`edit_
 
 | 任务 | 验收 |
 |------|------|
-| OTel span | 开发可导出 |
+| OTel span | 已实现：`TDT_OTEL_ENABLED=true` + `TDT_OTEL_ENDPOINT` 即可导出 |
 | 更丰富 interrupt payload | UI 可用 |
 | contract_version | 不匹配软警告 |
 

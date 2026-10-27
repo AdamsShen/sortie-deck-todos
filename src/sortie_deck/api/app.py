@@ -245,6 +245,7 @@ def get_briefing():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from sortie_deck import observability as obs
     from sortie_deck.runtime import (
         configure_logging,
         ensure_runtime_dirs,
@@ -252,6 +253,9 @@ async def lifespan(app: FastAPI):
     )
 
     configure_logging(settings.log_level)
+    # 全链路追踪：开关关闭 / 未装 SDK / endpoint 为空时自动降级为 no-op，
+    # 不阻断启动（见 sortie_deck/observability.py）
+    obs.init_tracing(settings)
     ensure_runtime_dirs(settings)
     # 旧布局（data/artifacts|worktrees|rooms）→ data/missions/<id>/ 启动迁移（幂等）
     from sortie_deck.layout import migrate_legacy_layout
@@ -271,6 +275,8 @@ async def lifespan(app: FastAPI):
     app.state.orch = orch
     yield
     await orch.shutdown()
+    # flush 最后一批 span，否则进程退出时 BatchSpanProcessor 队列里的会丢
+    obs.shutdown_tracing()
 
 
 app = FastAPI(title="Sortie Deck", version="0.5.0", lifespan=lifespan)

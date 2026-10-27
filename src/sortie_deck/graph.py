@@ -11,6 +11,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
+from sortie_deck import observability as obs
 from sortie_deck.agent_contract import ContractError, validate_handoff
 from sortie_deck.artifacts import ArtifactStore
 from sortie_deck.contracts import validate_stage_artifacts
@@ -1021,9 +1022,25 @@ def build_graph_from_template(
                 if not tool:
                     continue
                 arguments = raw.get("arguments") if isinstance(raw.get("arguments"), dict) else {}
-                outcome = await invoker.call(
-                    tool, arguments, confirmed=bool(raw.get("confirmed"))
-                )
+                with obs.span(
+                    "execute_tool",
+                    **{
+                        "gen_ai.operation.name": "execute_tool",
+                        "gen_ai.tool.name": tool,
+                        # 同一工具可能在本阶段被调多次，用序号区分，便于对齐调用结果
+                        "gen_ai.tool.call.id": f"{stage}:{tool}:{len(results)}",
+                        "sortie.tool.source": "mcp",
+                        "sortie.stage": stage,
+                    },
+                ) as tool_span:
+                    outcome = await invoker.call(
+                        tool, arguments, confirmed=bool(raw.get("confirmed"))
+                    )
+                    # 工具失败被吞成 outcome.ok=False 返回，不会抛异常，需显式标错
+                    if not outcome.get("ok", True):
+                        obs.mark_failure(
+                            tool_span, str(outcome.get("error") or "tool call failed")
+                        )
                 results.append({"stage": stage, "tool": tool, "arguments": arguments, **outcome})
         except Exception as exc:  # noqa: BLE001 — tool failure must not break the stage
             results.append({"stage": stage, "tool": "*", "ok": False, "error": str(exc)})
@@ -1154,21 +1171,58 @@ def build_graph_from_template(
                 ),
                 brief_snippet,
             ]
-            return await run_stage_recall(
-                store,
-                stage=stage,
-                queries=queries,
-                bound_ids=bound,
-                floated_ids=floated,
-                allowed_ids=allowed,
-                min_score=float(getattr(_settings, "loadout_recall_min_score", 0.2)),
-                switch=bool(getattr(_settings, "loadout_stage_recall", False)),
-            )
+            with obs.span(
+                "retrieval.recall",
+                **{
+                    "gen_ai.operation.name": "retrieval",
+                    "sortie.stage": stage,
+                    "sortie.query_count": len(queries),
+                },
+            ) as recall_span:
+                recall_outcome = await run_stage_recall(
+                    store,
+                    stage=stage,
+                    queries=queries,
+                    bound_ids=bound,
+                    floated_ids=floated,
+                    allowed_ids=allowed,
+                    min_score=float(getattr(_settings, "loadout_recall_min_score", 0.2)),
+                    switch=bool(getattr(_settings, "loadout_stage_recall", False)),
+                )
+                obs.set_attributes(
+                    recall_span, {"sortie.hit_count": len(recall_outcome.item_ids)}
+                )
+                return recall_outcome
         except Exception as exc:  # noqa: BLE001 — 主动召回失败不影响阶段
             logging.getLogger(__name__).warning("stage recall failed (stage=%s): %s", stage, exc)
             return StageRecallOutcome()
 
     async def run_stage(state: PipelineState, stage: str) -> PipelineState:
+        """阶段执行入口：包一层 stage span 后转交 ``_run_stage``。
+
+        span 放在这里而不是 ``make_stage_node``：并行波次（``_run_branch``）直接
+        调 ``run_stage``、绕过节点函数，只有这一层能同时覆盖串行 / 并行 / QA
+        重试三条路径，且不用改任何执行器插件。
+        """
+        stage_cfg = stage_by_name.get(stage, {"name": stage, "role": "product"})
+        stage_role = _role_id(str(stage_cfg.get("role", "product")))
+        with obs.span(
+            "stage.run",
+            **{
+                "sortie.initiative_id": str(state.get("initiative_id") or ""),
+                "sortie.stage": stage,
+                "sortie.role": stage_role.value,
+                "sortie.executor": _executor_name(stage, stage_role.value, state, stage_cfg),
+                "sortie.qa_attempt": int(state.get("qa_attempt") or 1),
+            },
+        ) as stage_span:
+            result_state = await _run_stage(state, stage)
+            # 超时/契约失败/needs_hitl 都是「转成返回值的失败」，span() 抓不到异常，
+            # 必须显式按 result.status 落 ERROR，否则 trace 全绿而任务实际停了。
+            obs.mark_result(stage_span, result_state.get("last_result") or {})
+            return result_state
+
+    async def _run_stage(state: PipelineState, stage: str) -> PipelineState:
         if state.get("stopped"):
             return {**state, "status": "stopped", "stage": stage}
 

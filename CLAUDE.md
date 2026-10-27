@@ -129,6 +129,8 @@ Orchestrator (orchestrator.py) ──► LangGraph 图 (graph.py)
 | `TDT_PIPELINE_LLM` / `TDT_ROOM_LLM` | `true` | LLM 规划 / 房间讨论（需 API key） |
 | `TDT_LLM_API_KEY` / `OPENAI_API_KEY` | — | OpenAI 兼容 key |
 | `TDT_MCP_RUNTIME` | `false` | 把 MCP 工具接入编码执行器提示 |
+| `TDT_OTEL_ENABLED` | `false` | 全链路追踪总开关（需装 `[otel]` extra） |
+| `TDT_OTEL_ENDPOINT` | — | OTLP/HTTP 地址，如 `http://127.0.0.1:4318`（自动补 `/v1/traces`） |
 
 开发种子用户：`admin`/`admin123`（admin）、`operator`/`operator123`（member）。
 

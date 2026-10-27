@@ -5,7 +5,10 @@ import socket
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from sortie_deck import observability as obs
 from sortie_deck.settings import Settings, settings
+
+_LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] [trace=%(otel_trace_id)s] %(message)s"
 
 
 @dataclass
@@ -24,15 +27,32 @@ class DoctorReport:
         return all(c.ok for c in self.checks)
 
 
+class _TraceIdFilter(logging.Filter):
+    """往 LogRecord 注入 ``otel_trace_id``，让日志和 trace 能直接对照。
+
+    没有这条，排查时仍要靠时间戳人工对齐「哪条日志属于哪次执行」，
+    全链路的最后一公里等于没打通。未启用追踪时统一填 ``-``。
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.otel_trace_id = obs.current_trace_id() or "-"
+        return True
+
+
 def configure_logging(level: str = "INFO") -> None:
     root = logging.getLogger()
     if not root.handlers:
         logging.basicConfig(
             level=getattr(logging, level.upper(), logging.INFO),
-            format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+            format=_LOG_FORMAT,
         )
     else:
         root.setLevel(getattr(logging, level.upper(), logging.INFO))
+    # filter 必须挂在 handler 上：冒泡到 root 的子 logger 记录是在 handler 层过滤的，
+    # 挂在 logger 上会漏掉绝大多数第三方日志
+    for handler in root.handlers:
+        if not any(isinstance(f, _TraceIdFilter) for f in handler.filters):
+            handler.addFilter(_TraceIdFilter())
     # Avoid accidental token leaks from httpx/uvicorn access if misconfigured
     logging.getLogger("httpx").setLevel(logging.WARNING)
 

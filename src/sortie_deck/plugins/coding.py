@@ -7,7 +7,12 @@ import re
 import shutil
 from pathlib import Path
 
+from sortie_deck import observability as obs
 from sortie_deck.models import RepoConfig, StageContext, StageResult
+
+# 这些 flag 后面跟的是凭据，入 span 前要打码
+_SENSITIVE_FLAGS = {"--api-key", "--token", "--password", "--auth-token", "--secret"}
+_MAX_COMMAND_CHARS = 200
 
 _PERM_RE = re.compile(
     r"(haven'?t granted|permission(?:s)? blocker|approve the (?:file-)?write|write permission|"
@@ -98,24 +103,62 @@ def _looks_like_auth_block(text: str) -> bool:
     return bool(_AUTH_RE.search(text or ""))
 
 
+def _safe_command(args: list[str]) -> str:
+    """命令行转成可入 span 的字符串：敏感 flag 的值打码后截断。
+
+    coding CLI 的 ``-p`` 参数是整段 prompt，截断后仍能看出调的是哪个 CLI；
+    真正的输出在产物文件里，不需要也不应该把 stdout 塞进 trace。
+    """
+    parts: list[str] = []
+    hide_next = False
+    for arg in args:
+        if hide_next:
+            parts.append("***")
+            hide_next = False
+            continue
+        parts.append(arg)
+        if arg in _SENSITIVE_FLAGS:
+            hide_next = True
+    return obs.truncate(" ".join(parts), _MAX_COMMAND_CHARS)
+
+
 async def _run_cmd(args: list[str], cwd: Path, timeout: int | None = None) -> tuple[int, str, str]:
+    """执行子进程——coding executor 的唯一子进程出口（含 git diff 等辅助命令）。
+
+    CLI 内部行为不可观测，能记的只有命令行、耗时、退出码；这三项足以回答
+    「阶段慢在哪个命令」「exit=124 是超时还是任务本身失败」。
+    """
     timeout = timeout if timeout is not None else _coding_timeout()
-    proc = await asyncio.create_subprocess_exec(
-        *args,
-        cwd=str(cwd),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env={**os.environ, "CI": "1"},  # nudge CLIs toward non-interactive
-    )
-    try:
-        stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except TimeoutError:
-        proc.kill()
-        await proc.communicate()
-        return 124, "", f"Timeout after {timeout}s"
-    return proc.returncode or 0, stdout_b.decode("utf-8", errors="replace"), stderr_b.decode(
-        "utf-8", errors="replace"
-    )
+    with obs.span(
+        "process.exec",
+        **{
+            "process.command": _safe_command(args),
+            "process.cwd": str(cwd),
+            "sortie.timeout_seconds": timeout,
+        },
+    ) as proc_span:
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            cwd=str(cwd),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env={**os.environ, "CI": "1"},  # nudge CLIs toward non-interactive
+        )
+        try:
+            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except TimeoutError:
+            proc.kill()
+            await proc.communicate()
+            # 超时是「转成返回值的失败」（返回码 124 而非抛异常），必须显式标 ERROR
+            obs.mark_failure(proc_span, f"timeout after {timeout}s")
+            return 124, "", f"Timeout after {timeout}s"
+        code = proc.returncode or 0
+        obs.set_attributes(proc_span, {"sortie.exit_code": code})
+        if code != 0:
+            obs.mark_failure(proc_span, f"exit code {code}")
+        return code, stdout_b.decode("utf-8", errors="replace"), stderr_b.decode(
+            "utf-8", errors="replace"
+        )
 
 
 async def _git_diff(workspace: Path, repo_root: Path, repos: list[RepoConfig] | None = None) -> str:

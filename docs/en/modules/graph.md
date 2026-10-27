@@ -57,7 +57,7 @@ Missing files → `ContractError` fails the run.
 
 - Versioned contracts (`contract_version` on template)
 - JSON Schema validation for `*.json` artifacts
-- OpenTelemetry span per stage (`stage`, `executor`, `initiative_id`)
+- OpenTelemetry span per stage (`stage`, `executor`, `initiative_id`) — **shipped**: `run_stage` wraps `stage.run`, covering serial / parallel / QA-retry paths (`src/sortie_deck/observability.py`)
 - Optional auto-approve policy for non-prod tracks
 
 ## 6. Development plan
@@ -74,7 +74,7 @@ Missing files → `ContractError` fails the run.
 
 | Task | Acceptance |
 |------|------------|
-| OTel spans | exported in dev |
+| OTel spans | shipped: set `TDT_OTEL_ENABLED=true` + `TDT_OTEL_ENDPOINT` to export |
 | Richer interrupt payload (artifact previews) | UI consumes |
 | Contract version field | mismatch soft-warn |
 

@@ -147,32 +147,49 @@ class LlmClient:
         )
 
     async def _chat_claude_cli(self, *, system: str, user: str, json_mode: bool) -> str:
+        from sortie_deck import observability as obs
+
         claude = shutil.which("claude")
         if not claude:
             raise RuntimeError("claude CLI not found on PATH")
         prompt = f"{system.strip()}\n\n---\n\n{user.strip()}"
         if json_mode:
             prompt += "\n\nReturn ONLY a valid JSON object. No markdown fences."
-        proc = await asyncio.create_subprocess_exec(
-            claude,
-            "-p",
-            prompt,
-            "--output-format",
-            "text",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=self.timeout)
-        except TimeoutError:
-            proc.kill()
-            await proc.communicate()
-            raise RuntimeError(f"claude CLI timed out after {self.timeout}s") from None
-        out = (stdout_b or b"").decode("utf-8", errors="replace").strip()
-        err = (stderr_b or b"").decode("utf-8", errors="replace").strip()
-        if (proc.returncode or 0) != 0 or not out:
-            raise RuntimeError(err or f"claude CLI exit={proc.returncode}")
-        return out
+        # CLI 后端拿不到 token 用量，只能记边界信息。显式标 usage_unavailable，
+        # 避免成本看板把「缺失」误当成「零消耗」。
+        with obs.span(
+            "gen_ai.chat",
+            **{
+                "gen_ai.operation.name": "chat",
+                "gen_ai.provider.name": "claude-cli",
+                "gen_ai.request.model": "claude-cli",
+                "sortie.usage_unavailable": True,
+                "sortie.json_mode": json_mode,
+                "sortie.prompt_chars": len(prompt),
+            },
+        ):
+            proc = await asyncio.create_subprocess_exec(
+                claude,
+                "-p",
+                prompt,
+                "--output-format",
+                "text",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                stdout_b, stderr_b = await asyncio.wait_for(
+                    proc.communicate(), timeout=self.timeout
+                )
+            except TimeoutError:
+                proc.kill()
+                await proc.communicate()
+                raise RuntimeError(f"claude CLI timed out after {self.timeout}s") from None
+            out = (stdout_b or b"").decode("utf-8", errors="replace").strip()
+            err = (stderr_b or b"").decode("utf-8", errors="replace").strip()
+            if (proc.returncode or 0) != 0 or not out:
+                raise RuntimeError(err or f"claude CLI exit={proc.returncode}")
+            return out
 
 
 def _cursor_agent_ready() -> bool:

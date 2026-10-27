@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any
 
+from sortie_deck import observability as obs
 from sortie_deck.models import StageContext, StageResult
 
 
@@ -23,15 +23,28 @@ class DeployShellExecutor:
             title=ctx.title,
             stage=ctx.stage,
         )
-        proc = await asyncio.create_subprocess_shell(
-            cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        out_b, err_b = await proc.communicate()
+        with obs.span(
+            "process.exec",
+            **{
+                "process.command": obs.truncate(cmd, 200),
+                "sortie.shell": True,
+            },
+        ) as proc_span:
+            proc = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            out_b, err_b = await proc.communicate()
+            exit_code = proc.returncode or 0
+            obs.set_attributes(proc_span, {"sortie.exit_code": exit_code})
+            if exit_code != 0:
+                # 部署失败仍包装成 StageResult 返回（由图的边决定回退），不会抛异常，
+                # 所以必须在这里显式标 ERROR，否则 trace 上看不出部署挂了
+                obs.mark_failure(proc_span, f"deploy shell exit={exit_code}")
         out = (out_b or b"").decode("utf-8", errors="replace")
         err = (err_b or b"").decode("utf-8", errors="replace")
-        ok = (proc.returncode or 0) == 0
+        ok = exit_code == 0
         return StageResult(
             status="ok" if ok else "fail",
             message="deploy shell finished" if ok else "deploy shell failed",
@@ -39,7 +52,7 @@ class DeployShellExecutor:
                 "deploy_log.md": f"# Deploy\n\n```\n{out}\n{err}\n```\n",
             },
             proposed_next="done" if ok else "deploy_preview",
-            meta={"cmd": cmd, "exit": proc.returncode},
+            meta={"cmd": cmd, "exit": exit_code},
         )
 
 

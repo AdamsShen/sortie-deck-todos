@@ -247,6 +247,9 @@ class TimelineEvent(BaseModel):
     ] = "info"
     message: str
     data: dict[str, Any] = Field(default_factory=dict)
+    # 产生该事件的 trace id（32 位 hex）；前端据此拼出 Jaeger/Tempo 深链，
+    # 把「业务事件」直接对到「执行 span」。未启用追踪时为空串。
+    trace_id: str = ""
 
 
 class HitlRequest(BaseModel):
