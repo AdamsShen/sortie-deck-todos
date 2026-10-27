@@ -65,6 +65,7 @@ from sortie_deck.models import (
     UpdatePipelineRequest,
 )
 from sortie_deck.orchestrator import Orchestrator, bind_catalogs, get_orchestrator
+from sortie_deck.persona import parse_persona
 from sortie_deck.pipeline import list_tracks, stage_catalog
 from sortie_deck.prompt_enhance import EnhancePromptRequest
 from sortie_deck.roles import RoleSpec, get_role_registry, normalize_role_key
@@ -1149,6 +1150,19 @@ async def upload_avatar_temp(
     return {"avatar": url}
 
 
+def _persona_spec_view(payload: dict[str, Any]) -> dict[str, Any]:
+    """补齐 persona_spec：旧数据只有自由文本时，按需解析一份只读结构化视图。"""
+    if not payload.get("persona_spec"):
+        spec = parse_persona(str(payload.get("persona") or ""))
+        if spec.role or spec.skills or spec.constraints:
+            payload["persona_spec"] = spec.model_dump(mode="json")
+    return payload
+
+
+def _agent_json(agent: Any) -> dict[str, Any]:
+    return _persona_spec_view(agent.model_dump(mode="json"))
+
+
 @app.get("/api/agents")
 async def list_agents(
     q: str | None = Query(default=None),
@@ -1156,7 +1170,7 @@ async def list_agents(
     user: PublicUser = Depends(require_user),
 ) -> list[dict[str, Any]]:
     return [
-        a.model_dump(mode="json")
+        _agent_json(a)
         for a in get_agents().list(q=q, slot=slot, user_id=user.id)
     ]
 
@@ -1164,7 +1178,7 @@ async def list_agents(
 @app.get("/api/agents/{agent_id}")
 async def get_agent(agent_id: str, _user: PublicUser = Depends(require_user)) -> dict[str, Any]:
     try:
-        return get_agents().get(agent_id).model_dump(mode="json")
+        return _agent_json(get_agents().get(agent_id))
     except KeyError:
         raise HTTPException(404, "agent not found") from None
 
@@ -1173,9 +1187,11 @@ async def get_agent(agent_id: str, _user: PublicUser = Depends(require_user)) ->
 async def create_agent(
     req: CreateAgentRequest, user: PublicUser = Depends(require_user)
 ) -> dict[str, Any]:
-    return get_agents().create(req, author_id=user.id, author_name=user.display_name).model_dump(
-        mode="json"
-    )
+    try:
+        agent = get_agents().create(req, author_id=user.id, author_name=user.display_name)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return _agent_json(agent)
 
 
 @app.patch("/api/agents/{agent_id}")
@@ -1183,15 +1199,16 @@ async def update_agent(
     agent_id: str, req: UpdateAgentRequest, user: PublicUser = Depends(require_user)
 ) -> dict[str, Any]:
     try:
-        return (
-            get_agents()
-            .update(agent_id, req, editor_id=user.id, is_admin=user.role == "admin")
-            .model_dump(mode="json")
+        agent = get_agents().update(
+            agent_id, req, editor_id=user.id, is_admin=user.role == "admin"
         )
     except KeyError:
         raise HTTPException(404, "agent not found") from None
     except PermissionError as exc:
         raise HTTPException(403, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return _agent_json(agent)
 
 
 @app.delete("/api/agents/{agent_id}")
@@ -1227,6 +1244,8 @@ class ForgeUpdateRequest(BaseModel):
     title: str | None = None
     summary: str | None = None
     persona: str | None = None
+    # 结构化人设：给了就以它为准重新编译 persona（六段式）
+    persona_spec: dict[str, Any] | None = None
     role_key: str | None = None
     tags: list[str] | None = None
     contract: dict[str, Any] | None = None
@@ -1279,12 +1298,16 @@ async def delete_role(role_key: str, _user: PublicUser = Depends(require_user)) 
     return {"status": "deleted"}
 
 
+def _forge_draft_json(draft: Any) -> dict[str, Any]:
+    return _persona_spec_view(draft.model_dump(mode="json"))
+
+
 @app.get("/api/forge/drafts")
 async def list_forge_drafts(
     status: str | None = Query(default=None),
     _user: PublicUser = Depends(require_user),
 ) -> list[dict[str, Any]]:
-    return [d.model_dump(mode="json") for d in get_agent_forge().list(status=status)]
+    return [_forge_draft_json(d) for d in get_agent_forge().list(status=status)]
 
 
 @app.post("/api/forge/drafts")
@@ -1294,7 +1317,7 @@ async def propose_forge_draft(
     draft = await get_agent_forge().propose(
         ForgeRequest(**req.model_dump(), requested_by=user.display_name)
     )
-    return draft.model_dump(mode="json")
+    return _forge_draft_json(draft)
 
 
 @app.get("/api/forge/drafts/{draft_id}")
@@ -1302,7 +1325,7 @@ async def get_forge_draft(
     draft_id: str, _user: PublicUser = Depends(require_user)
 ) -> dict[str, Any]:
     try:
-        return get_agent_forge().get(draft_id).model_dump(mode="json")
+        return _forge_draft_json(get_agent_forge().get(draft_id))
     except KeyError:
         raise HTTPException(404, "draft not found") from None
 
@@ -1317,7 +1340,7 @@ async def update_forge_draft(
         raise HTTPException(404, "draft not found") from None
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    return draft.model_dump(mode="json")
+    return _forge_draft_json(draft)
 
 
 @app.post("/api/forge/drafts/{draft_id}/approve")
@@ -1337,9 +1360,9 @@ async def approve_forge_draft(
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {
-        "draft": draft.model_dump(mode="json"),
+        "draft": _forge_draft_json(draft),
         "role": role_spec.model_dump(mode="json") if role_spec else None,
-        "agent": published.model_dump(mode="json") if published else None,
+        "agent": _agent_json(published) if published else None,
     }
 
 
@@ -1818,6 +1841,7 @@ async def get_briefing_session(
 async def post_briefing_message(
     session_id: str,
     body: BriefingMessageBody,
+    request: Request,
     user: PublicUser = Depends(require_user),
 ) -> dict[str, Any]:
     from sortie_deck.mission_briefing import BriefingAttachment

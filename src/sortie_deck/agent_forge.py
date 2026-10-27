@@ -21,30 +21,101 @@ from pydantic import BaseModel, Field, ValidationError
 from sortie_deck.agent_contract import AgentContract, contract_from_mapping
 from sortie_deck.agents import AgentCatalog, CreateAgentRequest, PublishedAgent
 from sortie_deck.models import new_id, utc_now
+from sortie_deck.persona import (
+    PersonaExample,
+    PersonaSpec,
+    parse_persona,
+    persona_quality_issues,
+    render_persona,
+    spec_from_mapping,
+)
 from sortie_deck.roles import RoleRegistry, RoleSpec, normalize_role_key
 
 DraftStatus = Literal["pending-review", "approved", "rejected"]
 
-_FORGE_SYSTEM = """You are Sortie Deck's agent forge.
-Design ONE role agent that covers the requested capability. Return JSON:
+_FORGE_SYSTEM = """你是 Sortie Deck 的角色锻造官（agent forge），负责为缺失的职能
+设计一个可以直接上岗的专家 Agent。
+
+角色人设按提示词工程的六段式编写（结构参考 DeepSeek 提示词库的功能型模板）：
+  角色：一句话身份，必须以「你是拥有 10 年经验的资深<领域>专家」开头
+  背景：2-4 条，说明业务环境、上下游、产物用途与时间预算
+  技能：4-6 条「能力名：一句解释」，包含该职能需要的知识储备
+  工作流：3-5 步执行顺序，动词开头
+  示例：1-3 条，写清典型输入与期望输出
+  约束：4-6 条硬约束，含禁止事项、边界与失败处理
+
+按职能选择侧重：
+  - 决策/写作型（产品、设计、发布等）：定位、能力、知识储备、输入输出说明
+  - 评测/裁决型（QA 等）：判定标准前置，pass/fail 必须可观测、可复现
+  - 工程实现型：工作流固定为「读产物 → 说明问题与方案 → 最小 diff 实现 → 自检」
+  - 结构化产出型：在约束中写死字段、类型、缺失值约定，只输出约定格式
+  - 人设/提示词生成型：写清身份、经历、语言风格与知识边界
+
+Return JSON:
   role_key: short snake_case ascii id (e.g. parenting, stocks_research)
   title: human readable title
   summary: one line description of what this agent delivers
-  persona: the system prompt for the agent, 2-6 short lines, second person
+  persona: {
+    "role": "...", "background": "...", "skills": ["..."], "workflow": ["..."],
+    "examples": [{"situation": "...", "response": "..."}], "constraints": ["..."]
+  }
   inputs: array of artifact kinds it reads
   outputs: array of artifact kinds it produces (must not be empty)
   handoff_targets: array of role ids it may hand off to (subset of the role catalog)
   tags: array of short tags
+
+persona 的语言与 capability 保持一致；示例必须具体到可以照着做。
 Never invent role ids outside the provided catalog for handoff_targets.
 Return ONLY JSON.
 """
 
-_TEMPLATE_PERSONA = (
-    "You are the {title} agent on an AI Native delivery fireteam.\n"
-    "Own the `{role_key}` responsibility end to end: clarify the goal, produce the\n"
-    "agreed deliverables, and hand off with enough context for the next role.\n"
-    "Prefer concrete, verifiable output over commentary.\n"
-)
+
+def _template_spec(*, title: str, role_key: str) -> PersonaSpec:
+    """LLM 不可用时的六段式兜底人设，保证所有产出结构一致。"""
+    return PersonaSpec(
+        role=f"你是拥有 10 年经验的资深{title}专家，负责 `{role_key}` 职责的端到端交付。",
+        background=(
+            f"- 你在 Sortie Deck 的 AI Native 交付流水线中承担 `{role_key}` 角色，"
+            "上游产物是你的输入，下游角色会直接消费你的交付物。\n"
+            "- 单阶段预算有限：优先交付可验证的主路径，其余标注为后续跟进。"
+        ),
+        skills=[
+            "问题澄清：把模糊诉求拆成可执行的目标、范围与边界。",
+            "方案设计：给出可落地的方法、步骤与风险取舍。",
+            "交付自检：按约定产物交付，并在交付前逐条自检完整性。",
+        ],
+        workflow=[
+            "读上游产物与任务简报，确认输入与验收要求。",
+            "列出关键未知，用最小可行假设补齐并标注待确认。",
+            "产出约定交付物，逐条对照验收要求自检。",
+        ],
+        examples=[
+            PersonaExample(
+                situation="上游只给了一句模糊的需求描述",
+                response=(
+                    "先补齐目标、范围、边界三项假设，再给出可验收的交付物骨架，"
+                    "并列出待确认清单。"
+                ),
+            )
+        ],
+        constraints=[
+            "只产出约定范围内的交付物，不擅自扩展需求。",
+            "不臆造上游未提供的事实；不确定的信息标注「待确认」。",
+            "交付前必须自检产物完整性，不把未完成的内容写成已完成。",
+        ],
+    )
+
+
+def _persona_from_payload(
+    payload: Any, *, title: str, role_key: str
+) -> tuple[str, PersonaSpec]:
+    """把 LLM 返回的 persona（dict 或文本）统一成 (编译后文本, 结构化 spec)。"""
+    spec = spec_from_mapping(payload)
+    if spec is None and isinstance(payload, str) and payload.strip():
+        spec = parse_persona(payload)
+    if spec is None or not render_persona(spec).strip():
+        spec = _template_spec(title=title, role_key=role_key)
+    return render_persona(spec), spec
 
 
 class ForgeRequest(BaseModel):
@@ -62,6 +133,8 @@ class ForgedAgentDraft(BaseModel):
     title: str
     summary: str = ""
     persona: str = ""
+    # 结构化人设：审核台按六段式编辑，approve 时随 persona 一起发布
+    persona_spec: PersonaSpec | None = None
     contract: AgentContract
     tags: list[str] = Field(default_factory=list)
     status: DraftStatus = "pending-review"
@@ -183,12 +256,16 @@ class AgentForge:
                 on_fail="escalate",
             )
 
+        persona_text, persona_spec = _persona_from_payload(
+            draft_data.get("persona"), title=title, role_key=role_key
+        )
+
         draft = ForgedAgentDraft(
             role_key=role_key,
             title=title,
             summary=str(draft_data.get("summary") or req.summary or req.capability).strip(),
-            persona=str(draft_data.get("persona") or "").strip()
-            or _TEMPLATE_PERSONA.format(title=title, role_key=role_key),
+            persona=persona_text,
+            persona_spec=persona_spec,
             contract=contract,
             tags=[str(t).strip() for t in (draft_data.get("tags") or req.tags) if str(t).strip()],
             generator=generator,  # type: ignore[arg-type]
@@ -229,14 +306,13 @@ class AgentForge:
 
     def _draft_from_template(self, req: ForgeRequest) -> dict[str, Any]:
         title = (req.title or req.capability).strip()
+        key = normalize_role_key(req.role_key or title) or "role"
         return {
             "role_key": req.role_key or title,
             "title": title,
             "summary": req.summary or req.capability,
-            "persona": _TEMPLATE_PERSONA.format(
-                title=title, role_key=normalize_role_key(req.role_key or title) or "role"
-            ),
-            "outputs": [f"{(normalize_role_key(req.role_key or title) or 'role')}_deliverable.md"],
+            "persona": _template_spec(title=title, role_key=key).model_dump(mode="json"),
+            "outputs": [f"{key}_deliverable.md"],
             "tags": list(req.tags),
         }
 
@@ -248,6 +324,9 @@ class AgentForge:
             issues.append(f"handoff_targets not in role catalog: {sorted(unknown)}")
         if draft.contract.role_key != draft.role_key:
             issues.append("contract role_key does not match draft role_key")
+        # 人设质量门禁：六段式缺失、缺 10 年经验、示例/约束不足都进入审核台
+        spec = draft.persona_spec or parse_persona(draft.persona)
+        issues.extend(persona_quality_issues(spec))
         return issues
 
     # --- review --------------------------------------------------------
@@ -259,11 +338,25 @@ class AgentForge:
         return self.store.get(draft_id)
 
     def update(self, draft_id: str, patch: dict[str, Any]) -> ForgedAgentDraft:
-        """Human edits before approval (title / summary / persona / contract / tags)."""
+        """Human edits before approval (title / summary / persona / spec / contract / tags)."""
         draft = self.store.get(draft_id)
         if draft.status == "approved":
             raise ValueError("approved drafts are immutable — register a new version instead")
         data = draft.model_dump()
+        spec_patch = patch.get("persona_spec", "__absent__")
+        if spec_patch != "__absent__" and spec_patch is not None:
+            try:
+                spec = PersonaSpec.model_validate(spec_patch)
+            except ValidationError as exc:
+                raise ValueError(f"invalid persona_spec: {exc}") from exc
+            data["persona_spec"] = spec.model_dump(mode="json")
+            data["persona"] = render_persona(spec)
+        elif spec_patch is None:
+            data["persona_spec"] = None
+        elif "persona" in patch and patch["persona"] is not None:
+            # 原文编辑：同步解析出结构化视图，保证审核台两种模式一致
+            data["persona"] = patch["persona"]
+            data["persona_spec"] = parse_persona(str(patch["persona"])).model_dump(mode="json")
         for key in ("title", "summary", "persona", "role_key", "tags"):
             if key in patch and patch[key] is not None:
                 data[key] = patch[key]
@@ -327,6 +420,7 @@ class AgentForge:
                     slot=draft.role_key,
                     summary=draft.summary,
                     persona=draft.persona,
+                    persona_spec=draft.persona_spec,
                     tags=[*draft.tags, "forge"],
                     toolkit_ids=list(toolkit_ids or []),
                     visibility="public",

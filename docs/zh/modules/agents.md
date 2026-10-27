@@ -12,8 +12,27 @@
 
 ## 2. 模型
 
-`PublishedAgent`：slot、persona、toolkit_ids、visibility、version…  
+`PublishedAgent`：slot、persona、persona_spec、toolkit_ids、visibility、version…
 创建任务时 `resolve_slot_map`。
+
+### 人设结构（六段式）
+
+角色提示词按提示词工程范式分六段：**角色 / 背景 / 技能 / 工作流 / 示例 / 约束**。
+
+- `persona`：编译后的 system prompt，**运行时唯一来源**（`graph` / `executor` / `plugins` 只读它）。
+- `persona_spec`：角色工坊的结构化编辑视图（`persona.py::PersonaSpec`）；保存时由
+  `render_persona` 编译为 `persona`，两者不会出现运行时不一致。
+- 旧数据只有 `persona` 时，API 读取会用 `parse_persona` 现解析一份只读 spec，前端即可直接分段编辑。
+- 约束：角色段必须写明「10 年经验」；forge 自检会检查技能 ≥ 3、示例 ≥ 1、约束 ≥ 3。
+
+不同职能的写法侧重（参考 DeepSeek 官方提示词库的功能型模板）：
+
+| Agent 类型 | 写法要点 |
+|---|---|
+| 决策 / 写作型（product、design、deploy） | 定位、能力、知识储备、输入输出说明 |
+| 评测 / 裁决型（qa） | 判定标准前置，pass/fail 可观测、可复现 |
+| 工程实现型（eng_*） | 工作流固定「读产物 → 说明方案 → 最小 diff → 自检」 |
+| 结构化产出型 | 约束中写死字段、类型、缺失值约定 |
 
 ## 3. 种子角色（开发）
 

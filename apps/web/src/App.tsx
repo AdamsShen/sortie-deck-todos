@@ -23,11 +23,13 @@ import { RoleAvatar, AVATAR_PRESET_OPTIONS } from "./components/RoleAvatar";
 import { StageInspect } from "./components/StageInspect";
 import { PipelineRail, railFromInitiative } from "./components/PipelineRail";
 import { ForgeReview } from "./components/ForgeReview";
+import { PersonaEditor, type PersonaMode } from "./components/PersonaEditor";
 import { SubRoomPanel } from "./components/SubRoomPanel";
 import { ShareManager } from "./components/ShareManager";
 import { DecisionCenter } from "./components/DecisionCenter";
 import { unlockSfx, playSfx, loadSfxMuted, setSfxMuted, loadBgmMuted, setBgmMuted, startBgm } from "./sfx";
 import { categoryLabel, statusLabel, t, type I18nKey } from "./i18n";
+import { emptyPersonaSpec, parsePersonaText } from "./persona";
 import { lsGet, lsRemove, lsSet } from "./storage";
 import {
   BG_STORAGE_KEY,
@@ -55,6 +57,7 @@ import type {
   MissionWorkspace,
   PipelineTrackInfo,
   PipelineStageInfo,
+  PersonaSpecShape,
   PublishedAgent,
   PublicUser,
   RoomMessage,
@@ -254,9 +257,9 @@ export default function App() {
   // 记忆表单「增强提示词」：优化中 spinner；成功覆盖后保留原文供撤销
   const [memEnhancing, setMemEnhancing] = useState(false);
   const [memEnhancePrev, setMemEnhancePrev] = useState<string | null>(null);
-  // 发布角色 persona「增强提示词」：同上，作用于 agentForm.persona
-  const [agentPersonaBusy, setAgentPersonaBusy] = useState(false);
-  const [agentPersonaPrev, setAgentPersonaPrev] = useState<string | null>(null);
+  // 发布角色的人设：结构化视图 + 编辑模式（结构化 / 原文）
+  const [agentSpec, setAgentSpec] = useState<PersonaSpecShape>(emptyPersonaSpec);
+  const [agentPersonaMode, setAgentPersonaMode] = useState<PersonaMode>("structured");
   const [agentList, setAgentList] = useState<PublishedAgent[]>([]);
   const [agentEditing, setAgentEditing] = useState(false);
   const [agentSelectedId, setAgentSelectedId] = useState<string | null>(null);
@@ -1610,22 +1613,6 @@ export default function App() {
     }
   }
 
-  // 角色 persona「增强提示词」：LLM 把人设改写为专业系统提示，覆盖输入框，可撤销
-  async function enhanceAgentPersona() {
-    if (agentPersonaBusy || !agentForm.persona.trim()) return;
-    const original = agentForm.persona;
-    setAgentPersonaBusy(true);
-    try {
-      const next = await enhancePromptText("persona", original);
-      if (next && next !== original) {
-        setAgentPersonaPrev(original);
-        setAgentForm({ ...agentForm, persona: next });
-      }
-    } finally {
-      setAgentPersonaBusy(false);
-    }
-  }
-
   // 导入 md 文档：读入内容作为记忆全文，简介由 LLM 异步总结（失败降级截断）
   function importMemoryMd(file: File | undefined) {
     if (!file) return;
@@ -1684,6 +1671,8 @@ export default function App() {
       toolkit_ids: [],
       avatar: "",
     });
+    setAgentSpec(emptyPersonaSpec());
+    setAgentPersonaMode("structured");
   }
 
   function startEditAgent(a: PublishedAgent) {
@@ -1700,6 +1689,9 @@ export default function App() {
       toolkit_ids: [...(a.toolkit_ids || [])],
       avatar: a.avatar || `preset:${a.slot || "product"}`,
     });
+    // 旧角色可能只有自由文本：本地解析一份结构化视图，便于直接分段编辑
+    setAgentSpec(a.persona_spec ?? parsePersonaText(a.persona || ""));
+    setAgentPersonaMode("structured");
   }
 
   async function uploadPublishAvatar(file: File | undefined) {
@@ -1735,11 +1727,14 @@ export default function App() {
   async function saveAgent(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
+    // 按当前编辑模式只提交一种人设来源，避免结构化字段与原文互相覆盖
     const payload = {
       title: agentForm.title,
       slot: agentForm.slot,
       summary: agentForm.summary,
-      persona: agentForm.persona,
+      ...(agentPersonaMode === "structured"
+        ? { persona_spec: agentSpec }
+        : { persona: agentForm.persona }),
       visibility: agentForm.visibility,
       toolkit_ids: agentForm.toolkit_ids,
       avatar: agentForm.avatar || `preset:${agentForm.slot}`,
@@ -4549,50 +4544,18 @@ export default function App() {
                       onChange={(e) => setAgentForm({ ...agentForm, summary: e.target.value })}
                     />
                   </label>
-                  {/* persona 编辑框：右下角浮动增强按钮，增强中显示浮层 */}
-                  <span style={{ position: "relative", display: "block" }}>
-                    {agentPersonaBusy ? (
-                      <span className="composer-enhance-toast" role="status">
-                        <span className="mini-spinner" aria-hidden />
-                        {tr("enhanceLoading")}
-                      </span>
-                    ) : (
-                      <button
-                        type="button"
-                        className="btn ghost composer-enhance-btn composer-enhance-icon composer-enhance-corner"
-                        disabled={!agentForm.persona.trim()}
-                        onClick={() => void enhanceAgentPersona()}
-                        title={tr("enhancePrompt")}
-                        aria-label={tr("enhancePrompt")}
-                      >
-                        <SparkleIcon />
-                      </button>
-                    )}
-                    {agentPersonaPrev !== null && !agentPersonaBusy && (
-                      <button
-                        type="button"
-                        className="btn ghost tiny composer-enhance-btn composer-enhance-corner"
-                        style={{ bottom: "2.8rem" }}
-                        onClick={() => {
-                          setAgentForm({ ...agentForm, persona: agentPersonaPrev });
-                          setAgentPersonaPrev(null);
-                        }}
-                        title={tr("enhanceUndo")}
-                        aria-label={tr("enhanceUndo")}
-                      >
-                        ↺ {tr("enhanceUndo")}
-                      </button>
-                    )}
-                    <textarea
-                      className="kb-body"
-                      value={agentForm.persona}
-                      onChange={(e) => {
-                        setAgentForm({ ...agentForm, persona: e.target.value });
-                        if (agentPersonaPrev !== null) setAgentPersonaPrev(null);
-                      }}
-                      required
-                    />
-                  </span>
+                  {/* 人设：结构化六段式（角色/背景/技能/工作流/示例/约束）或原文 */}
+                  <PersonaEditor
+                    token={token}
+                    lang={lang}
+                    mode={agentPersonaMode}
+                    spec={agentSpec}
+                    raw={agentForm.persona}
+                    onModeChange={setAgentPersonaMode}
+                    onSpecChange={setAgentSpec}
+                    onRawChange={(value) => setAgentForm({ ...agentForm, persona: value })}
+                    onError={(message) => setError(message)}
+                  />
                 </section>
 
                 {/* 03 装备：已选工具卡片网格 + 弹框选择 CTA，确定后回显、可再次修改 */}

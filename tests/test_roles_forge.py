@@ -233,6 +233,89 @@ async def test_forge_store_lists_pending_review_only(
     assert pending[0].title == "股票分析师"
 
 
+# --- 结构化人设（六段式） ------------------------------------------------
+
+
+_STRUCTURED_PERSONA = {
+    "role": "你是拥有 10 年经验的资深股票分析师，擅长把行情数据转成可执行观察笔记。",
+    "background": "- 服务内部投研小队，上游是自选股清单，下游是投资决策群。\n- 每日一篇观察笔记，必须给依据。",
+    "skills": ["行情解读：识别量价异动。", "风险识别：标注回撤与流动性风险。", "组合复盘：对照目标仓位。"],
+    "workflow": ["读自选股清单与昨日笔记。", "生成当日观察结论。", "标注风险与待确认项。"],
+    "examples": [
+        {"situation": "自选股无重大变化", "response": "输出一句话结论并标注「无操作建议」。"}
+    ],
+    "constraints": ["不给出直接投资建议。", "数据缺失时标注缺失而非补零。", "结论必须附数据依据。"],
+}
+
+
+async def test_forge_renders_structured_persona_spec(
+    registry: RoleRegistry, catalog: AgentCatalog
+) -> None:
+    payload = {
+        "role_key": "stocks",
+        "title": "Stock Analyst",
+        "persona": _STRUCTURED_PERSONA,
+        "outputs": ["daily_note.md"],
+        "handoff_targets": ["eng"],
+    }
+    forge = _forge(registry, catalog, _FakeLlm(payload))
+    draft = await forge.propose(ForgeRequest(capability="股票分析"))
+    assert draft.generator == "llm"
+    assert draft.persona_spec is not None
+    for heading in ("## 角色", "## 背景", "## 技能", "## 工作流", "## 示例", "## 约束"):
+        assert heading in draft.persona
+    assert draft.issues == []
+
+
+async def test_forge_flags_thin_persona_quality(
+    registry: RoleRegistry, catalog: AgentCatalog
+) -> None:
+    payload = {
+        "role_key": "stocks",
+        "title": "Stock Analyst",
+        "persona": {"role": "股票分析师", "skills": ["看盘"]},
+        "outputs": ["daily_note.md"],
+    }
+    forge = _forge(registry, catalog, _FakeLlm(payload))
+    draft = await forge.propose(ForgeRequest(capability="股票分析"))
+    assert any("10 年经验" in issue for issue in draft.issues)
+    assert any("示例" in issue for issue in draft.issues)
+    assert any("约束" in issue for issue in draft.issues)
+
+
+async def test_forge_update_persona_spec_recompiles_text(
+    registry: RoleRegistry, catalog: AgentCatalog
+) -> None:
+    forge = _forge(registry, catalog, _FakeLlm(enabled=False))
+    draft = await forge.propose(ForgeRequest(capability="育儿建议", title="育儿顾问"))
+    edited = forge.update(draft.id, {"persona_spec": _STRUCTURED_PERSONA})
+    assert edited.persona.startswith("## 角色")
+    assert edited.persona_spec is not None
+    assert edited.issues == []
+
+
+def test_catalog_create_compiles_persona_spec(catalog: AgentCatalog) -> None:
+    from sortie_deck.agents import CreateAgentRequest
+    from sortie_deck.persona import PersonaSpec
+
+    spec = PersonaSpec.model_validate(_STRUCTURED_PERSONA)
+    agent = catalog.create(
+        CreateAgentRequest(title="Stock Analyst", slot="product", persona_spec=spec),
+        author_id="u1",
+        author_name="Tester",
+    )
+    assert agent.persona.startswith("## 角色")
+    assert agent.persona_spec is not None
+    # 旧接口：只传自由文本仍然可用，spec 留空
+    raw = catalog.create(
+        CreateAgentRequest(title="Legacy", slot="product", persona="You are a legacy agent."),
+        author_id="u1",
+        author_name="Tester",
+    )
+    assert raw.persona == "You are a legacy agent."
+    assert raw.persona_spec is None
+
+
 # --- loadout / collaboration --------------------------------------------
 
 

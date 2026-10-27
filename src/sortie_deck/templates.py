@@ -10,6 +10,7 @@ from sortie_deck.agent_contract import (
     contract_from_mapping,
     split_front_matter,
 )
+from sortie_deck.persona import PersonaSpec, parse_persona, render_persona
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TEMPLATES_DIR = REPO_ROOT / "packages" / "templates"
@@ -82,4 +83,24 @@ def load_persona_document(role: str) -> tuple[AgentContract | None, str]:
 def load_agent_contract(role: str) -> AgentContract | None:
     """Parsed :class:`AgentContract` for ``role``, or ``None`` when undeclared."""
     return load_persona_document(role)[0]
+
+
+def load_persona_spec(role: str) -> PersonaSpec:
+    """结构化人设（角色 / 背景 / 技能 / 工作流 / 示例 / 约束）。
+
+    文件缺失或正文为空时返回空 spec，由调用方决定兜底文案。
+    """
+    _, body = load_persona_document(role)
+    return parse_persona(body)
+
+
+def compose_persona(role: str, *, role_line: str = "") -> str:
+    """基于底座人设生成角色文本，可用 ``role_line`` 覆盖「角色」首句。
+
+    用于已发布 Agent 的专家变体（如产品侦察兵复用 product 底座，只换身份描述）。
+    """
+    spec = load_persona_spec(role)
+    if role_line.strip():
+        spec.role = role_line.strip()
+    return render_persona(spec) or f"You are the {role} role agent."
 

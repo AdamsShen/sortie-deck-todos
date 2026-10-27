@@ -8,8 +8,18 @@ import {
   updateForgeDraft,
 } from "../api";
 import { t } from "../i18n";
+import { parsePersonaText } from "../persona";
 import { SparkleIcon } from "./ChatComposer";
-import type { ForgeDraft, Lang } from "../types";
+import { PersonaEditor, type PersonaMode } from "./PersonaEditor";
+import type { ForgeDraft, Lang, PersonaSpecShape } from "../types";
+
+type DraftForm = {
+  title: string;
+  summary: string;
+  persona: string;
+  persona_spec: PersonaSpecShape;
+  mode: PersonaMode;
+};
 
 type Props = {
   token: string;
@@ -26,16 +36,13 @@ type Props = {
 export function ForgeReview({ token, lang }: Props) {
   const [drafts, setDrafts] = useState<ForgeDraft[]>([]);
   const [capability, setCapability] = useState("");
-  const [editing, setEditing] = useState<Record<string, { title: string; summary: string; persona: string }>>({});
+  const [editing, setEditing] = useState<Record<string, DraftForm>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   // 能力输入框「增强提示词」：优化中 spinner；成功覆盖后保留原文供撤销
   const [enhancing, setEnhancing] = useState(false);
   const [enhancePrev, setEnhancePrev] = useState<string | null>(null);
-  // 草稿人设 persona 增强：记录当前优化的草稿 id 与原文（撤销用）
-  const [enhancingPersonaId, setEnhancingPersonaId] = useState("");
-  const [personaPrev, setPersonaPrev] = useState<{ id: string; text: string } | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -50,12 +57,15 @@ export function ForgeReview({ token, lang }: Props) {
     void refresh();
   }, [refresh]);
 
-  function draftForm(draft: ForgeDraft) {
+  function draftForm(draft: ForgeDraft): DraftForm {
     return (
       editing[draft.id] ?? {
         title: draft.title,
         summary: draft.summary,
         persona: draft.persona,
+        // 旧草稿可能只有自由文本：本地解析一份结构化视图，供分段编辑
+        persona_spec: draft.persona_spec ?? parsePersonaText(draft.persona || ""),
+        mode: "structured",
       }
     );
   }
@@ -103,46 +113,21 @@ export function ForgeReview({ token, lang }: Props) {
     setEnhancePrev(null);
   }
 
-  // 草稿人设「增强提示词」：LLM 把人设改写为专业系统提示，覆盖编辑框，可撤销
-  async function enhancePersona(draftId: string, text: string) {
-    if (enhancingPersonaId || !text.trim()) return;
-    setEnhancingPersonaId(draftId);
-    try {
-      const d = await api<{ text: string }>("/api/prompts/enhance", {
-        token,
-        method: "POST",
-        body: JSON.stringify({ scene: "persona", text }),
-      });
-      if (d.text && d.text !== text) {
-        setPersonaPrev({ id: draftId, text });
-        setEditing((prev) => ({
-          ...prev,
-          [draftId]: { ...(prev[draftId] ?? draftForm(drafts.find((x) => x.id === draftId)!)), persona: d.text },
-        }));
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setEnhancingPersonaId("");
-    }
-  }
-
-  function undoPersona() {
-    if (!personaPrev) return;
-    const draft = drafts.find((x) => x.id === personaPrev.id);
-    if (draft) {
-      setEditing((prev) => ({
-        ...prev,
-        [personaPrev.id]: { ...draftForm(draft), persona: personaPrev.text },
-      }));
-    }
-    setPersonaPrev(null);
+  /** 按当前编辑模式只提交一种人设来源，避免结构化字段与原文互相覆盖。 */
+  function draftPatch(form: DraftForm) {
+    return {
+      title: form.title,
+      summary: form.summary,
+      ...(form.mode === "structured"
+        ? { persona_spec: form.persona_spec }
+        : { persona: form.persona }),
+    };
   }
 
   async function save(draft: ForgeDraft) {
     setBusy(true);
     try {
-      await updateForgeDraft(token, draft.id, draftForm(draft));
+      await updateForgeDraft(token, draft.id, draftPatch(draftForm(draft)));
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -154,7 +139,7 @@ export function ForgeReview({ token, lang }: Props) {
   async function approve(draft: ForgeDraft) {
     setBusy(true);
     try {
-      await updateForgeDraft(token, draft.id, draftForm(draft));
+      await updateForgeDraft(token, draft.id, draftPatch(draftForm(draft)));
       await approveForgeDraft(token, draft.id, { publish_agent: true });
       setNotice(`${draft.role_key} ✓`);
       await refresh();
@@ -296,46 +281,28 @@ export function ForgeReview({ token, lang }: Props) {
                     }
                   />
                 </label>
-                {/* 人设编辑框：右下角浮动增强按钮，增强中显示浮层 */}
-                <label className="wr-field" style={{ position: "relative", display: "block" }}>
+                {/* 人设：结构化六段式或原文；单段/整篇增强由 PersonaEditor 处理 */}
+                <div className="wr-field">
                   <span>{t(lang, "agentPersona")}</span>
-                  {enhancingPersonaId === draft.id ? (
-                    <span className="composer-enhance-toast" role="status">
-                      <span className="mini-spinner" aria-hidden />
-                      {t(lang, "enhanceLoading")}
-                    </span>
-                  ) : (
-                    <button
-                      type="button"
-                      className="btn ghost composer-enhance-btn composer-enhance-icon composer-enhance-corner"
-                      disabled={!form.persona.trim()}
-                      onClick={() => void enhancePersona(draft.id, form.persona)}
-                      title={t(lang, "enhancePrompt")}
-                      aria-label={t(lang, "enhancePrompt")}
-                    >
-                      <SparkleIcon />
-                    </button>
-                  )}
-                  {personaPrev?.id === draft.id && enhancingPersonaId !== draft.id && (
-                    <button
-                      type="button"
-                      className="btn ghost tiny composer-enhance-btn composer-enhance-corner"
-                      style={{ bottom: "2.8rem" }}
-                      onClick={undoPersona}
-                      title={t(lang, "enhanceUndo")}
-                      aria-label={t(lang, "enhanceUndo")}
-                    >
-                      ↺ {t(lang, "enhanceUndo")}
-                    </button>
-                  )}
-                  <textarea
-                    value={form.persona}
+                  <PersonaEditor
+                    token={token}
+                    lang={lang}
+                    mode={form.mode}
+                    spec={form.persona_spec}
+                    raw={form.persona}
                     rows={4}
-                    onChange={(e) =>
-                      setEditing({ ...editing, [draft.id]: { ...form, persona: e.target.value } })
+                    onModeChange={(mode) =>
+                      setEditing({ ...editing, [draft.id]: { ...form, mode } })
                     }
+                    onSpecChange={(persona_spec) =>
+                      setEditing({ ...editing, [draft.id]: { ...form, persona_spec } })
+                    }
+                    onRawChange={(persona) =>
+                      setEditing({ ...editing, [draft.id]: { ...form, persona } })
+                    }
+                    onError={setError}
                   />
-                </label>
+                </div>
               </div>
 
               <div style={{ display: "flex", gap: 8, marginTop: 10 }}>

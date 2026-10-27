@@ -9,7 +9,8 @@ from typing import Annotated, Literal
 from pydantic import AfterValidator, BaseModel, Field
 
 from sortie_deck.models import RoleId, new_id, utc_now
-from sortie_deck.templates import load_persona
+from sortie_deck.persona import PersonaSpec, render_persona
+from sortie_deck.templates import load_persona_spec
 
 # Built-in slots: kept for seeding and UI defaults. The set is **no longer
 # closed** — `sortie_deck.roles.RoleRegistry` owns the authoritative list and
@@ -46,7 +47,10 @@ class PublishedAgent(BaseModel):
     title: str
     slot: AgentSlot
     summary: str = ""
+    # 编译后的 system prompt：运行时唯一来源（graph / executor / plugins 只读这个字段）
     persona: str
+    # 结构化人设（角色/背景/技能/工作流/示例/约束），工坊编辑用；旧数据可为空
+    persona_spec: PersonaSpec | None = None
     tags: list[str] = Field(default_factory=list)
     toolkit_ids: list[str] = Field(default_factory=list)
     visibility: Visibility = "public"
@@ -64,7 +68,9 @@ class CreateAgentRequest(BaseModel):
     title: str
     slot: AgentSlot
     summary: str = ""
-    persona: str
+    # persona 与 persona_spec 至少给一个；给了 spec 时以 spec 为准重新编译
+    persona: str = ""
+    persona_spec: PersonaSpec | None = None
     tags: list[str] = Field(default_factory=list)
     toolkit_ids: list[str] = Field(default_factory=list)
     visibility: Visibility = "public"
@@ -77,6 +83,7 @@ class UpdateAgentRequest(BaseModel):
     title: str | None = None
     summary: str | None = None
     persona: str | None = None
+    persona_spec: PersonaSpec | None = None
     tags: list[str] | None = None
     toolkit_ids: list[str] | None = None
     visibility: Visibility | None = None
@@ -85,11 +92,30 @@ class UpdateAgentRequest(BaseModel):
     avatar: str | None = None
 
 
+def _resolve_persona(persona: str, spec: PersonaSpec | None) -> tuple[str, PersonaSpec | None]:
+    """按「结构化优先」规则确定 persona 文本。
+
+    传了 ``persona_spec`` 时以 spec 为准重新渲染，忽略原始文本；否则使用自由
+    文本 ``persona``。两者都为空视为非法请求。
+    """
+    if spec is not None:
+        text = render_persona(spec).strip()
+        if not text:
+            raise ValueError("persona_spec 渲染结果为空")
+        return text, spec
+    text = (persona or "").strip()
+    if not text:
+        raise ValueError("persona 与 persona_spec 至少提供一个")
+    return text, None
+
+
 def _slugify(text: str) -> str:
     s = re.sub(r"[^a-zA-Z0-9\u4e00-\u9fff]+", "-", text.strip().lower()).strip("-")
     return (s or "agent")[:48]
 
 
+# 内置专家种子：底座人设来自 packages/templates/personas/<slot>.md，
+# role_line 只覆盖「角色」首句，用于表达该专家在流水线中的特化定位。
 _SEED: list[dict] = [
     {
         "slug": "prd-scout",
@@ -97,11 +123,9 @@ _SEED: list[dict] = [
         "slot": "product",
         "summary": "前场产品侦察：把客户口述压成可验收 PRD",
         "tags": ["product", "field"],
-        "persona": (
-            "You are a product scout embedded with the customer.\n"
-            "Turn messy field notes into crisp PRD + acceptance criteria.\n"
-            "Prefer measurable outcomes over feature laundry lists.\n"
-            + load_persona("product")
+        "role_line": (
+            "你是拥有 10 年经验的资深产品专家，长期在客户现场做产品侦察，"
+            "擅长把混乱的口述笔记压成可验收的 PRD 与验收标准。"
         ),
     },
     {
@@ -110,10 +134,9 @@ _SEED: list[dict] = [
         "slot": "design",
         "summary": "交互与视觉导航：把 PRD 落成可交付设计规格",
         "tags": ["design", "ui", "ux"],
-        "persona": (
-            "You are the fireteam product designer.\n"
-            "Produce flows, screens, and states engineers can ship without re-asking.\n"
-            + load_persona("design")
+        "role_line": (
+            "你是拥有 10 年经验的资深产品设计师，擅长把 PRD 快速落成流程、状态"
+            "与设计令牌齐全的可交付规格。"
         ),
     },
     {
@@ -122,10 +145,9 @@ _SEED: list[dict] = [
         "slot": "eng",
         "summary": "平台工程突击：小 diff、可回滚、遵守仓库约定",
         "tags": ["eng", "platform"],
-        "persona": (
-            "You are a platform engineer on a forward-deployed fireteam.\n"
-            "Ship small reversible diffs; document risks in implementation notes.\n"
-            + load_persona("eng")
+        "role_line": (
+            "你是拥有 10 年经验的资深平台工程师，擅长在既有仓库约定下交付"
+            "小 diff、可回滚、有测试兜底的实现。"
         ),
     },
     {
@@ -134,9 +156,9 @@ _SEED: list[dict] = [
         "slot": "eng_ios",
         "summary": "iOS 突击：Swift/SwiftUI，对齐设计与验收",
         "tags": ["eng", "ios", "mobile"],
-        "persona": (
-            "You are the fireteam iOS engineer.\n"
-            + load_persona("eng_ios")
+        "role_line": (
+            "你是拥有 10 年经验的资深 iOS 工程师，擅长用 Swift / SwiftUI 把设计规格"
+            "落成符合 HIG 与审核要求的实现。"
         ),
     },
     {
@@ -145,9 +167,9 @@ _SEED: list[dict] = [
         "slot": "eng_android",
         "summary": "Android 突击：Kotlin/Jetpack，对齐设计与验收",
         "tags": ["eng", "android", "mobile"],
-        "persona": (
-            "You are the fireteam Android engineer.\n"
-            + load_persona("eng_android")
+        "role_line": (
+            "你是拥有 10 年经验的资深 Android 工程师，擅长用 Kotlin 与现代 Jetpack"
+            "组件交付兼容性可控的实现。"
         ),
     },
     {
@@ -156,9 +178,9 @@ _SEED: list[dict] = [
         "slot": "eng_web",
         "summary": "Web 前端突击：组件化、可访问、贴合设计",
         "tags": ["eng", "web", "frontend"],
-        "persona": (
-            "You are the fireteam web engineer.\n"
-            + load_persona("eng_web")
+        "role_line": (
+            "你是拥有 10 年经验的资深 Web 前端工程师，擅长把设计令牌与交互规格"
+            "落成可访问、可维护的组件实现。"
         ),
     },
     {
@@ -167,9 +189,9 @@ _SEED: list[dict] = [
         "slot": "eng_backend",
         "summary": "后端突击：API、数据契约、可观测",
         "tags": ["eng", "backend", "api"],
-        "persona": (
-            "You are the fireteam backend engineer.\n"
-            + load_persona("eng_backend")
+        "role_line": (
+            "你是拥有 10 年经验的资深后端工程师，擅长在保持接口兼容的前提下"
+            "演进 API、数据模型与可观测能力。"
         ),
     },
     {
@@ -178,9 +200,9 @@ _SEED: list[dict] = [
         "slot": "eng_agent",
         "summary": "Agent 开发突击：工具链、提示、评测门禁",
         "tags": ["eng", "agent", "mcp"],
-        "persona": (
-            "You are the fireteam agent engineer.\n"
-            + load_persona("eng_agent")
+        "role_line": (
+            "你是拥有 10 年经验的资深 Agent 系统工程师，擅长设计可评测、"
+            "可观测、成本与权限可控的智能体系统。"
         ),
     },
     {
@@ -189,10 +211,9 @@ _SEED: list[dict] = [
         "slot": "qa",
         "summary": "门禁测试官：用验收标准裁决 pass/fail",
         "tags": ["qa", "clearance"],
-        "persona": (
-            "You are the fireteam QA gatekeeper.\n"
-            "Judge only against acceptance criteria; failures must be actionable.\n"
-            + load_persona("qa")
+        "role_line": (
+            "你是拥有 10 年经验的资深质量工程师，只按验收标准裁决 pass/fail，"
+            "并能把失败收敛到可立即修复的粒度。"
         ),
     },
 ]
@@ -204,19 +225,25 @@ class AgentCatalog:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         if not self.path.exists():
-            agents = [
-                PublishedAgent(
-                    slug=s["slug"],
-                    title=s["title"],
-                    slot=s["slot"],
-                    summary=s["summary"],
-                    persona=s["persona"],
-                    tags=s["tags"],
-                    author_name="Sortie",
-                    visibility="public",
+            agents: list[PublishedAgent] = []
+            for seed in _SEED:
+                # 底座人设来自 personas/<slot>.md，只覆盖「角色」首句表达特化定位
+                spec = load_persona_spec(seed["slot"])
+                if seed.get("role_line"):
+                    spec.role = str(seed["role_line"])
+                agents.append(
+                    PublishedAgent(
+                        slug=seed["slug"],
+                        title=seed["title"],
+                        slot=seed["slot"],
+                        summary=seed["summary"],
+                        persona=render_persona(spec) or f"You are the {seed['slot']} role agent.",
+                        persona_spec=spec,
+                        tags=seed["tags"],
+                        author_name="Sortie",
+                        visibility="public",
+                    )
                 )
-                for s in _SEED
-            ]
             self._write(agents)
 
     def _read(self) -> list[PublishedAgent]:
@@ -261,6 +288,7 @@ class AgentCatalog:
         raise KeyError(agent_id)
 
     def create(self, req: CreateAgentRequest, *, author_id: str, author_name: str) -> PublishedAgent:
+        persona, spec = _resolve_persona(req.persona, req.persona_spec)
         slug = _slugify(req.slug or req.title)
         with self._lock:
             agents = self._read()
@@ -275,7 +303,8 @@ class AgentCatalog:
                 title=req.title.strip(),
                 slot=req.slot,
                 summary=req.summary.strip(),
-                persona=req.persona.strip(),
+                persona=persona,
+                persona_spec=spec,
                 tags=[t.strip() for t in req.tags if t.strip()],
                 toolkit_ids=list(req.toolkit_ids),
                 visibility=req.visibility,
@@ -298,6 +327,15 @@ class AgentCatalog:
                     raise PermissionError("only author or admin can edit")
                 data = a.model_dump()
                 patch = req.model_dump(exclude_unset=True)
+                # 结构化编辑优先：传了 spec 就重新编译 persona；只改文本则清掉旧 spec
+                spec_patch = patch.pop("persona_spec", "__absent__")
+                if spec_patch != "__absent__" and spec_patch is not None:
+                    spec = PersonaSpec.model_validate(spec_patch)
+                    patch["persona"] = render_persona(spec)
+                    patch["persona_spec"] = spec.model_dump(mode="json")
+                elif spec_patch is None or ("persona" in patch and patch["persona"] is not None):
+                    # 显式清空 spec，或只改自由文本：旧 spec 不再代表当前 persona
+                    patch["persona_spec"] = None
                 for key in ("title", "summary", "persona"):
                     if key in patch and patch[key] is not None:
                         patch[key] = patch[key].strip()

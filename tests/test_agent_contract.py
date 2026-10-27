@@ -181,7 +181,10 @@ def test_load_persona_document_returns_contract_and_body() -> None:
     contract, body = load_persona_document("deploy")
     assert contract is not None
     assert contract.handoff_targets == []
-    assert body.startswith("You are a release engineer")
+    # 六段式人设：角色 / 背景 / 技能 / 工作流 / 示例 / 约束
+    assert body.startswith("## 角色")
+    for heading in ("## 背景", "## 技能", "## 工作流", "## 示例", "## 约束"):
+        assert heading in body
 
 
 def test_load_persona_falls_back_for_unknown_role() -> None:

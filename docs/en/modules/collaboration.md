@@ -8,6 +8,7 @@ which modules were added, which fields were extended, and which endpoints exist.
 | Module | Responsibility |
 |--------|----------------|
 | `sortie_deck/agent_contract.py` | `AgentContract` (inputs / outputs / handoff_targets / timeout / on_fail / tools_allowed), persona front-matter parsing, `validate_handoff`. Pure data layer, no orchestration imports |
+| `sortie_deck/persona.py` | `PersonaSpec` (role / background / skills / workflow / examples / constraints), `render_persona` / `parse_persona`, persona quality checks. Pure data layer shared by the workshop and forge |
 | `sortie_deck/roles.py` | `RoleRegistry`: built-in + persona + custom roles (`data/roles.json`) with normalisation, semantic de-duplication and lookup |
 | `sortie_deck/agent_forge.py` | Generate a role (persona + contract) on demand, self-check it, store it as `pending-review`, publish after human review |
 | `sortie_deck/manager.py` | The narrow manager: join arbitration, conflict/escalation, and the plan digest (`plan_digest`) |

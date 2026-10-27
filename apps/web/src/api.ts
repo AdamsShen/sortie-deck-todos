@@ -10,6 +10,7 @@ import type {
   KnowledgeBaseScope,
   KnowledgeDoc,
   MissionShare,
+  PersonaSpecShape,
   PublicUser,
   RoleSpec,
   SubRoomRecord,
@@ -199,7 +200,9 @@ export async function proposeForgeDraft(
 export async function updateForgeDraft(
   token: string,
   draftId: string,
-  patch: Partial<Pick<ForgeDraft, "title" | "summary" | "persona" | "role_key" | "tags">>,
+  patch: Partial<Pick<ForgeDraft, "title" | "summary" | "persona" | "role_key" | "tags">> & {
+    persona_spec?: PersonaSpecShape | null;
+  },
 ): Promise<ForgeDraft> {
   return api<ForgeDraft>(`/api/forge/drafts/${encodeURIComponent(draftId)}`, {
     token,

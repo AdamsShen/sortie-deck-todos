@@ -419,6 +419,22 @@ export interface MemoryEntry {
   updated_at?: string;
 }
 
+/** 人设中的一条示例：典型输入 → 期望输出。 */
+export interface PersonaExampleShape {
+  situation: string;
+  response: string;
+}
+
+/** 结构化人设（角色 / 背景 / 技能 / 工作流 / 示例 / 约束），保存时编译为 persona。 */
+export interface PersonaSpecShape {
+  role: string;
+  background: string;
+  skills: string[];
+  workflow: string[];
+  examples: PersonaExampleShape[];
+  constraints: string[];
+}
+
 export interface PublishedAgent {
   id: string;
   slug: string;
@@ -426,6 +442,7 @@ export interface PublishedAgent {
   slot: AgentSlot;
   summary: string;
   persona: string;
+  persona_spec?: PersonaSpecShape | null;
   tags: string[];
   visibility: Visibility;
   toolkit_ids?: string[];
@@ -474,6 +491,7 @@ export interface ForgeDraft {
   title: string;
   summary: string;
   persona: string;
+  persona_spec?: PersonaSpecShape | null;
   contract: AgentContractShape;
   tags: string[];
   status: ForgeDraftStatus;

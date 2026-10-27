@@ -16,9 +16,15 @@ Publish specialist agents (persona, slot, visibility, default `toolkit_ids`) for
 PublishedAgent
   id, slug, title,
   slot: product|design|eng|eng_ios|eng_android|eng_web|eng_backend|eng_agent|qa|deploy
-  summary, persona, tags, visibility: public|private
+  summary, persona, persona_spec?, tags, visibility: public|private
   toolkit_ids[], author_*, version, published
 ```
+
+`persona` is the compiled system prompt and the **only runtime source**; `persona_spec` is
+the workshop's structured view, shaped as six sections: **role / background / skills /
+workflow / examples / constraints**. Saving a spec re-compiles `persona` via
+`persona.py::render_persona`. Legacy records with only `persona` get a read-only spec
+parsed on read (`parse_persona`), so the structured editor always has content.
 
 `resolve_slot_map({slot: agent_id})` used when creating initiatives.
 

@@ -7,6 +7,7 @@
 | 模块 | 职责 |
 |------|------|
 | `sortie_deck/agent_contract.py` | `AgentContract`（inputs / outputs / handoff_targets / timeout / on_fail / tools_allowed）、persona front-matter 解析、`validate_handoff`。纯数据层，不依赖编排 |
+| `sortie_deck/persona.py` | `PersonaSpec`（角色 / 背景 / 技能 / 工作流 / 示例 / 约束）、`render_persona` / `parse_persona`、人设质量自检。纯数据层，供角色工坊与 forge 复用 |
 | `sortie_deck/roles.py` | `RoleRegistry`：内置角色 + persona 角色 + 自定义角色（`data/roles.json`），提供规范化、语义去重与查询 |
 | `sortie_deck/agent_forge.py` | 大模型现场生成角色（persona + 契约），自检后落为 `pending-review`，人工改后发布 |
 | `sortie_deck/manager.py` | 收窄职责的 Manager：汇合仲裁、冲突/升级、plan 摘要（`plan_digest`） |
