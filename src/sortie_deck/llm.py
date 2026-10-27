@@ -7,7 +7,6 @@ import shutil
 from pathlib import Path
 from typing import Any, Literal
 
-
 CodingExecutorName = Literal["mock", "claude_code", "cursor_cli"]
 
 
@@ -74,6 +73,9 @@ class LlmClient:
 
     @property
     def backend(self) -> str:
+        # 有 api_key 一律返回 "http"：该值被 13 处写进 UI 文案与 meta
+        # （pipeline_llm / deploy / mission_briefing / skill_install / api），
+        # 接入层换成 langchain 后底层实现变了但对外语义必须保持。
         if self.api_key:
             return "http"
         if self.cli_fallback and shutil.which("claude"):
@@ -114,12 +116,12 @@ class LlmClient:
         if not self.enabled:
             raise RuntimeError("LLM API key not configured and Claude CLI unavailable")
         if self.api_key:
-            return await self._chat_http(
+            return await self._chat_chain(
                 system=system, user=user, temperature=temperature, json_mode=json_mode
             )
         return await self._chat_claude_cli(system=system, user=user, json_mode=json_mode)
 
-    async def _chat_http(
+    async def _chat_chain(
         self,
         *,
         system: str,
@@ -127,26 +129,22 @@ class LlmClient:
         temperature: float,
         json_mode: bool,
     ) -> str:
-        import httpx
+        """LangChain ChatModel 后端（默认）。
 
-        body: dict[str, Any] = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "temperature": temperature,
-        }
-        if json_mode:
-            body["response_format"] = {"type": "json_object"}
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            resp = await client.post(
-                f"{self.base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                json=body,
-            )
-            resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"]
+        异常在后端已归一化为 ``RuntimeError``，上游 ``except Exception``
+        降级逻辑（含启发式/模板回退）无需改动。
+        """
+        from sortie_deck.llm_chain import get_backend
+
+        backend = get_backend(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            model=self.model,
+            timeout=self.timeout,
+        )
+        return await backend.complete(
+            system=system, user=user, temperature=temperature, json_mode=json_mode
+        )
 
     async def _chat_claude_cli(self, *, system: str, user: str, json_mode: bool) -> str:
         claude = shutil.which("claude")
