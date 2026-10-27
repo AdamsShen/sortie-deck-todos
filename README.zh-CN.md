@@ -140,6 +140,7 @@ cursor-agent --version   # 或 PATH 上的 `agent`
 | `TDT_DEPLOY_CMD` | 部署 shell 模板（`{initiative_id}` 等） |
 | `TDT_POSTGRES_URI` | 可选 Postgres checkpointer |
 | `TDT_ENG_CONCURRENCY` | 工程阶段并发（默认 `3`） |
+| `TDT_STAGE_TIMEOUT_SECONDS` | 单阶段执行上限（默认 `1800`；超时后回收 workspace 已写产物） |
 | `OPENAI_API_KEY` / `TDT_LLM_*` | 可选 LLM 产品执行器 |
 
 ## 航线与 HITL

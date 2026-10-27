@@ -5,10 +5,24 @@ from sortie_deck.agent_contract import AgentContract, ContractError, validate_ha
 __all__ = [
     "REQUIRED",
     "ContractError",
+    "StageContractError",
     "validate_stage_artifacts",
     "validate_handoff",
     "validate_stage_handoff",
 ]
+
+
+class StageContractError(ContractError):
+    """阶段产物契约错误，携带违规阶段。
+
+    并行波次里各成员共享一个 ``current_stage``，异常冒泡时它可能已指向别的
+    成员（本次现场即把 `eng_backend_tech_design` 的失败记到了 `qa_cases`）；
+    编排层靠 ``stage`` 把错误归位。
+    """
+
+    def __init__(self, stage: str, message: str) -> None:
+        super().__init__(message)
+        self.stage = stage
 
 _ENG_BUILD_ARTIFACTS = ["implementation.md", "tasks.json", "diff.patch"]
 
@@ -44,7 +58,9 @@ def validate_stage_artifacts(stage: str, artifacts: dict[str, str]) -> None:
     required = REQUIRED.get(stage, [])
     missing = [name for name in required if name not in artifacts]
     if missing:
-        raise ContractError(f"Stage `{stage}` missing artifacts: {', '.join(missing)}")
+        raise StageContractError(
+            stage, f"Stage `{stage}` missing artifacts: {', '.join(missing)}"
+        )
 
 
 def validate_stage_handoff(

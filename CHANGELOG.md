@@ -51,6 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **QA gate loop**: approving a `qa_verify` gate without a declared verdict no longer bounces back to build forever
 - **HITL resume race**: in-flight runs re-saved a stale initiative snapshot and wiped `pending_decision_id`, so an answered escalation left the mission paused; each stream step now refreshes from the store and `submit_hitl` waits for the run lock before resuming
 - **Codex item-level errors**: configuration warnings emitted as `item.type=error` no longer fail an otherwise successful turn (only stream-level errors do)
+- **Stage timeout reported as missing artifacts**: a stage cancelled by `TDT_STAGE_TIMEOUT_SECONDS` returned an empty artifact map, so the contract check raised `Stage ... missing artifacts` and hid the real cause. A failed stage now salvages contract files already written into its workspace (skipping `repos/` and empty files) and continues; when files are still missing, `StageContractError` carries the offending stage plus the executor failure (`timed out after ...`), and the failure event is attributed to the stage that actually failed instead of its parallel neighbour
 
 ### Changed
 
@@ -65,6 +66,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Agent switching is a graph node jump and the only routing mechanism**: there are no static edges between stages any more — every node announces its next hop in `handoff_target` and a conditional edge consumes it, with the frozen plan as the router's default. Agent hand-offs, manager join decisions and HITL verdicts all travel through that one router; the legacy `TDT_AGENT_HANDOFF` / `TDT_MANAGER_JOIN_DECISION` switches were removed
 - **LLM access layer moved to LangChain ChatModel**: `LlmClient` now routes through `langchain_openai.ChatOpenAI` (`llm_chain.py`); the old hand-written httpx path was deleted outright (no runtime switch). `chat_json` / `chat_text` signatures, `backend` values (`http` / `claude_cli` / `none`) and the `claude -p` fallback are unchanged, so all call sites and existing tests are untouched. Endpoints that reject `response_format` retry once without it
 - **Briefing waterfall is now a LangGraph subgraph**: the five-step plan waterfall (history → knowledge → pipeline → loadout → roles) moved out of `mission_briefing.py` into `harness/waterfall.py` as a fixed-edge `StateGraph`. Event order, `data.step` values and tool arguments are unchanged, and a failing tool still doesn't break the chain. No checkpointer — `BriefingStore` remains the single source of truth
+- `TDT_STAGE_TIMEOUT_SECONDS` default raised 900 → 1800: harness stages that produce a full tech design routinely need 15+ minutes, and the old cap cut them off just before the files landed
 
 ## [0.1.0] — 2026-09-23
 

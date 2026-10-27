@@ -14,7 +14,11 @@ from langgraph.types import interrupt
 from sortie_deck import observability as obs
 from sortie_deck.agent_contract import ContractError, validate_handoff
 from sortie_deck.artifacts import ArtifactStore
-from sortie_deck.contracts import validate_stage_artifacts
+from sortie_deck.contracts import (
+    REQUIRED,
+    StageContractError,
+    validate_stage_artifacts,
+)
 from sortie_deck.loadout import (
     PICK_BUDGET_PER_STAGE,
     SEARCH_TOP_K,
@@ -82,6 +86,67 @@ async def _maybe_publish(
     if not results:
         return None
     return publish_summary_meta(results)
+
+
+# 超时/失败兜底扫描时跳过的目录：依赖目录与 repos/（业务仓库里的同名文件不是阶段产物）
+_SALVAGE_SKIP_DIRS = frozenset({".git", "node_modules", ".venv", "venv", "dist", "build", "repos"})
+_SALVAGE_MAX_DEPTH = 2
+
+
+def _workspace_candidates(root: Path, name: str) -> list[Path]:
+    """按「顶层优先、深度 ≤2、跳过依赖/仓库目录」列出候选文件。"""
+    direct = root / name
+    if direct.is_file():
+        return [direct]
+    out: list[Path] = []
+    for depth in range(1, _SALVAGE_MAX_DEPTH + 1):
+        for path in sorted(root.glob("/".join(["*"] * depth + [name]))):
+            rel_parts = path.relative_to(root).parts
+            if any(part in _SALVAGE_SKIP_DIRS for part in rel_parts):
+                continue
+            if path.is_file():
+                out.append(path)
+    return out
+
+
+def _validate_or_explain(stage: str, result: StageResult) -> None:
+    """校验阶段产物；失败时把执行器的真实失败原因并进异常。
+
+    缺产物通常是次生现象（超时/执行器崩溃 → artifacts 为空）。只报
+    "missing artifacts" 会让线上无法判断该扩超时还是改实现，因此执行器
+    自己给了失败原因时一并抛出。
+    """
+    try:
+        validate_stage_artifacts(stage, result.artifacts)
+    except StageContractError as exc:
+        if result.status == "fail" and result.message:
+            raise StageContractError(
+                stage, f"{exc} (executor failure: {result.message})"
+            ) from exc
+        raise
+
+
+def _salvage_stage_artifacts(stage: str, workspace: Path | None) -> dict[str, str]:
+    """从 workspace 回收已写出的契约产物（超时/执行器失败的兜底）。
+
+    执行器只在正常返回路径组装 ``result.artifacts``（harness 由回复文本合成），
+    一旦被 ``asyncio.wait_for`` 取消或直接抛错，磁盘上写好的文件就无人认领。
+    只认 ``REQUIRED`` 里的文件名且要求内容非空，避免把半成品当成阶段产物。
+    """
+    required = REQUIRED.get(stage, [])
+    if not required or workspace is None or not workspace.is_dir():
+        return {}
+    found: dict[str, str] = {}
+    for name in required:
+        for candidate in _workspace_candidates(workspace, name):
+            try:
+                content = candidate.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            if content.strip():
+                found[name] = content
+                break
+    return found
 
 
 def _coding_perm_from_instruction(instruction: str | None) -> dict[str, str]:
@@ -838,6 +903,10 @@ def build_graph_from_template(
     if not stages:
         raise ValueError("pipeline template has no stages")
 
+    # 编排器注入的配置（多实例/单测各用自己的 data_dir 与超时）。
+    # 内部 `cfg` 变量被阶段配置复用，故另存一个名字避免遮蔽。
+    app_cfg = cfg
+
     stage_by_name = {s["name"]: s for s in stages}
     stage_index = {s["name"]: i for i, s in enumerate(stages)}
 
@@ -846,6 +915,19 @@ def build_graph_from_template(
 
     def _stage_role(name: str) -> str:
         return str((stage_by_name.get(name) or {}).get("role") or "")
+
+    def _stage_workspace(st: PipelineState) -> Path | None:
+        """阶段沙盒目录：state 注入值优先，缺省按 mission 布局推导。"""
+        raw = st.get("workspace_dir")
+        if raw:
+            return Path(str(raw))
+        initiative_id = str(st.get("initiative_id") or "")
+        data_dir = getattr(app_cfg, "data_dir", None)
+        if not initiative_id or not data_dir:
+            return None
+        from sortie_deck.layout import mission_workspace_dir
+
+        return mission_workspace_dir(Path(data_dir), initiative_id)
 
     def _deny_handoff(st: PipelineState, stage_name: str, target: str, reason: str) -> None:
         events = list(st.get("events") or [])
@@ -1409,8 +1491,8 @@ def build_graph_from_template(
             handoff_targets=contract_targets,
             next_targets=next_targets,
             # 编排器配置注入：执行器据此定位任务沙盒，不再读进程级全局 settings
-            data_dir=str(getattr(cfg, "data_dir", "") or ""),
-            worktrees_dir=str(getattr(cfg, "worktrees_dir", "") or ""),
+            data_dir=str(getattr(app_cfg, "data_dir", "") or ""),
+            worktrees_dir=str(getattr(app_cfg, "worktrees_dir", "") or ""),
         )
 
         # Session-capable executors get a host so they can pull a sub-room
@@ -1423,7 +1505,12 @@ def build_graph_from_template(
 
         from sortie_deck.settings import settings as _settings
 
-        timeout = float(getattr(_settings, "stage_timeout_seconds", 900) or 900)
+        # 注入配置优先：不同实例（含单测）各用各的超时，不读进程级全局值
+        timeout = float(
+            getattr(app_cfg, "stage_timeout_seconds", None)
+            or getattr(_settings, "stage_timeout_seconds", 1800)
+            or 1800
+        )
 
         async def _execute_with_timeout() -> StageResult:
             try:
@@ -1441,6 +1528,32 @@ def build_graph_from_template(
             result = await ENG_QUEUE.run(_execute_with_timeout)
         else:
             result = await _execute_with_timeout()
+
+        # 失败/超时兜底：执行器被取消时不会组装 artifacts（harness 由回复文本合成），
+        # 但 agent 已写进 workspace 的契约文件仍然有效。回收后可继续推进，
+        # 避免 15 分钟的产出只因超时被整体丢弃。
+        if result.status == "fail":
+            salvaged = _salvage_stage_artifacts(stage, _stage_workspace(state))
+            if salvaged:
+                failure_message = result.message
+                result.artifacts = {**salvaged, **result.artifacts}
+                result.status = "ok"
+                result.message = (
+                    f"{failure_message} (recovered artifacts from workspace: "
+                    f"{', '.join(sorted(salvaged))})"
+                )
+                result.meta = {
+                    **(result.meta or {}),
+                    "failure_message": failure_message,
+                    "salvaged_artifacts": sorted(salvaged),
+                }
+                logger.warning(
+                    "阶段未正常返回，已从 workspace 回收产物: initiative=%s stage=%s files=%s reason=%s",
+                    state.get("initiative_id"),
+                    stage,
+                    sorted(salvaged),
+                    failure_message,
+                )
 
         # In-loop 元工具意图：executor 声明 toolkit_search / toolkit_pick，编排层兑现。
         # 先于 _run_mcp_calls 执行：本回合 pick 的 mcp 条目立刻并入调用集合，
@@ -1546,7 +1659,7 @@ def build_graph_from_template(
             ref = artifact_store.write_text(state["initiative_id"], stage, filename, content)
             written[filename] = ref.path
 
-        validate_stage_artifacts(stage, result.artifacts)
+        _validate_or_explain(stage, result)
 
         # git 回写（任务分支 commit/push + MR）——只影响 meta，不影响阶段判定
         publish_meta = await _maybe_publish(state, ctx, result, stage)
@@ -1571,6 +1684,25 @@ def build_graph_from_template(
                 },
             }
         )
+        # 兜底回收要在时间线上留下痕迹：否则"超时后仍成功"会被误当成正常完成
+        salvaged_files = list((result.meta or {}).get("salvaged_artifacts") or [])
+        if salvaged_files:
+            events.append(
+                {
+                    "stage": stage,
+                    "role": role.value,
+                    "kind": "info",
+                    "message": (
+                        "⚠️ 阶段未正常返回（"
+                        f"{(result.meta or {}).get('failure_message') or 'executor failure'}），"
+                        f"已从 workspace 回收产物：{', '.join(salvaged_files)}"
+                    ),
+                    "data": {
+                        "salvaged_artifacts": salvaged_files,
+                        "failure_message": (result.meta or {}).get("failure_message"),
+                    },
+                }
+            )
         # Sub-room conclusions are surfaced for observability; the transcript is not.
         events.extend(subroom_events)
         events.extend(toolkit_meta_out.events)

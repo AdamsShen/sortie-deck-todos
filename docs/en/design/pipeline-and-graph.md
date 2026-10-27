@@ -40,6 +40,8 @@ Code: `parallel.py`, `graph.py`, `PipelineRail.tsx`.
 - Executors return filename → content into `ArtifactStore`.
 - `contracts.REQUIRED` enforces required files.
 - Parallel members keep stage-scoped paths when basenames collide.
+- Per-stage runtime is capped by `TDT_STAGE_TIMEOUT_SECONDS` (default 1800s). On timeout or executor failure the orchestrator salvages required files already written into the stage workspace (skipping `repos/` and empty files); when the salvage succeeds the stage moves on and the timeline records a `⚠️` "not returned normally, artifacts recovered" event.
+- When files are still missing, `StageContractError` carries the offending stage (a parallel wave's `current_stage` may point at a sibling) together with the executor failure (`timed out after 1800s`) — so a timeout is never reported as "missing artifacts" again.
 
 ## UI contract
 

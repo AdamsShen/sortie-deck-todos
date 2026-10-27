@@ -40,6 +40,8 @@ flowchart LR
 - 执行器返回文件名 → 内容；写入 `ArtifactStore`。
 - `contracts.REQUIRED` 校验必选文件。
 - 并行成员文件名冲突时按路径保留 stage 作用域（`stage::kind` 同步策略）。
+- 单阶段执行上限由 `TDT_STAGE_TIMEOUT_SECONDS`（默认 1800s）控制。超时或执行器失败时，编排层会从该阶段 workspace 回收 `REQUIRED` 中已写出的文件（跳过 `repos/` 等目录与空文件）；回收成功则阶段继续推进，并在时间线留下一条 `⚠️` 事件说明"未正常返回但产物已回收"。
+- 产物仍缺失时抛 `StageContractError`：异常携带真实阶段（并行波次里 `current_stage` 可能已指向别的成员），并把执行器失败原因（如 `timed out after 1800s`）与 `missing artifacts` 一并抛出，避免"超时"被误报成"没写产物"。
 
 ## 与 UI 的契约
 

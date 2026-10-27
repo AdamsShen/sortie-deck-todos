@@ -155,6 +155,7 @@ Environment variables use prefix `TDT_` (see `sortie_deck.settings.Settings`).
 | `TDT_DEPLOY_CMD` | Shell template for deploy (`{initiative_id}`, `{artifact_dir}`, `{workspace_dir}`) |
 | `TDT_POSTGRES_URI` | Optional Postgres checkpointer |
 | `TDT_ENG_CONCURRENCY` | Eng stage concurrency (default `3`) |
+| `TDT_STAGE_TIMEOUT_SECONDS` | Per-stage runtime cap (default `1800`; workspace artifacts are salvaged on timeout) |
 | `OPENAI_API_KEY` / `TDT_LLM_*` | Optional LLM product executor |
 
 ## Pipelines & HITL

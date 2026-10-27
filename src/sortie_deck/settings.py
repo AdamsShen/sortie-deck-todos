@@ -207,7 +207,10 @@ class Settings(BaseSettings):
     feishu_verification_token: str | None = None
     # Production polish
     log_level: str = "INFO"
-    stage_timeout_seconds: float = 900.0
+    # 单阶段执行上限（秒）。harness 跑完整技术方案实测 15 分钟量级
+    # （2026-10-27 `eng_backend_tech_design` 540 行方案 14m47s 才落盘），
+    # 900s 会让"已产出但未返回"的阶段被判超时，故默认放宽到 30 分钟。
+    stage_timeout_seconds: float = 1800.0
     # --- OpenTelemetry 全链路追踪（见 docs/plans/2026-10-27-otel-full-tracing.md）---
     # 默认关；开启且 otel_endpoint 非空时才真正建 provider 导出 span。
     # 只装了 opentelemetry-api 没装 [otel] extra 时自动降级为 no-op，不影响启动。

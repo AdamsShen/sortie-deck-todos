@@ -1955,9 +1955,13 @@ class Orchestrator:
                 return await self._apply_graph_result(ini, final or {})
             except Exception as exc:
                 ini.status = InitiativeStatus.FAILED
+                # 并行波次里异常可能在别的成员节点冒泡，优先用异常自带的阶段；
+                # 否则 timeline 会把 `eng_backend_tech_design` 的失败记到 `qa_cases`。
+                failed_stage = str(getattr(exc, "stage", "") or ini.current_stage)
+                ini.current_stage = failed_stage
                 self._append_timeline(
                     ini,
-                    TimelineEvent(stage=ini.current_stage, kind="error", message=str(exc)),
+                    TimelineEvent(stage=failed_stage, kind="error", message=str(exc)),
                 )
                 self.store.upsert(ini)
                 await self._post_room(
