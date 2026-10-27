@@ -27,6 +27,7 @@ from sortie_deck.harness import (
     ToolSpec,
     new_session_id,
 )
+from sortie_deck.harness.waterfall import run_waterfall
 from sortie_deck.knowledge_gateway import KnowledgeGateway, gateway_from_settings
 from sortie_deck.models import (
     CreateInitiativeRequest,
@@ -306,33 +307,6 @@ class MissionBriefingAgent:
         self.store.save(sess)
         harness, state = self._bind(sess)
 
-        async def run_tool(name: str, args: dict[str, Any]) -> ToolResult:
-            result = await harness.call_tool(state, name, args)
-            if result.ok and result.data:
-                if name == "search_history":
-                    state.context["history_hits"] = result.data.get("hits") or []
-                elif name == "retrieve_knowledge":
-                    state.context["knowledge_hits"] = result.data.get("hits") or []
-                elif name == "propose_pipeline":
-                    state.context["pipeline"] = result.data.get("pipeline")
-                    state.context["stages"] = result.data.get("stages") or []
-                elif name == "propose_loadout":
-                    state.context["needed_slots"] = result.data.get("needed_slots") or []
-                    # 目录外角色（待 forge + 人工审核），随编制位一起进入建队
-                    state.context["missing_slots"] = result.data.get("missing_slots") or []
-                    state.context["role_agents"] = result.data.get("role_agents") or {}
-                    state.context["loadout_planner"] = result.data.get("loadout_planner") or {}
-                    state.context["stages"] = state.context.get("stages") or []
-                elif name == "ensure_missing_roles":
-                    created = result.data.get("created") or []
-                    state.context["created_agents"] = created
-                    state.context["forged_agents"] = result.data.get("forged") or []
-                    role_agents = dict(state.context.get("role_agents") or {})
-                    for c in created:
-                        role_agents[c["slot"]] = c["id"]
-                    state.context["role_agents"] = role_agents
-            return result
-
         if sess.status == "awaiting_confirm" and _CONFIRM_RE.search(text):
             harness.confirm(state, approved=True, note="用户确认规划")
             await self._commit(sess, state, harness, user_name=user_name)
@@ -401,25 +375,14 @@ class MissionBriefingAgent:
                 names=[a.name for a in atts],
             )
 
-        harness.emit(state, EventKind.WATERFALL, "① 查阅历史任务", step="history")
-        await run_tool("search_history", {"query": discussion})
-        harness.emit(state, EventKind.WATERFALL, "② 检索知识库", step="knowledge")
-        await run_tool("retrieve_knowledge", {"query": composed})
-        harness.emit(state, EventKind.WATERFALL, "③ 提案交付航线", step="pipeline")
-        await run_tool("propose_pipeline", {"title": sess.title, "brief": discussion})
-        harness.emit(state, EventKind.WATERFALL, "④ 匹配小队编制", step="loadout")
-        await run_tool(
-            "propose_loadout",
-            {"brief": discussion, "stages": state.context.get("stages") or []},
-        )
-        harness.emit(state, EventKind.WATERFALL, "⑤ 补齐缺失角色", step="roles")
-        await run_tool(
-            "ensure_missing_roles",
-            {
-                "slots": state.context.get("needed_slots") or [],
-                # 目录外角色的标题/能力描述：forge 草稿据此生成，比裸 slot 名可读
-                "missing": state.context.get("missing_slots") or [],
-            },
+        # 五步瀑布交给 LangGraph 图驱动：节点顺序、事件文案与参数取值
+        # 见 sortie_deck/harness/waterfall.py
+        await run_waterfall(
+            harness=harness,
+            harness_state=state,
+            title=sess.title,
+            composed=composed,
+            discussion=discussion,
         )
 
         draft = {
