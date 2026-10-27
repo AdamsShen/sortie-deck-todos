@@ -1,0 +1,84 @@
+items:
+  - id: agentops
+    name: AgentOps
+    vendor: AgentOps（商业 + OSS SDK）
+    license: SDK 开源；平台闭源
+    deploy: SaaS
+    otlp: 支持 OTLP 接入，但主路径是自有 SDK / 框架集成
+    code_change: 需加 SDK 或框架回调（CrewAI / AutoGen / OpenAI Agents SDK / LangGraph 等）
+    views:
+      - 会话回放（Time Travel Debugging）：按时间点 rewind / replay 一次 agent run
+      - 事件时间线（LLM 调用、工具、多 agent 交互按序排列）
+      - Delegation tree（委托树）
+      - Session drilldown + Insights dashboard
+      - Prompt 注入攻击审计
+    concurrency: 时间线 + 委托树；多 agent handoff 是显式一等公民
+    navigation: 以 session 为入口，回放式浏览；不是"先查指标再下钻"
+    genai: 强（模型、token、成本，400+ LLM 的价格表内置）
+    cost: 强（按事件聚合到 span / session / project 三级）
+    multi_agent: 相对最强的一档 —— 官方定位就是 agent-shaped 数据模型（委托树 + handoff + replay）
+    eval: 有基础能力，弱于 Braintrust
+    deeplink: 有 session / run 级深链
+    embed: 无
+    api: 有
+    storage: 托管
+    footprint: 零（SaaS）
+    limits:
+      - "回放"是指按记录重放视图，不等于确定性重执行（LLM 本身不可复现）
+      - 闭源 SaaS，数据出厂
+      - 免费额度 5k events/月，超出需付费
+
+  - id: braintrust
+    name: Braintrust
+    vendor: Braintrust（2026-02 $80M B 轮，估值约 $800M）
+    license: 闭源；自托管仅数据面
+    deploy: SaaS 为主
+    otlp: 支持 OTLP，但主路径是自有 SDK
+    code_change: 需接 SDK 或框架集成
+    views:
+      - Trace 视图（prompt / response / tool calls 实时查看）
+      - Topic 聚类：把相似失败自动分组
+      - 实验对比（playground → 数据集 → CI eval 闭环）
+      - 评分与人工标注
+    concurrency: 标准 trace 树，不是它的重点
+    navigation: 以 eval 为入口 —— "哪类输入在退化" → 找样本 → 改 prompt
+    genai: 强
+    cost: 有
+    multi_agent: 弱。Topic 聚类能分组相似失败，但不给 agent 间因果链
+    eval: 最强一档（CI 门禁、PR 回归、playground 闭环）
+    deeplink: 有
+    embed: 无
+    api: 有
+    storage: 托管
+    footprint: 零（SaaS）
+    limits:
+      - 偏 eval，trace 是配角；纯排障体验不如 LangSmith/Langfuse
+      - 闭源自托管不完整
+      - 多 agent 协作拓扑缺失
+
+  - id: helicone
+    name: Helicone
+    vendor: Helicone → 2026-03 被 Mintlify 收购，进入维护模式
+    license: Apache-2.0（部分组件）
+    deploy: SaaS 代理 或 自托管
+    otlp: 不走 OTLP，靠替换 `base_url` 做网关代理
+    code_change: 改 base_url 即可（一行配置）
+    views:
+      - 请求日志列表（prompt / completion / 成本 / 延迟 / 错误）
+      - 成本与用量看板（300+ 模型）
+      - 按 user / 会话分组
+    concurrency: 无 span 级结构，只有请求级记录
+    navigation: 从成本 / 延迟排行进入单条请求
+    genai: 中（能看到 prompt 与 completion，但没有树形结构）
+    cost: 强（这是它的核心卖点）
+    multi_agent: 无
+    eval: 无
+    deeplink: 有请求级深链
+    embed: 无
+    api: 有
+    storage: ClickHouse（自托管）
+    footprint: 低
+    limits:
+      - 无 span 级 trace，做不了"看一次 agent run 的内部结构"
+      - 代理模式是全局单点，网关故障会放大为全站故障
+      - 已被收购且进入维护模式，新项目不应选型

@@ -1,0 +1,75 @@
+fields:
+  basic:
+    - name: name
+      description: 产品 / 项目名与当前主版本
+      detail_level: 极简
+    - name: vendor
+      description: 维护方 / 商业模式（开源基金会、公司、被收购状态）
+      detail_level: 简要
+    - name: license
+      description: 许可证；闭源时标注自托管是否完整
+      detail_level: 简要
+    - name: deploy
+      description: 部署形态（SaaS / 自托管 / 单容器）与最小依赖
+      detail_level: 详细
+
+  ingestion:
+    - name: otlp
+      description: 是否原生接收 OTLP，能否直接吃现有埋点、是否需要 Collector
+      detail_level: 详细
+    - name: code_change
+      description: 接入是否需要改业务代码 / 换 SDK
+      detail_level: 简要
+
+  visualization:
+    - name: views
+      description: 提供的视图类型（瀑布图 / 火焰图 / 树 / 拓扑图 / 会话回放 / 散点）
+      detail_level: 详细
+    - name: concurrency
+      description: 并发分支（同一父下多个并行 span）的展示方式是否可辨
+      detail_level: 详细
+    - name: navigation
+      description: 检索与下钻方式（按 attribute 过滤、TraceQL/SQL、RED 指标入口）
+      detail_level: 详细
+
+  agent_fit:
+    - name: genai
+      description: 对 gen_ai.* 语义属性的识别程度（是否专门渲染 token、模型、prompt）
+      detail_level: 详细
+    - name: cost
+      description: token / 成本是否有专门视图与聚合
+      detail_level: 简要
+    - name: multi_agent
+      description: 多 agent 协作的展示能力（委托树、跨 agent 因果链、handoff）
+      detail_level: 详细
+    - name: eval
+      description: 是否内置评测（LLM-as-judge、数据集、回归门禁）
+      detail_level: 简要
+
+  integration:
+    - name: deeplink
+      description: 是否支持按 trace id 的稳定深链，格式是什么
+      detail_level: 详细
+    - name: embed
+      description: 是否可嵌入第三方产品（iframe / 匿名面板 / 组件库）
+      detail_level: 简要
+    - name: api
+      description: 是否有查询 API（用于把 trace 数据上卷到自有看板）
+      detail_level: 简要
+
+  ops:
+    - name: storage
+      description: 存储后端与保留策略
+      detail_level: 简要
+    - name: footprint
+      description: 最小资源占用，能否单机跑
+      detail_level: 简要
+
+  limits:
+    - name: limits
+      description: 明确不适合的场景（避免选型后才发现）
+      detail_level: 详细
+
+uncertain:
+  - 各产品 2026 年后的具体版本号（仅在检索到明确发布信息时填写）
+  - Jaeger / Tempo 深链 URL 的具体格式（随 UI 版本变化，落地前需实测）

@@ -1,0 +1,85 @@
+items:
+  - id: signoz
+    name: SigNoz
+    vendor: SigNoz Inc.（开源 + 云版）
+    license: MIT / Apache-2.0（核心开源）
+    deploy: Docker Compose / Kubernetes；组件含 OTel Collector、ClickHouse、query service、前端
+    otlp: 原生 OTLP，事实上的"开源 Datadog 替代"
+    code_change: 无
+    views:
+      - APM 总览（延迟分位、错误率、Apdex、数据库调用分解）
+      - Trace 瀑布图 + Flamegraph
+      - Trace funnels（漏斗，看链路在哪一跳流失）
+      - Service map
+      - 日志、异常、告警统一查询面
+    concurrency: 瀑布图 + 火焰图双视图；火焰图对并发分支的聚合展示更直观
+    navigation: 从指标图点进 trace，从 trace 点进日志；有查询构造器（不用写 SQL）
+    genai: 无专门语义；但有用户用 attribute 自建 LLM 看板
+    cost: 无内置 token 成本，可自定义
+    multi_agent: 无
+    eval: 无
+    deeplink: 支持按 trace id 跳转；格式随版本
+    embed: 无官方 iframe 方案
+    api: 有 API
+    storage: ClickHouse 统一存 traces / metrics / logs
+    footprint: 中等偏高。多组件 + ClickHouse，比 Uptrace 重
+    limits:
+      - 组件多，自托管运维成本不低
+      - 对 LLM/agent 无原生建模
+      - 大流量下 ClickHouse 调优需要经验
+
+  - id: skywalking
+    name: Apache SkyWalking
+    vendor: Apache 基金会（顶级项目）
+    license: Apache-2.0
+    deploy: OAP Server + UI + Agent；存储可选 BanyanDB（自研）/ Elasticsearch / MySQL
+    otlp: 支持 OTLP，但主路径是自家 agent 与 SW8 协议；接 OTLP 的成熟度弱于 Jaeger/Tempo
+    code_change: 用官方 agent 可零代码；直接发 OTLP 也行但拿不到 JVM 等深度指标
+    views:
+      - 2026-06 发布全新 Horizon UI
+      - 3D Infrastructure Map（三维基础设施拓扑）
+      - Trace explorer：在 duration 散点图上套索选中慢 trace，再用三种方式阅读
+      - Log explorer：Loki 风格，带 facets 与 top patterns
+      - 服务 / 实例 / 端点三级指标 + 告警
+    concurrency: 拓扑图擅长展示扇入扇出；单条 trace 仍是瀑布图
+    navigation: 典型路径是"先看拓扑 → 下钻端点 → 最后看 trace"，与 Jaeger 的"先 trace 后拓扑"相反
+    genai: 官网 2026 开始提 "observability for AI"，但公开材料里仍以通用 APM 为主
+    cost: 无
+    multi_agent: 无
+    eval: 无
+    deeplink: 支持按 trace id 查询；Horizon UI 的路径格式较新，需实测
+    embed: 无官方嵌入方案
+    api: GraphQL + REST
+    storage: BanyanDB（官方推荐）/ ES / MySQL
+    footprint: 中等偏高。OAP 集群 + 存储
+    limits:
+      - Java 生态烙印重，非 JVM 技术栈收益打折
+      - 数据模型是 Segment 而非纯 span，与 OTLP 语义有映射损耗
+      - 无 agent/eval 能力
+
+  - id: zipkin
+    name: Zipkin
+    vendor: OpenZipkin 社区
+    license: Apache-2.0
+    deploy: 单 JAR + 存储（内存 / MySQL / Cassandra / ES）
+    otlp: 支持 OTLP，但原生协议是 B3
+    code_change: 需接入 B3 或 Brave/Spring Sleuth
+    views:
+      - 调用链时间轴（线性瀑布图）
+      - 依赖图
+      - 按 traceID 精确查询（这一点很快）
+    concurrency: 同层并列，样式朴素
+    navigation: 只擅长"给我一条 trace"，不擅长"过去一小时整体健康如何"
+    genai: 无
+    cost: 无
+    multi_agent: 无
+    eval: 无
+    deeplink: `/zipkin/traces/<traceID>`，格式稳定
+    embed: 无
+    api: 有
+    storage: 内存 / MySQL / Cassandra / Elasticsearch
+    footprint: 低
+    limits:
+      - 事实上的维护状态，新特性停滞，新项目不建议
+      - 无 metrics / 告警 / 深度拓扑
+      - 只有 trace 单一维度，回答不了"整体健康状况"

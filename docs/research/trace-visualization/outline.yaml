@@ -1,0 +1,80 @@
+topic: AI 多 Agent 系统的全链路 trace 可视化
+created: 2026-10-27
+time_range: 不限
+depth: 全面（4 组 × 3 项）
+context: >-
+  背景是 Sortie Deck 刚完成 OpenTelemetry 全链路接入（mission.run → stage.run →
+  gen_ai.chat / execute_tool / retrieval.recall / process.exec），
+  现在要决定「这些 span 用什么界面看」。
+
+scope:
+  - A 通用分布式追踪 UI（能直接吃 OTLP，无需改埋点）
+  - B LLM / Agent 专用可观测平台（Agent 语义更强）
+
+out_of_scope:
+  - OpenObserve / OpenSearch（日志为主，trace 为辅）
+  - Datadog / Splunk / New Relic / Dynatrace（企业级商业 APM，部署门槛与成本不匹配当前阶段）
+  - 纯自研可视化组件的开源库调研（在落地方案里单独评估）
+
+items:
+  # --- A 通用追踪 UI ---
+  - id: jaeger
+    name: Jaeger
+    group: A
+    note: CNCF 标准，瀑布图 + SPM，单容器可跑，最常用的"零成本验证"后端
+  - id: grafana-tempo
+    name: Grafana Tempo + Traces Drilldown
+    group: A
+    note: 对象存储 + TraceQL，3.0 新架构，生态最完整
+  - id: uptrace
+    name: Uptrace
+    group: A
+    note: Go 单二进制 + ClickHouse，资源占用最低
+  - id: signoz
+    name: SigNoz
+    group: A
+    note: 开源 Datadog 替代，APM + 告警 + 日志三合一
+  - id: skywalking
+    name: Apache SkyWalking
+    group: A
+    note: 2026 新 Horizon UI，3D 拓扑 + Trace explorer，国内常见
+  - id: zipkin
+    name: Zipkin
+    group: A
+    note: 老牌，B3 协议，作为"是否已过时"的对照组
+
+  # --- B LLM / Agent 平台 ---
+  - id: langsmith
+    name: LangSmith
+    group: B
+    note: LangGraph 原生，run 树 + Studio 图模式，本项目技术栈最贴近
+  - id: langfuse
+    name: Langfuse
+    group: B
+    note: MIT 开源（2026-01 被 ClickHouse 收购），trace 树 + session + prompt 管理
+  - id: arize-phoenix
+    name: Arize Phoenix
+    group: B
+    note: OTel 原生，agent 图可视化 + embedding 降维 + 漂移检测
+  - id: agentops
+    name: AgentOps
+    group: B
+    note: 会话回放（time-travel debugging）+ delegation tree，自称唯一 agent-shaped 数据模型
+  - id: braintrust
+    name: Braintrust
+    group: B
+    note: eval 优先，Topic 聚类做失败分组
+  - id: helicone
+    name: Helicone
+    group: B
+    note: 网关型，改 base_url 即接入；2026-03 被收购后进入维护模式
+
+execution:
+  batch_size: 4
+  items_per_agent: 3
+  output_dir: ./results
+  groups:
+    - { file: group_a_general_1.yaml, items: [jaeger, grafana-tempo, uptrace] }
+    - { file: group_b_general_2.yaml, items: [signoz, skywalking, zipkin] }
+    - { file: group_c_llm_1.yaml, items: [langsmith, langfuse, arize-phoenix] }
+    - { file: group_d_llm_2.yaml, items: [agentops, braintrust, helicone] }

@@ -1,0 +1,86 @@
+items:
+  - id: jaeger
+    name: Jaeger
+    vendor: CNCF（graduated），社区维护
+    license: Apache-2.0
+    deploy: 单容器 `all-in-one` 可跑（内存/Badger 存储）；生产可分离 collector / query / storage
+    otlp: 原生接收 OTLP（同时兼容 Jaeger 自有协议、Zipkin）
+    code_change: 无（只要发了 OTLP 就能看）
+    views:
+      - Trace timeline（经典瀑布图，span 按时间轴嵌套）
+      - Search（按 service / operation / attributes / duration / 时间窗过滤）
+      - Compare（两条 trace 并排对比，定位性能回归）
+      - Dependencies（服务依赖图）
+      - Monitor tab = SPM（把 span 聚合成 RED 指标，无需事先知道服务名）
+    concurrency: 并行 span 在瀑布图里同层并列展示，时间轴可辨；但没有"分支标签"概念
+    navigation: 以 trace 为入口；检索能力限于固定字段 + attribute 过滤，没有查询语言
+    genai: 无 agent 语义。`gen_ai.*` 只会作为普通 attribute 罗列，token 不专门渲染
+    cost: 无
+    multi_agent: 无委托树 / handoff 概念，只能靠 span 层级和 attribute 自行解读
+    eval: 无
+    deeplink: 支持按 trace id 定位，典型路径 `/trace/<traceID>`（新版 UI；旧版为 `/search?traceID=`），落地前需按实际版本核对
+    embed: 无官方嵌入组件；通常用深链跳转
+    api: 有 query HTTP API，可程序化取 trace
+    storage: Badger（单机）/ Cassandra / Elasticsearch / OpenSearch / ClickHouse
+    footprint: 极低，单容器即可；本地验证的事实标准
+    limits:
+      - 只有 trace 视角，没有 metrics/logs 联动、没有告警
+      - 没有 agent 语义，多 agent 协作只能靠层级硬读
+      - SPM 需额外启动 jaeger-query 的 metrics 存储配置，不是零配置
+
+  - id: grafana-tempo
+    name: Grafana Tempo + Traces Drilldown
+    vendor: Grafana Labs
+    license: AGPL-3.0（Tempo）；Grafana OSS 为 AGPL
+    deploy: 需要 Grafana + Tempo 两套；Tempo 依赖对象存储（S3/GCS/本地盘）+ 可选 Kafka
+    otlp: 原生接收 OTLP，也兼容 Jaeger / Zipkin 协议
+    code_change: 无
+    views:
+      - Explore 里的 trace 瀑布图
+      - Traces Drilldown（2025-04-25 GA）：queryless，用 RED 三指标（Rate / Errors / Duration）做入口
+      - Drilldown 标签页：Breakdown / Comparison / Service structure / Root cause errors / Root cause latency / Exceptions / Trace list
+      - Service graph（由 metrics-generator 生成）
+      - Duration 热力图（分布，不是单条）
+    concurrency: 瀑布图同层并列；Service structure 页能看跨服务的扇出关系
+    navigation: TraceQL（结构化查询语言）+ 点击式 Drilldown 两条路径；与 Loki（日志）、Mimir（指标）用 exemplar 双向跳转
+    genai: 无专门语义。`gen_ai.*` 可作 attribute 过滤和 Breakdown 维度，但没有专门的 token/prompt 面板
+    cost: 无内置；但可以用 TraceQL metrics 从 span 属性上算聚合
+    multi_agent: 无委托树；Service structure 能看"谁调用谁"，但那是服务拓扑不是 agent 协作拓扑
+    eval: 无
+    deeplink: 支持 `/explore?left=...{traceId}` 与 `/traces/{traceId}` 形式；具体随 Grafana 版本与数据源变化
+    embed: 强项。Grafana panel 支持 iframe 嵌入（需开 anonymous access 或 service account token）
+    api: Grafana HTTP API + Tempo API；TraceQL 可程序化查询
+    storage: 对象存储（无需单独索引；Tempo 3.0 起 TraceQL metrics 不再依赖 metrics-generator）
+    footprint: 中等。单机 docker-compose 可跑，但 Grafana + Tempo + 对象存储是三件套
+    limits:
+      - 要维护 Grafana 与 Tempo 两套，比 Jaeger 重
+      - TraceQL 有学习曲线（Drilldown 缓解了一部分）
+      - 没有 agent/eval 语义，LLM 相关只能靠自定义 dashboard
+
+  - id: uptrace
+    name: Uptrace
+    vendor: Uptrace（开源 + 云版）
+    license: AGPL-3.0（核心）
+    deploy: Go 单二进制 + ClickHouse（ClickHouse 是唯一依赖）
+    otlp: 原生 OTLP，无需额外 Collector
+    code_change: 无
+    views:
+      - 服务总览 dashboard（延迟、错误率、吞吐）
+      - Trace 瀑布图
+      - Service graph
+      - 日志与 span 关联
+    concurrency: 标准瀑布图同层并列
+    navigation: 从指标图点进 trace，从 trace 点进日志，一条查询路径贯通
+    genai: 无专门语义
+    cost: 无
+    multi_agent: 无
+    eval: 无
+    deeplink: 支持按 trace id 的页面路径；格式随版本，需实测
+    embed: 无官方嵌入方案
+    api: 有查询 API
+    storage: ClickHouse（TTL 控制保留期）
+    footprint: 低。单二进制设计，官方定位是"小团队 / 边缘部署"
+    limits:
+      - 功能面窄于 SigNoz，社区规模小
+      - 告警与协作能力有限
+      - 无 agent 语义

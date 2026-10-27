@@ -1,0 +1,87 @@
+items:
+  - id: langsmith
+    name: LangSmith
+    vendor: LangChain（闭源商业，有企业自托管）
+    license: 闭源；自托管仅企业版
+    deploy: SaaS 为主（US / EU / APAC 分区）；企业版可自托管
+    otlp: 支持 OTLP 导出（`langsmith[otel]` + `LANGSMITH_OTEL_ENABLED`），但入口仍是 LangChain 回调
+    code_change: LangGraph 应用几乎为零（设环境变量即可）；非 LangChain 栈需用 SDK 手动埋点
+    views:
+      - Run tree（每个 run 有嵌套子 run，天然对应 agent → tool → llm 三层）
+      - Thread 视图（多轮会话聚合）
+      - Studio：graph mode（把 LangGraph 图结构画出来）+ chat mode（对话式调试）
+      - 数据集 / 实验对比视图
+      - LangSmith Engine：自动聚类"还没被发现的"问题
+    concurrency: run tree 用缩进表达父子，并行 run 同层并列；图模式能看节点拓扑
+    navigation: 从 trace 到数据集、到 eval、到 prompt 实验，闭环最完整
+    genai: 强。模型、token、prompt/completion、工具调用都是原生渲染，不用自己解析属性
+    cost: 有（token 与费用聚合）
+    multi_agent: 有 run tree，但没有"agent 间因果链"；跨 agent 归因仍需人工顺树读
+    eval: 强（数据集、LLM-as-judge、在线评估、CI 回归）
+    deeplink: 有稳定深链（项目 + run/trace id）
+    embed: 无公开 iframe 方案
+    api: 有完整 API
+    storage: 托管
+    footprint: 零（SaaS）；自托管需企业版
+    limits:
+      - 闭源，按 trace 计价（公开价约 $39/席 + $2.50/1k traces），规模化后成本显著
+      - 事实绑定 LangChain 生态；非该栈的 agent 拿不到图模式
+      - 数据出厂，对数据合规敏感的场景受限
+
+  - id: langfuse
+    name: Langfuse
+    vendor: Langfuse GmbH → 2026-01 被 ClickHouse 收购
+    license: MIT（核心全功能）；企业版加 SSO/RBAC
+    deploy: Docker Compose / Kubernetes(Helm) / AWS/GCP/Azure Terraform；自托管全功能免费
+    otlp: 原生支持 OTLP 摄入，同时有自有 SDK
+    code_change: 已有 OTLP 埋点则无需改代码
+    views:
+      - Trace 树（observation 嵌套：trace → span → generation）
+      - Session 视图（把同一会话的多条 trace 串起来）
+      - Prompt 管理（版本化）
+      - 数据集 + eval + 人工标注队列
+      - 成本 / 延迟聚合看板
+    concurrency: 树形缩进 + 时间轴；并行 span 同层
+    navigation: 从 trace 到 session 到数据集；支持按 user/session/tag/metadata 过滤
+    genai: 强。generation 是一等公民，输入输出、token、模型、成本都原样渲染
+    cost: 强（按模型单价算，可按 trace/session/user 聚合）
+    multi_agent: 弱。官方定位是 per-agent scope，没有跨 agent 委托树
+    eval: 强（LLM-as-judge、数据集、实验）
+    deeplink: 有稳定深链（project + trace id）
+    embed: 无公开 iframe；可自建前端调 API
+    api: 全量 REST API + S3 导出（数据可带走）
+    storage: Postgres（元数据）+ ClickHouse（trace）+ S3（大对象）
+    footprint: 中等。ClickHouse + Postgres + Redis + MinIO 一套；小规模可精简
+    limits:
+      - 自托管要运维 ClickHouse，规模大时并不轻松
+      - 多 agent 因果链缺失
+      - 被收购后的长期路线存在不确定性（但 MIT 许可保证可 fork）
+
+  - id: arize-phoenix
+    name: Arize Phoenix
+    vendor: Arize AI
+    license: Apache-2.0（OSS 切片）+ Arize AX（商业）
+    deploy: `pip install arize-phoenix` 后 `px.launch_app()` 本地起 UI；也可容器自托管
+    otlp: 最彻底的 OTel 原生（OpenInference 语义约定），任何 OTel 数据都能进
+    code_change: 无（直接发 OTLP 即可）
+    views:
+      - Trace 树 / 瀑布图
+      - Agent 图可视化：节点是 LLM 调用，边是数据流向
+      - Embedding 降维散点图（看语义空间聚集与漂移）
+      - 漂移检测与性能退化监控
+      - Eval 结果面板
+    concurrency: 树 + 图两种；图视图对"递归/循环模式"识别有优势
+    navigation: 从 trace 到 eval 到数据集；支持按 span kind / attribute 过滤
+    genai: 强（token、模型、prompt 原生渲染）
+    cost: 有（token 与成本）
+    multi_agent: 有限。agent 图能表达单 agent 内的调用拓扑与递归，出不了 agent 边界
+    eval: 强（幻觉 / QA / 相关性等内置 evaluator）
+    deeplink: 有（trace id 路径）
+    embed: OSS 前端可自行部署
+    api: 有
+    storage: SQLite（本地默认）/ Postgres
+    footprint: 低（本地模式一条命令）；生产耐久性在商业版 AX
+    limits:
+      - OSS 是"切片"，生产级耐久性、告警、SSO 在付费 AX
+      - 多 agent 协作拓扑仍不支持
+      - 本地 SQLite 模式不适合多实例共享
