@@ -19,6 +19,28 @@
 | 任务记忆 | `mission_memory.py` → `data/missions/<id>/memory/` |
 | 共享记忆 | `memory.py`（`MemoryStore` + 可选 mem0） |
 | API | `GET /api/harnesses`、`PATCH /api/initiatives/{id}/harness`、HITL `switch_harness` |
+| 瀑布图编排 | `harness/waterfall.py`（五步确定性 `StateGraph`） |
+| LLM 接入层 | `llm.py` 门面 + `llm_chain.py`（LangChain `ChatOpenAI` 单一实现） |
+
+### 1.1 建队瀑布图（LangGraph）
+
+建队规划的五步瀑布已从接口层收回 `harness/` 目录，由 `harness/waterfall.py`
+的 LangGraph 图驱动：
+
+```text
+START → search_history → retrieve_knowledge → propose_pipeline
+      → propose_loadout → ensure_missing_roles → END
+```
+
+- **固定边，不用 `create_react_agent`**：前端依赖固定的 `data.step` 序列
+  （`history` / `knowledge` / `pipeline` / `loadout` / `roles`）渲染瀑布动画，
+  且 `ensure_missing_roles` 有「创建角色」的副作用，不能让模型决定调用次数。
+- **先 emit 事件、再调工具**，事件文案与顺序与旧实现逐字一致。
+- **工具失败不中断链路**：`call_tool` 把异常收成 `ok=False`，只是不写
+  `context`，后续节点读到空值继续跑。
+- **不挂 checkpointer**：会话持久化仍由 `BriefingStore` 承担，避免双写。
+- `harness/__init__.py` 的 `HarnessEvent` / `ToolSpec` / `Harness` 契约不变，
+  前端、存储格式与 `harness_providers/` 零改动。
 
 ## 2. Provider
 

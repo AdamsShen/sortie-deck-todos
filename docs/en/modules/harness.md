@@ -19,6 +19,31 @@ Two related but distinct layers:
 | Mission memory | `mission_memory.py` → `data/missions/<id>/memory/` |
 | Shared memory | `memory.py` (`MemoryStore` + optional mem0) |
 | API | `GET /api/harnesses`, `PATCH /api/initiatives/{id}/harness`, HITL `switch_harness` |
+| Waterfall graph | `harness/waterfall.py` (five-node deterministic `StateGraph`) |
+| LLM transport | `llm.py` façade + `llm_chain.py` (LangChain `ChatOpenAI`, the only implementation) |
+
+### 1.1 Briefing waterfall graph (LangGraph)
+
+The five-step briefing waterfall now lives in `harness/` instead of the HTTP
+layer, driven by a LangGraph graph in `harness/waterfall.py`:
+
+```text
+START → search_history → retrieve_knowledge → propose_pipeline
+      → propose_loadout → ensure_missing_roles → END
+```
+
+- **Fixed edges, not `create_react_agent`**: the workbench renders the waterfall
+  animation from a fixed `data.step` sequence (`history` / `knowledge` /
+  `pipeline` / `loadout` / `roles`), and `ensure_missing_roles` has a
+  create-agents side effect that must not be model-driven.
+- **Emit before calling the tool**, keeping event text and order identical to
+  the previous implementation.
+- **A failing tool does not break the chain**: `call_tool` folds exceptions into
+  `ok=False`, the value is simply not written to `context`.
+- **No checkpointer**: `BriefingStore` remains the single source of truth, so
+  there is no double write.
+- `harness/__init__.py` contracts (`HarnessEvent` / `ToolSpec` / `Harness`) are
+  unchanged — the workbench, storage format and `harness_providers/` are untouched.
 
 ## 2. Providers
 

@@ -62,6 +62,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Executors gained an optional `run_session(ctx, host)` entry point; `run()`-only executors are unaffected
 - **Collaboration capabilities are enabled by default** (`subroom_enabled`, `loadout_auto`, `mcp_call_enabled`, `skill_run_enabled`, `im_escalation`); each degrades safely when its dependency is missing, and setting it to `false` disables it
 - **Agent switching is a graph node jump and the only routing mechanism**: there are no static edges between stages any more — every node announces its next hop in `handoff_target` and a conditional edge consumes it, with the frozen plan as the router's default. Agent hand-offs, manager join decisions and HITL verdicts all travel through that one router; the legacy `TDT_AGENT_HANDOFF` / `TDT_MANAGER_JOIN_DECISION` switches were removed
+- **LLM access layer moved to LangChain ChatModel**: `LlmClient` now routes through `langchain_openai.ChatOpenAI` (`llm_chain.py`); the old hand-written httpx path was deleted outright (no runtime switch). `chat_json` / `chat_text` signatures, `backend` values (`http` / `claude_cli` / `none`) and the `claude -p` fallback are unchanged, so all call sites and existing tests are untouched. Endpoints that reject `response_format` retry once without it
+- **Briefing waterfall is now a LangGraph subgraph**: the five-step plan waterfall (history → knowledge → pipeline → loadout → roles) moved out of `mission_briefing.py` into `harness/waterfall.py` as a fixed-edge `StateGraph`. Event order, `data.step` values and tool arguments are unchanged, and a failing tool still doesn't break the chain. No checkpointer — `BriefingStore` remains the single source of truth
 
 ## [0.1.0] — 2026-09-23
 
