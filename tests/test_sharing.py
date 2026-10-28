@@ -63,9 +63,17 @@ def test_access_stranger_rejected():
     assert ei.value.status_code == 403
 
 
-def test_access_legacy_task_without_owner_open():
-    """旧数据 created_by 为 None 时放行（保持历史行为）。"""
-    _ensure_mission_access(_ini(None), _user("usr_any"))
+def test_access_legacy_task_without_owner_admin_only():
+    """无归属历史任务仅 admin 可访问，普通成员需回填后由 owner 显式共享。"""
+    with pytest.raises(HTTPException) as ei:
+        _ensure_mission_access(_ini(None), _user("usr_any"))
+    assert ei.value.status_code == 403
+    _ensure_mission_access(_ini(None), _user("usr_root", "admin"))
+
+
+def test_access_legacy_task_with_explicit_share_allowed():
+    """无归属任务被显式共享后，被共享者仍可访问（共享优先于归属兜底）。"""
+    _ensure_mission_access(_ini(None, ["usr_shared"]), _user("usr_shared"))
 
 
 def test_delete_owner_only():
@@ -82,15 +90,17 @@ def test_delete_owner_only():
 
 
 def test_visible_initiatives_filter():
-    """列表按账号过滤：创建者可见自己的 + 被共享的 + 旧数据任务；admin 全可见。"""
+    """列表按账号过滤：仅自己的 + 被共享的；无归属任务仅 admin 可见。"""
     mine = _ini("usr_me")
     shared_to_me = _ini("usr_other", ["usr_me"])
     stranger = _ini("usr_other", ["usr_zzz"])
     legacy = _ini(None)
-    items = [mine, shared_to_me, stranger, legacy]
+    legacy_shared_to_me = _ini(None, ["usr_me"])
+    items = [mine, shared_to_me, stranger, legacy, legacy_shared_to_me]
 
     me = _visible_initiatives(items, _user("usr_me"))
     assert [i.created_by for i in me] == ["usr_me", "usr_other", None]
+    assert [s.user_id for s in me[-1].shared_with] == ["usr_me"]
 
     admin = _visible_initiatives(items, _user("usr_root", "admin"))
-    assert len(admin) == 4
+    assert len(admin) == 5

@@ -51,6 +51,19 @@ TokenPayload { token, user: PublicUser }
 
 Token（现状）：用 `token_secret`（开发默认 `tdt-dev-secret`）对 `user_id|expiry|nonce` 做 HMAC。
 
+### 任务归属与可见性
+
+任务（Initiative）用 `created_by`（创建者用户 id）与 `shared_with`（显式共享账号）做多租户隔离：
+
+| 场景 | 可见 / 可操作范围 |
+|------|------------------|
+| 创建者 | 列表可见；详情、对话、出击/停止、HITL、共享给他人；可删除 |
+| 被共享用户 | 列表可见；除删除外的全部任务权限 |
+| admin | 全部任务（含无归属任务） |
+| 无归属任务（`created_by` 为空） | 仅 admin；成员需等回填创建者或显式共享 |
+
+写入归属的入口：`POST /api/initiatives`（登录用户）、规划官建队（`BriefingSession.owner_id`）、`sortie smoke`（`--owner`，默认第一个 admin）。历史数据回填：`scripts/backfill_mission_owner.py`（`--dry-run` 预览，`--share-with` 显式共享）。
+
 ## 5. API 契约
 
 | 方法 | 路径 | 鉴权 | 说明 |

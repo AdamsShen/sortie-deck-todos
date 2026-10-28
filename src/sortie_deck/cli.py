@@ -15,13 +15,35 @@ def _fail(message: str, code: int = 1) -> NoReturn:
     raise SystemExit(code)
 
 
-async def _smoke(brief: str, auto_approve: bool) -> int:
+def _resolve_owner_id(owner_username: str | None) -> str:
+    """解析 CLI 建队任务的归属用户 id。
+
+    CLI 没有登录态，若不显式归属会建出 created_by 为空的孤儿任务
+    （对所有登录账号可见）。默认归属第一个 admin，也可用 --owner 指定。
+    """
+    from sortie_deck.auth import AuthStore
+    from sortie_deck.settings import settings
+
+    auth = AuthStore(settings.users_db, settings.resolved_token_secret())
+    if owner_username:
+        user = auth.get_by_username(owner_username)
+        if not user:
+            _fail(f"owner user not found: {owner_username}")
+        return user.id
+    admin = next((u for u in auth.list_users() if u.role == "admin"), None)
+    if not admin:
+        _fail("no admin account found; pass --owner <username>")
+    return admin.id
+
+
+async def _smoke(brief: str, auto_approve: bool, owner_username: str | None = None) -> int:
     from sortie_deck import observability as obs
     from sortie_deck.settings import settings
 
     # CLI 不走 FastAPI lifespan：追踪必须在这里显式初始化，否则本地跑 smoke
     # 永远验证不了 span；收尾不 shutdown 的话 BatchSpanProcessor 队列里的会丢。
     obs.init_tracing(settings)
+    owner_id = _resolve_owner_id(owner_username)
     orch = Orchestrator()
     await orch.startup()
     try:
@@ -33,6 +55,7 @@ async def _smoke(brief: str, auto_approve: bool) -> int:
                 # 冒烟契约是 mock 管线：显式固定 harness，否则会走默认真实 CLI
                 harness="mock",
                 auto_start=True,
+                created_by=owner_id,
             )
         )
         print(f"created {ini.id} thread={ini.thread_id}")
@@ -108,6 +131,11 @@ def main(argv: list[str] | None = None) -> None:
         "--no-auto-approve",
         action="store_true",
         help="Stop at the first HITL instead of auto-approving",
+    )
+    smoke.add_argument(
+        "--owner",
+        default=None,
+        help="Username that owns the created mission (default: first admin account)",
     )
 
     sub.add_parser("doctor", help="Check runtime readiness (secret, data dir, port)")
@@ -198,7 +226,9 @@ def main(argv: list[str] | None = None) -> None:
                     print(f"  - {hit.score:.4f} {hit.title} [{hit.source}]")
                 raise SystemExit(0)
         if args.cmd == "smoke":
-            code = asyncio.run(_smoke(args.brief, auto_approve=not args.no_auto_approve))
+            code = asyncio.run(
+                _smoke(args.brief, auto_approve=not args.no_auto_approve, owner_username=args.owner)
+            )
             raise SystemExit(code)
         if args.cmd == "api":
             import uvicorn

@@ -47,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Mission ownership leak**: missions created by the briefing harness or `sortie smoke` had no `created_by`, and the visibility rule treated owner-less rows as visible to every account — a member could list, open, run and even delete another user's mission. Briefing sessions now carry `owner_id` (`start(owner_id=...)` / `handle(user_id=...)`) and stamp it when the mission is created; the CLI resolves an owner (`--owner`, default first admin); owner-less rows are admin-only, with `shared_with` still granting explicit access. `scripts/backfill_mission_owner.py` backfills historical rows (`--dry-run`, `--share-with`)
 - **Codex provider**: probe accepts `$CODEX_HOME/auth.json` (no more false `auth_required`), parses the `item.completed` JSONL protocol (legacy format kept), runs with `stdin=DEVNULL` and `TDT_CODEX_SANDBOX` (default `workspace-write`), and maps credential failures to `needs_auth`
 - **Orchestrator singleton**: an explicitly constructed `Orchestrator` now becomes the active instance, so graph-level sub-room / escalation hosts resolve the mission instead of a lazily created default instance (CLI and embedded runs)
 - **QA gate loop**: approving a `qa_verify` gate without a declared verdict no longer bounces back to build forever

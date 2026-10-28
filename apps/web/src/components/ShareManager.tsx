@@ -28,8 +28,9 @@ export function ShareManager({ token, lang, initiative, currentUser, onClose, on
   const [busy, setBusy] = useState(false);
 
   const tr = (key: I18nKeyLocal) => t(lang, key);
+  // 无归属任务仅 admin 视为 owner（与后端 _ensure_mission_owner 一致）
   const isOwner = Boolean(
-    currentUser && (!initiative.created_by || initiative.created_by === currentUser.id || currentUser.role === "admin")
+    currentUser && (initiative.created_by === currentUser.id || currentUser.role === "admin")
   );
 
   useEffect(() => {

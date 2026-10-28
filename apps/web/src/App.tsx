@@ -841,9 +841,9 @@ export default function App() {
     };
   }, [token, memPanelOpen, selectedId]);
 
-  // 当前账号是否为任务创建者（旧数据 created_by 为空视为 owner，保持历史行为）
+  // 当前账号是否为任务创建者；无归属任务仅 admin 视为 owner（与后端 _ensure_mission_owner 一致）
   const isMissionOwner = Boolean(
-    user && (!selected?.created_by || selected.created_by === user.id || user.role === "admin")
+    user && (selected?.created_by === user.id || user.role === "admin")
   );
 
   // 打开详情页共享抽屉时拉取最新共享成员列表（只读展示）
@@ -2869,7 +2869,7 @@ export default function App() {
             <div className="list">
               {filtered.map((item) => {
                 const shared = item.shared_with || [];
-                const canDelete = !item.created_by || item.created_by === user?.id || user?.role === "admin";
+                const canDelete = item.created_by === user?.id || user?.role === "admin";
                 return (
                   <div key={item.id} className={`mission-wrap ${item.id === selectedId ? "active" : ""}`}>
                     {/* 卡片用 div 承载：footer 内要放共享/删除按钮，button 嵌 button 非法 */}

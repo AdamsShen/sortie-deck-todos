@@ -51,6 +51,19 @@ TokenPayload { token, user: PublicUser }
 
 Token format (current): HMAC over `user_id|expiry|nonce` using `token_secret` (dev default `tdt-dev-secret`).
 
+### Mission ownership and visibility
+
+Missions are isolated by `created_by` (owner user id) and `shared_with` (explicitly shared accounts):
+
+| Actor | Scope |
+|-------|-------|
+| Owner | Listed; detail, chat, start/stop, HITL, share with others; can delete |
+| Shared user | Listed; every mission permission except delete |
+| Admin | All missions, including owner-less ones |
+| Owner-less mission (`created_by` empty) | Admin only; members need a backfilled owner or an explicit share |
+
+Ownership is written by `POST /api/initiatives` (logged-in user), the briefing harness (`BriefingSession.owner_id`) and `sortie smoke` (`--owner`, default first admin). Historical rows are backfilled by `scripts/backfill_mission_owner.py` (`--dry-run` to preview, `--share-with` for explicit grants).
+
 ## 5. API contract
 
 | Method | Path | Auth | Notes |

@@ -97,12 +97,15 @@ def get_auth() -> AuthStore:
 
 
 def _ensure_mission_owner(ini: Any, user: PublicUser) -> None:
-    """多租户归属校验：仅创建者或 admin 可执行删除等 owner 专属操作。
+    """多租户归属校验：仅创建者或 admin 可执行删除、共享等 owner 专属操作。
 
-    旧数据 created_by 为 None 时放行（无归属信息，无法判定），避免历史任务不可用。
+    无归属任务（created_by 为空）只允许 admin：历史数据应先用
+    scripts/backfill_mission_owner.py 回填创建者，不再放行任意登录用户。
     """
+    if user.role == "admin":
+        return
     created_by = getattr(ini, "created_by", None)
-    if created_by and created_by != user.id and user.role != "admin":
+    if not created_by or created_by != user.id:
         raise HTTPException(403, "仅任务创建者或 admin 可执行该操作")
 
 
@@ -115,14 +118,18 @@ def _ensure_mission_access(ini: Any, user: PublicUser) -> None:
     """任务访问校验：创建者 / admin / 被共享用户可访问（删除另有 owner 校验）。
 
     共享用户拥有除删除外的全部权限（查看详情/对话、启动/停止、HITL 等）。
-    旧数据 created_by 为 None 时放行，保持历史任务行为不变。
+    无归属任务（created_by 为空）仅 admin 可访问：这类历史数据需先跑
+    scripts/backfill_mission_owner.py 回填创建者，或由 owner 显式共享。
     """
+    if user.role == "admin":
+        return
+    # 显式共享优先：无归属的历史任务只要 owner 共享过，被共享者仍可访问
+    if _is_mission_shared_with(ini, user.id):
+        return
     created_by = getattr(ini, "created_by", None)
     if not created_by:
-        return
-    if user.role == "admin" or created_by == user.id:
-        return
-    if _is_mission_shared_with(ini, user.id):
+        raise HTTPException(403, "该任务无归属信息，仅管理员可访问；请先回填创建者")
+    if created_by == user.id:
         return
     raise HTTPException(403, "无权访问该任务（未共享给当前账号）")
 
@@ -130,15 +137,15 @@ def _ensure_mission_access(ini: Any, user: PublicUser) -> None:
 def _visible_initiatives(items: list[Any], user: PublicUser) -> list[Any]:
     """任务列表按账号过滤：创建者 / 被共享用户 / admin 可见。
 
-    旧数据 created_by 为 None 时无归属信息，保持全员可见（与既有行为一致）。
+    无归属任务（created_by 为空）仅 admin 可见，不再全站放行；
+    其他账号要访问必须由 owner 通过 shared_with 显式共享。
     """
     if user.role == "admin":
         return items
     return [
         i
         for i in items
-        if not getattr(i, "created_by", None)
-        or i.created_by == user.id
+        if getattr(i, "created_by", None) == user.id
         or _is_mission_shared_with(i, user.id)
     ]
 
@@ -1823,7 +1830,8 @@ class BriefingMessageBody(BaseModel):
 
 @app.post("/api/briefing/sessions")
 async def start_briefing(user: PublicUser = Depends(require_user)) -> dict[str, Any]:
-    sess = get_briefing().start()
+    # 会话发起人即任务归属人：确认建队时写入 created_by（见 MissionBriefingAgent._commit）
+    sess = get_briefing().start(owner_id=user.id)
     return sess.model_dump(mode="json")
 
 
@@ -1853,6 +1861,7 @@ async def post_briefing_message(
             session_id,
             body.text,
             user_name=user.display_name or user.username,
+            user_id=user.id,
             attachments=atts,
             materials=list(body.materials or []),
         )

@@ -47,8 +47,10 @@ def test_mission_briefing_plan_confirm_create(tmp_path: Path):
         default_coding_executor="mock",
     )
     created: list[Initiative] = []
+    reqs: list[CreateInitiativeRequest] = []
 
     async def create(req: CreateInitiativeRequest) -> Initiative:
+        reqs.append(req)
         ini = Initiative(title=req.title, brief=req.brief, template="default")
         created.append(ini)
         return ini
@@ -66,15 +68,20 @@ def test_mission_briefing_plan_confirm_create(tmp_path: Path):
     )
 
     async def _run():
-        sess = agent.start()
-        sess = await agent.handle(sess.id, "门户预发健康检查 iOS Web 后端", user_name="Ada")
+        sess = agent.start(owner_id="usr_ada")
+        assert sess.owner_id == "usr_ada"
+        sess = await agent.handle(
+            sess.id, "门户预发健康检查 iOS Web 后端", user_name="Ada", user_id="usr_ada"
+        )
         assert sess.status == "awaiting_confirm"
         assert any(e.kind == EventKind.WATERFALL for e in sess.events)
         assert sess.draft.get("stages")
-        sess = await agent.handle(sess.id, "确认", user_name="Ada")
+        sess = await agent.handle(sess.id, "确认", user_name="Ada", user_id="usr_ada")
         assert sess.status == "done"
         assert sess.initiative_id
         assert created and created[0].title
+        # 简报建队必须写入归属，否则任务会落进无归属口径
+        assert reqs and reqs[0].created_by == "usr_ada"
 
     asyncio.run(_run())
 

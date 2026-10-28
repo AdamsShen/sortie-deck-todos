@@ -75,6 +75,9 @@ class BriefingSession(BaseModel):
     # them from the client's material panel snapshot.
     materials: list[ExternalMaterial] = Field(default_factory=list)
     initiative_id: str | None = None
+    # 会话发起人用户 id：确认建队时写入任务的 created_by，
+    # 否则简报创建的任务无归属，会落进"全员可见"的旧数据兜底口径
+    owner_id: str = ""
     created_at: str = Field(default_factory=lambda: utc_now().isoformat())
     updated_at: str = Field(default_factory=lambda: utc_now().isoformat())
 
@@ -249,8 +252,10 @@ class MissionBriefingAgent:
 
         return resolve_coding_executor(self.cfg.default_coding_executor)
 
-    def start(self) -> BriefingSession:
+    def start(self, *, owner_id: str = "") -> BriefingSession:
+        """开启建队会话；owner_id 为发起人用户 id，确认建队时作为任务创建者。"""
         sess = self.store.create()
+        sess.owner_id = owner_id
         coding = self._coding_executor()
         sess.coding_executor = coding
         llm = self._llm()
@@ -282,10 +287,15 @@ class MissionBriefingAgent:
         text: str,
         *,
         user_name: str = "Operator",
+        user_id: str = "",
         attachments: list[BriefingAttachment] | None = None,
         materials: list[ExternalMaterial] | None = None,
     ) -> BriefingSession:
         sess = self.store.get(session_id)
+        # 存量会话（新增 owner_id 之前创建）没有归属：由首个续聊的操作人补绑，
+        # 之后不再改写，避免他人接手会话时把任务挪到自己名下
+        if user_id and not sess.owner_id:
+            sess.owner_id = user_id
         text = (text or "").strip()
         atts = _sanitize_attachments(attachments)
         # Materials snapshot is refreshed only when provided, so the confirm
@@ -503,6 +513,8 @@ class MissionBriefingAgent:
                 if repos
             },
             creator_name=user_name,
+            # 归属到会话发起人；owner_id 为空时留 None（仅 admin 可见，见 app._visible_initiatives）
+            created_by=sess.owner_id or None,
             auto_confirm_pipeline=False,
             auto_start=False,
         )
