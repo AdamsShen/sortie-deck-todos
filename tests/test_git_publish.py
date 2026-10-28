@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from sortie_deck.git_publish import (
+    cleanup_repos,
     cleanup_workspace,
     is_dirty,
     mission_branch,
@@ -192,3 +193,34 @@ def test_sweep_skips_active_and_missing(tmp_path: Path, origin_repo: Path):
     cleanup_workspace(ws_active)
     cleanup_workspace(ws_active)  # 不抛错
     assert ws_active.exists() is False
+
+
+def _raise_system_exit(_path):
+    """模拟运行环境（IDE 批量删除守卫）在 rmtree 上抛 SystemExit。"""
+    raise SystemExit(1)
+
+
+@pytest.mark.anyio
+async def test_cleanup_repos_swallows_system_exit(tmp_path: Path, monkeypatch):
+    """回归 2026-10-27 事故：清理时被注入 SystemExit 只能吞掉，不得上抛。
+
+    该异常是 BaseException，若穿透 cleanup_repos 会越过阶段与 LangGraph，
+    把运行任务和 API 进程一起带走。
+    """
+    workspace = tmp_path / "ws"
+    (workspace / "repos" / "repo").mkdir(parents=True)
+    (workspace / "repos" / "repo" / "f.txt").write_text("x", encoding="utf-8")
+    monkeypatch.setattr("sortie_deck.git_publish.shutil.rmtree", _raise_system_exit)
+
+    await cleanup_repos(workspace)  # 不抛 SystemExit
+    assert (workspace / "repos").exists()  # 保留现场，交由 TTL sweep 兜底
+
+
+def test_cleanup_workspace_swallows_system_exit(tmp_path: Path, monkeypatch):
+    """终态清理同样不能因为环境注入的 SystemExit 打断状态流转。"""
+    workspace = tmp_path / "ws2"
+    workspace.mkdir()
+    monkeypatch.setattr("sortie_deck.git_publish.shutil.rmtree", _raise_system_exit)
+
+    cleanup_workspace(workspace)  # 不抛 SystemExit
+    assert workspace.exists()

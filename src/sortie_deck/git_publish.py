@@ -240,7 +240,13 @@ async def cleanup_repos(workspace: Path) -> None:
     try:
         await asyncio.to_thread(shutil.rmtree, repos_root)
         logger.info("工作副本已回收（push 完成）: %s", repos_root)
-    except OSError as exc:
+    except asyncio.CancelledError:
+        raise
+    except (OSError, SystemExit) as exc:
+        # 清理是收尾动作，失败不允许影响阶段结果：除 OSError 外，运行环境
+        # （如 IDE 的批量删除守卫）会在 rmtree 里 raise SystemExit——它是
+        # BaseException，继续上抛会穿过阶段与 LangGraph 直接杀掉进程
+        # （2026-10-27 事故），因此这里一并吞掉，只记 warning。
         logger.warning("工作副本回收失败 %s: %s", repos_root, exc)
 
 
@@ -251,7 +257,8 @@ def cleanup_workspace(workspace_dir: Path) -> None:
     try:
         shutil.rmtree(workspace_dir)
         logger.info("任务终态清理 workspace: %s", workspace_dir)
-    except OSError as exc:
+    except (OSError, SystemExit) as exc:
+        # 同上：终态清理失败（含环境注入的 SystemExit）不能反过来打断状态流转
         logger.warning("任务终态清理失败 %s: %s", workspace_dir, exc)
 
 

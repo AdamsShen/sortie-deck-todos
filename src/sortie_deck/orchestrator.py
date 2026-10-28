@@ -1953,7 +1953,13 @@ class Orchestrator:
                                 ini, {"__interrupt__": [type("I", (), {"value": interrupt_val})()]}
                             )
                 return await self._apply_graph_result(ini, final or {})
-            except Exception as exc:
+            except asyncio.CancelledError:
+                raise
+            except BaseException as exc:
+                # 兜住 SystemExit 等非 Exception 异常：运行环境（如 IDE 的批量删除守卫）
+                # 会在清理动作里 raise SystemExit，它是 BaseException，若不在这一层拦住，
+                # 会穿过 LangGraph 与 ASGI 直接杀掉进程，任务状态永远停在 running
+                # （2026-10-27 事故）。CancelledError 已在上一个分支重新抛出。
                 ini.status = InitiativeStatus.FAILED
                 # 并行波次里异常可能在别的成员节点冒泡，优先用异常自带的阶段；
                 # 否则 timeline 会把 `eng_backend_tech_design` 的失败记到 `qa_cases`。
@@ -1972,6 +1978,14 @@ class Orchestrator:
                     msg_type="system",
                 )
                 await self._emit(ini.id, {"type": "error", "message": str(exc)})
+                if isinstance(exc, SystemExit):
+                    # 已置 failed 并写入事件，不能再上抛（上抛等于让进程退出）
+                    logger.error(
+                        "流水线以 SystemExit 终止（已置 failed）: initiative=%s stage=%s",
+                        initiative_id,
+                        failed_stage,
+                    )
+                    return ini
                 raise
 
     async def submit_hitl(

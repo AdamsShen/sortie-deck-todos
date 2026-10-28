@@ -9,6 +9,7 @@ from sortie_deck.models import (
     CreateInitiativeRequest,
     HitlAction,
     HitlDecision,
+    InitiativeStatus,
     PipelineNotConfirmedError,
     PipelineStageSpec,
     UpdatePipelineRequest,
@@ -129,3 +130,55 @@ async def test_startup_recompiles_confirmed_custom_graph(tmp_path):
         assert started.status.value in {"running", "waiting_hitl", "done"}
     finally:
         await orch2.shutdown()
+
+
+class _SystemExitGraph:
+    """替身图：第一次迭代即抛 SystemExit，模拟环境注入的强制退出。"""
+
+    async def astream(self, payload, config, stream_mode=None):
+        raise SystemExit(1)
+        yield  # pragma: no cover — 让函数保持异步生成器签名
+
+    async def aget_state(self, config):  # pragma: no cover — 异常路径不会走到
+        raise AssertionError("aget_state 不应被调用")
+
+
+@pytest.mark.asyncio
+async def test_system_exit_marks_failed_instead_of_killing_process(tmp_path, monkeypatch):
+    """回归 2026-10-27 事故：SystemExit 只能把任务置 failed，不得上抛杀死进程。
+
+    SystemExit 继承 BaseException，原来的 `except Exception` 拦不住，任务会永远
+    停在 running（UI 点启动也无反应）。
+    """
+    cfg = Settings(
+        data_dir=tmp_path / "data",
+        deploy_executor="mock",
+        kb_backend="local",
+        pipeline_llm=False,
+        room_llm=False,
+    )
+    orch = Orchestrator(cfg)
+    await orch.startup()
+    try:
+        ini = await orch.create_initiative(
+            CreateInitiativeRequest(
+                title="SystemExit 兜底",
+                brief="验证清理异常不会打死进程",
+                coding_executor="mock",
+                harness="mock",
+                creator_name="Ada",
+            )
+        )
+        ini.status = InitiativeStatus.RUNNING
+        orch.store.upsert(ini)
+        monkeypatch.setattr(orch, "_graph_for", lambda _ini: _SystemExitGraph())
+
+        returned = await orch._run_until_interrupt(ini.id)
+
+        assert returned.status == InitiativeStatus.FAILED
+        stored = orch.store.get(ini.id)
+        assert stored is not None
+        assert stored.status == InitiativeStatus.FAILED
+        assert any(e.kind == "error" for e in stored.timeline)
+    finally:
+        await orch.shutdown()
