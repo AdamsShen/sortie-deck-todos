@@ -841,10 +841,12 @@ export default function App() {
     };
   }, [token, memPanelOpen, selectedId]);
 
-  // 当前账号是否为任务创建者；无归属任务仅 admin 视为 owner（与后端 _ensure_mission_owner 一致）
-  const isMissionOwner = Boolean(
-    user && (selected?.created_by === user.id || user.role === "admin")
+  // 运行控制权：创建者或被显式共享的用户；admin 对他人任务只读（与后端 _ensure_mission_control 一致）
+  const isMissionCreator = Boolean(user && selected?.created_by === user.id);
+  const isMissionShared = Boolean(
+    user && (selected?.shared_with || []).some((s) => s.user_id === user.id)
   );
+  const canControlMission = isMissionCreator || isMissionShared;
 
   // 打开详情页共享抽屉时拉取最新共享成员列表（只读展示）
   useEffect(() => {
@@ -3010,12 +3012,13 @@ export default function App() {
             </div>
             <div className="topbar-actions">
               <span className={`st large ${selected.status}`}>{statusLabel(lang, selected.status)}</span>
-              {selected.status === "draft" && !selected.meta?.pipeline_confirmed && (
+              {!canControlMission && <span className="st">{tr("readOnlyMission")}</span>}
+              {canControlMission && selected.status === "draft" && !selected.meta?.pipeline_confirmed && (
                 <button className="btn primary" type="button" disabled={busy} onClick={confirmPipeline}>
                   {tr("pipelineConfirm")}
                 </button>
               )}
-              {selected.status === "draft" && (
+              {canControlMission && selected.status === "draft" && (
                 <button
                   className="btn primary"
                   type="button"
@@ -3026,9 +3029,16 @@ export default function App() {
                   {tr("startPipeline")}
                 </button>
               )}
-              <button className="btn danger" type="button" disabled={busy} onClick={() => void stopPipeline()}>
-                {tr("stop")}
-              </button>
+              {canControlMission && (
+                <button
+                  className="btn danger"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void stopPipeline()}
+                >
+                  {tr("stop")}
+                </button>
+              )}
               <button className="btn ghost" type="button" onClick={() => setView("tasks")}>
                 ←
               </button>
@@ -3256,7 +3266,7 @@ export default function App() {
                 })}
                 <div ref={chatEndRef} />
               </div>
-              {selected.status === "waiting_hitl" && selected.pending_hitl && (
+              {canControlMission && selected.status === "waiting_hitl" && selected.pending_hitl && (
                 <div className="hitl-inline">
                   <span>
                     {tr("gate")} · {selected.pending_hitl.stage}
@@ -3269,14 +3279,21 @@ export default function App() {
                   </button>
                 </div>
               )}
+              {!canControlMission && selected.status === "waiting_hitl" && selected.pending_hitl && (
+                <div className="hitl-inline">
+                  <span>
+                    {tr("gate")} · {selected.pending_hitl.stage} · {tr("readOnlyMission")}
+                  </span>
+                </div>
+              )}
               <ChatComposer
                 value={chatInput}
                 onChange={setChatInput}
                 onSubmit={sendChat}
-                placeholder={tr("chatPlaceholder")}
+                placeholder={canControlMission ? tr("chatPlaceholder") : tr("readOnlyMission")}
                 hint={tr("squadCommandsHelp")}
                 sendLabel={tr("send")}
-                disabled={busy}
+                disabled={busy || !canControlMission}
                 mentions={mentionOptions}
                 commands={commandOptions}
                 onEnhance={enhanceRoomInput}
@@ -3518,7 +3535,7 @@ export default function App() {
                     <div className="share-list">
                       <div className="share-row">
                         <span className="share-name">
-                          {isMissionOwner ? tr("shareSelfOwner") : tr("shareOwner")}
+                          {isMissionCreator ? tr("shareSelfOwner") : tr("shareOwner")}
                         </span>
                         <em className="share-tag">{tr("shareOwnerTag")}</em>
                       </div>

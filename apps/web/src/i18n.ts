@@ -166,6 +166,7 @@ const dict = {
     discussToggleHint: "点击切换是否参与第一阶段讨论",
     send: "发送",
     chatPlaceholder: "讨论方案：输入 @ 搜编制 · / 搜命令",
+    readOnlyMission: "只读模式：管理员可查看运行过程，但不能启动/停止/确认门禁，仅创建者或被共享用户可操作",
     squadCommandsHelp: "快捷搜索：@ 编制 · / 命令（confirm / start / approve / reject / rewrite / stop）",
     crew: "小队编制",
     crewAvatarHint: "点击头像换立绘或上传图片；节点执行时会按需向上下游确认，记录可在节点详情里 review",
@@ -633,6 +634,8 @@ const dict = {
     discussToggleHint: "Toggle first-stage discussion participation",
     send: "Send",
     chatPlaceholder: "Discuss — type @ for roles · / for commands",
+    readOnlyMission:
+      "Read-only — admins can follow the run but cannot start / stop / approve gates; only the owner or shared users can drive it",
     squadCommandsHelp: "Quick search: @ roles · / commands (confirm / start / approve / reject / rewrite / stop)",
     crew: "Loadout",
     crewAvatarHint: "Tap a portrait to change or upload. Stage owners may consult neighbors; review on the node.",

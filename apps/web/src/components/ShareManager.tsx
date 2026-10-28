@@ -18,8 +18,10 @@ interface ShareManagerProps {
 
 /**
  * 任务共享管理弹窗（任务列表页入口）。
- * owner / admin：可搜索账号名或账号 ID 添加共享、移除任意成员；
- * 被共享用户：仅可查看成员列表并退出共享。重复添加由后端幂等兜底。
+ * 仅创建者：可搜索账号名或账号 ID 添加共享、移除任意成员；
+ * 被共享用户：仅可查看成员列表并退出共享；
+ * admin（非创建者）：只读——可看成员，不能加人/移除他人（与后端 _ensure_mission_share_owner 一致）。
+ * 重复添加由后端幂等兜底。
  */
 export function ShareManager({ token, lang, initiative, currentUser, onClose, onChanged, onError }: ShareManagerProps) {
   const [shares, setShares] = useState<MissionShare[]>([]);
@@ -28,10 +30,8 @@ export function ShareManager({ token, lang, initiative, currentUser, onClose, on
   const [busy, setBusy] = useState(false);
 
   const tr = (key: I18nKeyLocal) => t(lang, key);
-  // 无归属任务仅 admin 视为 owner（与后端 _ensure_mission_owner 一致）
-  const isOwner = Boolean(
-    currentUser && (initiative.created_by === currentUser.id || currentUser.role === "admin")
-  );
+  // 共享管理仅任务创建者；admin 对他人任务只读（与后端 _ensure_mission_share_owner 一致）
+  const isOwner = Boolean(currentUser && initiative.created_by === currentUser.id);
 
   useEffect(() => {
     let cancelled = false;

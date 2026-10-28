@@ -7,7 +7,9 @@ from fastapi import HTTPException
 
 from sortie_deck.api.app import (
     _ensure_mission_access,
-    _ensure_mission_owner,
+    _ensure_mission_control,
+    _ensure_mission_delete,
+    _ensure_mission_share_owner,
     _is_mission_shared_with,
     _visible_initiatives,
 )
@@ -77,16 +79,52 @@ def test_access_legacy_task_with_explicit_share_allowed():
 
 
 def test_delete_owner_only():
-    """删除是 owner 专属：被共享用户与陌生人一律 403，仅创建者/admin 可删。"""
+    """解散（删除）：被共享用户与陌生人 403，创建者与 admin 可删。"""
     ini = _ini("usr_owner", ["usr_shared"])
-    _ensure_mission_owner(ini, _user("usr_owner"))
-    _ensure_mission_owner(ini, _user("usr_root", "admin"))
+    _ensure_mission_delete(ini, _user("usr_owner"))
+    _ensure_mission_delete(ini, _user("usr_root", "admin"))
     with pytest.raises(HTTPException) as ei1:
-        _ensure_mission_owner(ini, _user("usr_shared"))
+        _ensure_mission_delete(ini, _user("usr_shared"))
     assert ei1.value.status_code == 403
     with pytest.raises(HTTPException) as ei2:
-        _ensure_mission_owner(ini, _user("usr_stranger"))
+        _ensure_mission_delete(ini, _user("usr_stranger"))
     assert ei2.value.status_code == 403
+
+
+def test_control_owner_and_shared_user_allowed():
+    """运行控制权：创建者与被显式共享用户可以启动/停止/审批。"""
+    ini = _ini("usr_owner", ["usr_shared"])
+    _ensure_mission_control(ini, _user("usr_owner"))
+    _ensure_mission_control(ini, _user("usr_shared"))
+
+
+def test_control_admin_readonly_for_others():
+    """admin 对他人任务只读：不能控制运行流程（可查看、可解散）。"""
+    ini = _ini("usr_owner", ["usr_shared"])
+    with pytest.raises(HTTPException) as ei:
+        _ensure_mission_control(ini, _user("usr_root", "admin"))
+    assert ei.value.status_code == 403
+    # 但访问与解散仍然放行
+    _ensure_mission_access(ini, _user("usr_root", "admin"))
+    _ensure_mission_delete(ini, _user("usr_root", "admin"))
+
+
+def test_control_admin_as_creator_or_shared_allowed():
+    """admin 本人是创建者、或被 owner 显式共享时，同样拥有控制权。"""
+    _ensure_mission_control(_ini("usr_root"), _user("usr_root", "admin"))
+    _ensure_mission_control(_ini("usr_owner", ["usr_root"]), _user("usr_root", "admin"))
+
+
+def test_share_management_creator_only():
+    """共享管理仅创建者：admin 不能把他人任务共享出去。"""
+    ini = _ini("usr_owner", ["usr_shared"])
+    _ensure_mission_share_owner(ini, _user("usr_owner"))
+    with pytest.raises(HTTPException) as ei_admin:
+        _ensure_mission_share_owner(ini, _user("usr_root", "admin"))
+    assert ei_admin.value.status_code == 403
+    with pytest.raises(HTTPException) as ei_shared:
+        _ensure_mission_share_owner(ini, _user("usr_shared"))
+    assert ei_shared.value.status_code == 403
 
 
 def test_visible_initiatives_filter():

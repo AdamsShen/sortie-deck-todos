@@ -96,22 +96,49 @@ def get_auth() -> AuthStore:
     return _auth
 
 
-def _ensure_mission_owner(ini: Any, user: PublicUser) -> None:
-    """多租户归属校验：仅创建者或 admin 可执行删除、共享等 owner 专属操作。
+def _ensure_mission_delete(ini: Any, user: PublicUser) -> None:
+    """解散任务（删除）：仅创建者或 admin。
 
-    无归属任务（created_by 为空）只允许 admin：历史数据应先用
-    scripts/backfill_mission_owner.py 回填创建者，不再放行任意登录用户。
+    管理员对他人任务只读，但保留「解散」这一项管理能力。
+    无归属任务（created_by 为空）同样只允许 admin：历史数据应先用
+    scripts/backfill_mission_owner.py 回填创建者。
     """
     if user.role == "admin":
         return
     created_by = getattr(ini, "created_by", None)
     if not created_by or created_by != user.id:
-        raise HTTPException(403, "仅任务创建者或 admin 可执行该操作")
+        raise HTTPException(403, "仅任务创建者或 admin 可解散任务")
+
+
+def _ensure_mission_share_owner(ini: Any, user: PublicUser) -> None:
+    """共享管理（加人/移除他人）：仅创建者。
+
+    admin 不再是共享操作的旁路——管理员不能把他人任务共享给第三方，
+    需要共享时由创建者自己操作。被共享者退出共享另走 remove 自身分支。
+    """
+    created_by = getattr(ini, "created_by", None)
+    if not created_by or created_by != user.id:
+        raise HTTPException(403, "仅任务创建者可将任务共享给他人")
 
 
 def _is_mission_shared_with(ini: Any, user_id: str) -> bool:
     """判断用户是否在任务的共享名单中。"""
     return any(s.user_id == user_id for s in getattr(ini, "shared_with", []) or [])
+
+
+def _ensure_mission_control(ini: Any, user: PublicUser) -> None:
+    """任务运行控制：创建者或被显式共享的用户。
+
+    admin 对他人任务只读（可看列表/详情/实时过程，可解散），不能启动、停止、
+    确认门禁、改航线、换 harness 或在房间里发言。若 admin 本人是创建者，
+    或被 owner 显式共享，则同样拥有控制权。
+    """
+    created_by = getattr(ini, "created_by", None)
+    if created_by and created_by == user.id:
+        return
+    if _is_mission_shared_with(ini, user.id):
+        return
+    raise HTTPException(403, "仅任务创建者或被共享用户可控制任务运行；管理员为只读")
 
 
 def _ensure_mission_access(ini: Any, user: PublicUser) -> None:
@@ -330,6 +357,17 @@ def _mission_access_guard(
     if not ini:
         raise HTTPException(404, "Initiative not found")
     _ensure_mission_access(ini, user)
+    return user
+
+
+def _mission_control_guard(
+    initiative_id: str, user: PublicUser = Depends(require_user)
+) -> PublicUser:
+    """FastAPI 依赖：任务控制级校验（创建者或被共享用户；admin 只读）。"""
+    ini = orch().get(initiative_id)
+    if not ini:
+        raise HTTPException(404, "Initiative not found")
+    _ensure_mission_control(ini, user)
     return user
 
 
@@ -1734,7 +1772,7 @@ class UpdateHarnessRequest(BaseModel):
 async def patch_initiative_harness(
     initiative_id: str,
     req: UpdateHarnessRequest,
-    _user: PublicUser = Depends(_mission_access_guard),
+    _user: PublicUser = Depends(_mission_control_guard),
 ) -> dict[str, Any]:
     """Draft-only harness change; started missions require HITL switch_harness."""
     try:
@@ -1754,7 +1792,7 @@ class UpdateMaterialsRequest(BaseModel):
 async def patch_initiative_materials(
     initiative_id: str,
     req: UpdateMaterialsRequest,
-    _user: PublicUser = Depends(_mission_access_guard),
+    _user: PublicUser = Depends(_mission_control_guard),
 ) -> dict[str, Any]:
     """Replace a mission's external materials (recomposes the brief).
 
@@ -1924,8 +1962,8 @@ async def delete_initiative(
     ini = orch().get(initiative_id)
     if not ini:
         raise HTTPException(404, "Initiative not found")
-    # 删除是 owner 专属权限：被共享用户拥有除删除外的全部权限
-    _ensure_mission_owner(ini, user)
+    # 解散：仅创建者或 admin（admin 对他人任务只读，但保留解散能力）
+    _ensure_mission_delete(ini, user)
     try:
         await orch().delete_initiative(initiative_id)
         return {"status": "deleted"}
@@ -1956,11 +1994,11 @@ async def add_mission_share(
     req: AddMissionShareRequest,
     user: PublicUser = Depends(require_user),
 ) -> dict[str, Any]:
-    """共享任务给指定账号用户（仅创建者或 admin 可操作；重复共享幂等返回）。"""
+    """共享任务给指定账号用户（仅创建者可操作；重复共享幂等返回）。"""
     ini = orch().get(initiative_id)
     if not ini:
         raise HTTPException(404, "Initiative not found")
-    _ensure_mission_owner(ini, user)
+    _ensure_mission_share_owner(ini, user)
     target = get_auth().get_by_id(req.user_id)
     if not target:
         raise HTTPException(404, "user not found")
@@ -1986,13 +2024,13 @@ async def remove_mission_share(
     share_user_id: str,
     user: PublicUser = Depends(require_user),
 ) -> dict[str, Any]:
-    """取消共享：创建者/admin 可移除任意成员，被共享用户可移除自己（退出共享）。"""
+    """取消共享：仅创建者可移除任意成员，被共享用户可移除自己（退出共享）。"""
     ini = orch().get(initiative_id)
     if not ini:
         raise HTTPException(404, "Initiative not found")
-    is_owner = user.role == "admin" or (ini.created_by and ini.created_by == user.id)
+    is_owner = bool(ini.created_by and ini.created_by == user.id)
     if not is_owner and share_user_id != user.id:
-        raise HTTPException(403, "仅任务创建者或 admin 可移除其他共享成员")
+        raise HTTPException(403, "仅任务创建者可移除其他共享成员")
     if _is_mission_shared_with(ini, share_user_id):
         ini.shared_with = [s for s in ini.shared_with if s.user_id != share_user_id]
         orch().store.upsert(ini)
@@ -2026,7 +2064,7 @@ async def mission_memories(
 
 @app.post("/api/initiatives/{initiative_id}/start")
 async def start_initiative(
-    initiative_id: str, user: PublicUser = Depends(_mission_access_guard)
+    initiative_id: str, user: PublicUser = Depends(_mission_control_guard)
 ) -> dict[str, Any]:
     try:
         ini = await orch().start_pipeline(initiative_id, author_name=user.display_name)
@@ -2057,7 +2095,7 @@ async def start_initiative(
 async def patch_pipeline(
     initiative_id: str,
     req: UpdatePipelineRequest,
-    user: PublicUser = Depends(_mission_access_guard),
+    user: PublicUser = Depends(_mission_control_guard),
 ) -> dict[str, Any]:
     try:
         ini = await orch().update_pipeline(initiative_id, req, author_name=user.display_name)
@@ -2072,7 +2110,7 @@ async def patch_pipeline(
 async def confirm_pipeline_route(
     initiative_id: str,
     req: ConfirmPipelineRequest | None = None,
-    user: PublicUser = Depends(_mission_access_guard),
+    user: PublicUser = Depends(_mission_control_guard),
 ) -> dict[str, Any]:
     try:
         ini = await orch().confirm_pipeline(
@@ -2087,7 +2125,7 @@ async def confirm_pipeline_route(
 
 @app.post("/api/initiatives/{initiative_id}/hitl")
 async def submit_hitl(
-    initiative_id: str, req: HitlSubmitRequest, user: PublicUser = Depends(_mission_access_guard)
+    initiative_id: str, req: HitlSubmitRequest, user: PublicUser = Depends(_mission_control_guard)
 ) -> dict[str, Any]:
     try:
         # 「撤退」常误打到 /hitl；stop 在任意状态下都走专用路径
@@ -2115,7 +2153,7 @@ async def submit_hitl(
 
 @app.post("/api/initiatives/{initiative_id}/stop")
 async def stop_initiative(
-    initiative_id: str, user: PublicUser = Depends(_mission_access_guard)
+    initiative_id: str, user: PublicUser = Depends(_mission_control_guard)
 ) -> dict[str, Any]:
     try:
         ini = await orch().stop(initiative_id, author_name=user.display_name)
@@ -2149,7 +2187,7 @@ async def get_squad(
 @app.post("/api/initiatives/{initiative_id}/squad/join")
 @app.post("/api/initiatives/{initiative_id}/room/join")
 async def join_squad(
-    initiative_id: str, req: JoinRoomRequest, user: PublicUser = Depends(_mission_access_guard)
+    initiative_id: str, req: JoinRoomRequest, user: PublicUser = Depends(_mission_control_guard)
 ) -> dict[str, Any]:
     try:
         name = req.name or user.display_name
@@ -2164,7 +2202,7 @@ async def join_squad(
 async def set_squad_discussing(
     initiative_id: str,
     req: DiscussParticipateRequest,
-    user: PublicUser = Depends(_mission_access_guard),
+    user: PublicUser = Depends(_mission_control_guard),
 ) -> dict[str, Any]:
     try:
         ini = await orch().set_discussing(
@@ -2187,7 +2225,7 @@ async def set_squad_discussing(
 async def post_squad_message(
     initiative_id: str,
     req: PostRoomMessageRequest,
-    user: PublicUser = Depends(_mission_access_guard),
+    user: PublicUser = Depends(_mission_control_guard),
 ) -> dict[str, Any]:
     try:
         msg, ini = await orch().post_human_message(

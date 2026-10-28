@@ -57,10 +57,12 @@ Token（现状）：用 `token_secret`（开发默认 `tdt-dev-secret`）对 `us
 
 | 场景 | 可见 / 可操作范围 |
 |------|------------------|
-| 创建者 | 列表可见；详情、对话、出击/停止、HITL、共享给他人；可删除 |
-| 被共享用户 | 列表可见；除删除外的全部任务权限 |
-| admin | 全部任务（含无归属任务） |
+| 创建者 | 列表可见；详情、对话、出击/停止、HITL、共享给他人；可解散 |
+| 被共享用户 | 列表可见；可控制运行（出击/停止/HITL/改航线/房间发言）；可移除自己退出共享；不可移除他人、不可解散 |
+| admin（非创建者、非被共享） | 全部任务（含无归属任务）可见、可实时查看运行过程、可解散；**不可**启动/停止/确认门禁/改航线/换 harness/在房间发言，**不可**共享给他人 |
 | 无归属任务（`created_by` 为空） | 仅 admin；成员需等回填创建者或显式共享 |
+
+对应校验：访问用 `_ensure_mission_access`（创建者 / admin / 被共享）；运行控制用 `_ensure_mission_control`（创建者 / 被共享，admin 只读）；共享管理用 `_ensure_mission_share_owner`（仅创建者）；解散用 `_ensure_mission_delete`（创建者 / admin）。admin 若本人是创建者或被显式共享，则同样具备控制权。
 
 写入归属的入口：`POST /api/initiatives`（登录用户）、规划官建队（`BriefingSession.owner_id`）、`sortie smoke`（`--owner`，默认第一个 admin）。历史数据回填：`scripts/backfill_mission_owner.py`（`--dry-run` 预览，`--share-with` 显式共享）。
 

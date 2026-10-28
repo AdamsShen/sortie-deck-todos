@@ -57,10 +57,12 @@ Missions are isolated by `created_by` (owner user id) and `shared_with` (explici
 
 | Actor | Scope |
 |-------|-------|
-| Owner | Listed; detail, chat, start/stop, HITL, share with others; can delete |
-| Shared user | Listed; every mission permission except delete |
-| Admin | All missions, including owner-less ones |
+| Owner | Listed; detail, chat, start/stop, HITL, share with others; can dissolve |
+| Shared user | Listed; can drive the run (start/stop/HITL/reroute/room messages); can remove themselves from the share; cannot remove others or dissolve |
+| Admin (not owner, not shared) | Sees all missions (incl. owner-less), can follow the run live and dissolve it; **cannot** start/stop/approve gates/edit the route/switch harness/post in the room, and **cannot** share it with others |
 | Owner-less mission (`created_by` empty) | Admin only; members need a backfilled owner or an explicit share |
+
+Guards: access via `_ensure_mission_access` (owner / admin / shared); run control via `_ensure_mission_control` (owner / shared, admin read-only); share management via `_ensure_mission_share_owner` (owner only); dissolve via `_ensure_mission_delete` (owner / admin). An admin who is the owner or is explicitly shared keeps full control.
 
 Ownership is written by `POST /api/initiatives` (logged-in user), the briefing harness (`BriefingSession.owner_id`) and `sortie smoke` (`--owner`, default first admin). Historical rows are backfilled by `scripts/backfill_mission_owner.py` (`--dry-run` to preview, `--share-with` for explicit grants).
 
