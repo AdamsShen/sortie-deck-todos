@@ -6415,12 +6415,25 @@ tr:hover td {
   align-items: center;
 }
 .wr-rail-item .wr-g {
+  /* span 默认 inline，overflow/text-overflow 不生效会导致长 goal 溢出卡片 */
+  display: block;
   font-size: 0.72rem;
   color: var(--muted);
   margin-top: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* 小群页任务切换器：候选只有当前用户自建的任务 */
+.wr-subroom-pick {
+  max-width: 260px;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.78rem;
 }
 /* 长 role key（如 eng_backend → eng_backend）换行时不再挤压状态标签 */
 .wr-rail-item .wr-tt {

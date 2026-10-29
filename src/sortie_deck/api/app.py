@@ -177,6 +177,18 @@ def _visible_initiatives(items: list[Any], user: PublicUser) -> list[Any]:
     ]
 
 
+def _owned_mission_ids(user: PublicUser) -> set[str]:
+    """当前用户作为所有权人（created_by）的任务 id 集合。
+
+    小群属于执行过程的内部讨论，可见性比任务本身更窄：只认所有权，
+    不随 shared_with 传递，也不给 admin 角色豁免。想要"能不能看别人任务"
+    这种更宽的口径请用 `_ensure_mission_access`。
+    """
+    return {
+        i.id for i in orch().list_initiatives() if getattr(i, "created_by", None) == user.id
+    }
+
+
 def get_knowledge() -> KnowledgeStore:
     global _knowledge
     if _knowledge is None:
@@ -2337,6 +2349,8 @@ async def initiative_events(
         raise HTTPException(404, "Initiative not found")
     _ensure_mission_access(ini, user)
 
+    # 小群事件只推给任务所有权人：共享用户与 admin 能看任务过程，但不该看到小群
+    is_owner = getattr(ini, "created_by", None) == user.id
     queue = o.subscribe(initiative_id)
 
     async def gen():
@@ -2352,6 +2366,8 @@ async def initiative_events(
             while True:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    if not is_owner and event.get("type") in {"subroom", "subroom_message"}:
+                        continue
                     yield {"event": event.get("type", "message"), "data": json.dumps(event, default=str)}
                 except TimeoutError:
                     yield {"event": "ping", "data": "{}"}
@@ -2482,22 +2498,27 @@ async def dingtalk_bridge(request: Request) -> dict[str, Any]:
 @app.get("/api/subrooms")
 async def list_subrooms(
     initiative_id: str | None = Query(default=None),
-    _user: PublicUser = Depends(require_user),
+    user: PublicUser = Depends(require_user),
 ) -> list[dict[str, Any]]:
-    """Sub-room records (transcripts stay behind their own endpoint)."""
+    """Sub-room records (transcripts stay behind their own endpoint).
+
+    仅任务所有权人（created_by）可读：共享用户与 admin 只要不是 owner 一律 403。
+    """
     from sortie_deck.subroom import get_subroom_service
 
     service = get_subroom_service()
     if service is None:
         return []
-    return [
-        r.model_dump(mode="json") for r in service.store.list(initiative_id=initiative_id)
-    ]
+    owned = _owned_mission_ids(user)
+    if initiative_id and initiative_id not in owned:
+        raise HTTPException(403, "小群仅任务创建者可见")
+    rows = service.store.list(initiative_id=initiative_id)
+    return [r.model_dump(mode="json") for r in rows if r.initiative_id in owned]
 
 
 @app.get("/api/subrooms/{subroom_id}/transcript")
 async def get_subroom_transcript(
-    subroom_id: str, _user: PublicUser = Depends(require_user)
+    subroom_id: str, user: PublicUser = Depends(require_user)
 ) -> list[dict[str, Any]]:
     from sortie_deck.subroom import get_subroom_service
 
@@ -2505,9 +2526,13 @@ async def get_subroom_transcript(
     if service is None:
         raise HTTPException(404, "sub-rooms are not wired")
     try:
-        messages = service.transcript(subroom_id)
+        sub = service.store.get(subroom_id)
     except KeyError:
         raise HTTPException(404, "sub-room not found") from None
+    # 会话正文与列表同口径：非任务所有权人（含共享用户 / admin）不给读
+    if sub.initiative_id not in _owned_mission_ids(user):
+        raise HTTPException(403, "小群仅任务创建者可见")
+    messages = service.transcript(subroom_id)
     return [m.model_dump(mode="json") for m in messages]
 
 

@@ -58,6 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Sub-rooms are owner-only**: `/api/subrooms`, `/api/subrooms/{id}/transcript` and the initiative SSE stream now require `initiative.created_by == current user` — shared users and admins who do not own the mission get `403` / receive no `subroom*` events, so an execution-time discussion never leaks wider than its mission owner. The workbench hides the in-mission 小群 drawer for non-owners, groups sub-rooms by owned mission behind a mission switcher, and no longer falls back to demo records when a mission has none
 - Product rename: **Rally** → **Sortie Deck**; Python package `trusted-dev-teams` → `sortie-deck` (`sortie_deck`); CLI `sortie` (legacy `tdt` alias); legacy `rally_*` storage keys / `rally.executors` still accepted
 - Orchestrator `startup()` recompiles confirmed custom graphs for HITL resume after restart
 - Structured API error `pipeline_not_confirmed` when starting an unconfirmed mission

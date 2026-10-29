@@ -177,6 +177,8 @@ export default function App() {
   // Bumped on every sub-room SSE event so the panel re-pulls records/transcript
   const [subroomSignal, setSubroomSignal] = useState(0);
   const [subroomCount, setSubroomCount] = useState(0);
+  // 独立小群页当前查看的任务：默认跟随作战室选中任务，顶部切换器可改
+  const [subroomMissionId, setSubroomMissionId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [booted, setBooted] = useState(false);
@@ -920,6 +922,22 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- loadWorkspace closes over token/selectedId
   }, [token, selectedId, lootOpen, artCount, view]);
 
+  // 小群只对任务所有权人可见：切换器候选 = 我创建的任务（被共享的不算）
+  const myMissions = useMemo(
+    () => (user ? items.filter((i) => i.created_by === user.id) : []),
+    [items, user],
+  );
+
+  // 进入小群页时定位当前任务：优先作战室选中任务，其次第一个自建任务
+  useEffect(() => {
+    if (view !== "subrooms") return;
+    setSubroomMissionId((cur) => {
+      if (cur && myMissions.some((m) => m.id === cur)) return cur;
+      if (selectedId && myMissions.some((m) => m.id === selectedId)) return selectedId;
+      return myMissions[0]?.id ?? null;
+    });
+  }, [view, selectedId, myMissions]);
+
   useEffect(() => {
     if (!token || !selectedId || view !== "squad") return undefined;
     let cancelled = false;
@@ -929,9 +947,14 @@ export default function App() {
         if (!cancelled) setDetail(data);
         const squad = await api<{ messages?: RoomMessage[] }>(`/api/initiatives/${selectedId}/squad`, { token });
         if (!cancelled) setMessages(squad.messages || []);
-        // Seed the 小群 dock badge even before the drawer is first opened
-        const subrooms = await listSubRooms(token, selectedId);
-        if (!cancelled) setSubroomCount(subrooms.length);
+        // Seed the 小群 dock badge even before the drawer is first opened.
+        // 非 owner 不请求（接口会 403），badge 直接归零。
+        if (data.created_by === user?.id) {
+          const subrooms = await listSubRooms(token, selectedId);
+          if (!cancelled) setSubroomCount(subrooms.length);
+        } else if (!cancelled) {
+          setSubroomCount(0);
+        }
       } catch (e) {
         if (!cancelled) setError(errMsg(e));
       }
@@ -970,7 +993,7 @@ export default function App() {
       cancelled = true;
       es.close();
     };
-  }, [token, selectedId, view]);
+  }, [token, selectedId, view, user?.id]);
 
   async function doLogin(e: FormEvent) {
     e.preventDefault();
@@ -3162,17 +3185,20 @@ export default function App() {
                 >
                   BRIEF
                 </button>
-                <button
-                  type="button"
-                  className={`room-dock-btn ${subroomsOpen ? "on" : ""}`}
-                  onClick={() => {
-                    playSfx("toggle");
-                    setSubroomsOpen((v) => !v);
-                  }}
-                >
-                  {tr("subrooms")}
-                  <em>{subroomCount}</em>
-                </button>
+                {/* 小群仅任务创建者可见：共享用户与 admin 连入口都不展示 */}
+                {selected.created_by === user?.id && (
+                  <button
+                    type="button"
+                    className={`room-dock-btn ${subroomsOpen ? "on" : ""}`}
+                    onClick={() => {
+                      playSfx("toggle");
+                      setSubroomsOpen((v) => !v);
+                    }}
+                  >
+                    {tr("subrooms")}
+                    <em>{subroomCount}</em>
+                  </button>
+                )}
                 <button
                   type="button"
                   className={`room-dock-btn ${sharesOpen ? "on" : ""}`}
@@ -5878,7 +5904,13 @@ export default function App() {
 
       {view === "subrooms" && (
         <main className="main page-pad">
-          <SubRoomPanel token={token} lang={lang} initiativeId={selectedId} />
+          <SubRoomPanel
+            token={token}
+            lang={lang}
+            initiativeId={subroomMissionId}
+            initiativeOptions={myMissions.map((m) => ({ id: m.id, title: m.title }))}
+            onSelectInitiative={setSubroomMissionId}
+          />
         </main>
       )}
 

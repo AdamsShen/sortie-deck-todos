@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getSubRoomTranscript, listSubRooms } from "../api";
 import { t } from "../i18n";
-import { MOCK_SUBROOMS, MOCK_TRANSCRIPTS } from "../mock";
 import { RoleAvatar } from "./RoleAvatar";
 import type { Lang, SubRoomRecord } from "../types";
 
@@ -18,6 +17,10 @@ type Props = {
   roleTitles?: Record<string, string>;
   /** "dock" trims the standalone-page copy for the in-mission side drawer. */
   variant?: "page" | "dock";
+  /** 独立页的任务切换器候选：仅当前用户作为所有权人的任务。 */
+  initiativeOptions?: { id: string; title: string }[];
+  /** 切换任务后由父级更新 initiativeId。 */
+  onSelectInitiative?: (id: string) => void;
 };
 
 type Turn = { role?: string | null; text: string; at?: string };
@@ -61,6 +64,8 @@ export function SubRoomPanel({
   onCount,
   roleTitles,
   variant = "page",
+  initiativeOptions = [],
+  onSelectInitiative,
 }: Props) {
   const [subrooms, setSubrooms] = useState<SubRoomRecord[]>([]);
   const [openId, setOpenId] = useState<string | null>(null);
@@ -80,11 +85,6 @@ export function SubRoomPanel({
 
   const loadTranscript = useCallback(
     async (subroomId: string) => {
-      // mock 小群没有后端会话，直接取本地演示对白
-      if (MOCK_TRANSCRIPTS[subroomId]) {
-        setTranscript(MOCK_TRANSCRIPTS[subroomId]);
-        return;
-      }
       try {
         setTranscript(await getSubRoomTranscript(token, subroomId));
       } catch (err) {
@@ -96,13 +96,8 @@ export function SubRoomPanel({
 
   const refresh = useCallback(async (): Promise<SubRoomRecord[]> => {
     try {
-      let rows = await listSubRooms(token, initiativeId ?? undefined);
-      // 接口为空时回退 mock 演示数据；badge 仍按真实数据计数，避免误导
-      if (rows.length === 0) {
-        setSubrooms(MOCK_SUBROOMS);
-        setError("");
-        return MOCK_SUBROOMS;
-      }
+      // 空数组就是真实空态（任务没有小群 / 无权查看），不再回退演示数据
+      const rows = await listSubRooms(token, initiativeId ?? undefined);
       setSubrooms(rows);
       onCountRef.current?.(rows.length);
       setError("");
@@ -223,11 +218,32 @@ export function SubRoomPanel({
           <h2>{t(lang, "subrooms")}</h2>
           <span className="wr-hint">{t(lang, "subroomsHint")}</span>
           <div className="wr-head-right">
+            {/* 任务切换器：候选只有当前用户作为所有权人的任务 */}
+            {initiativeOptions.length > 0 && (
+              <select
+                className="wr-subroom-pick"
+                value={initiativeId ?? ""}
+                onChange={(e) => onSelectInitiative?.(e.target.value)}
+                aria-label={t(lang, "subroomPickMission")}
+              >
+                {initiativeOptions.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.title}
+                  </option>
+                ))}
+              </select>
+            )}
             {liveSignal > 0 && <span className="st green">● {t(lang, "subroomLive")}</span>}
           </div>
         </div>
         {error && <p style={{ color: "var(--danger, #d33)" }}>{error}</p>}
-        {subrooms.length === 0 && <p className="tiny">{t(lang, "noSubrooms")}</p>}
+        {initiativeOptions.length === 0 ? (
+          <p className="tiny">{t(lang, "subroomNoMission")}</p>
+        ) : subrooms.length === 0 ? (
+          <p className="tiny">{t(lang, "subroomEmptyMission")}</p>
+        ) : null}
+        {/* 任务没有小群时整块不渲染，只保留上面的空态文案 */}
+        {subrooms.length > 0 && (
         <div className="wr-subroom-layout">
           <aside>
             {subrooms.map((sub) => (
@@ -303,6 +319,7 @@ export function SubRoomPanel({
             )}
           </section>
         </div>
+        )}
         {fullscreen && active && (
           <section className="subroom-fullscreen">
             <header className="subroom-fs-head">
