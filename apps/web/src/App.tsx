@@ -1401,15 +1401,15 @@ export default function App() {
     [kbBases]
   );
 
-  // WeKnora 异步解析：仍处于解析中的文档（completed / failed 视为终态）
+  // WeKnora 异步解析：仍处于解析中的文档（completed / failed 视为终态）。
+  // 状态为空也纳入轮询：上传接口不一定回传 parse_status，只能靠刷新接口推进到终态。
   const kbParsingDocs = useMemo(
     () =>
       kbDocs.filter(
         (d) =>
           d.backend === "weknora" &&
           !!d.remote_id &&
-          !["completed", "failed"].includes(d.parse_status || "") &&
-          d.parse_status !== ""
+          !["completed", "failed"].includes(d.parse_status || "")
       ),
     [kbDocs]
   );
@@ -1454,7 +1454,10 @@ export default function App() {
     setKbPendingFiles((prev) => [...prev, ...next]);
     // 库详情导入弹窗：选中即自动上传（新建弹窗库尚未创建，仍走「创建并导入」）
     if (autoBaseId) {
-      void uploadKbItemList(autoBaseId, next.filter((n) => n.status !== "failed"));
+      void uploadKbItemList(autoBaseId, next.filter((n) => n.status !== "failed")).then(() => {
+        // 上传成功后立刻重拉文档列表与库卡片计数，否则关掉弹窗列表里看不到新文档
+        void Promise.all([refreshKb(), refreshKbBases()]);
+      });
     }
   }
 
