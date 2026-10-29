@@ -5998,6 +5998,45 @@ tr:hover td {
 .wr-page {
   padding: 20px 22px 56px;
 }
+
+/* ── 角色详情：正文区吸收剩余视口高度，避免详情下方大片空白 ── */
+.wr-page-detail {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 20px;
+}
+.wr-page-detail > .wr-page-head {
+  flex: 0 0 auto;
+}
+.wr-agent-detail {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.wr-agent-detail .kb-article {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.wr-agent-detail .topbar,
+.wr-agent-detail .loadout-block,
+.wr-agent-detail .kb-meta {
+  flex: 0 0 auto;
+}
+/* 人设正文占满剩余高度，超长时正文内部滚动；min-height 与全局 .kb-preview 一致，
+   避免矮视口下正文被压得比改动前更小 */
+.wr-agent-detail .kb-preview {
+  flex: 1 1 auto;
+  min-height: 240px;
+  max-height: none;
+  margin-top: 12px;
+  font-size: 0.78rem;
+  line-height: 1.7;
+}
 .wr-page-head {
   display: flex;
   align-items: center;

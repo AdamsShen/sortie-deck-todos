@@ -4377,9 +4377,27 @@ export default function App() {
 
       {view === "agents" && (
         /* 角色工坊视图：与其他页面一样包进 .main 滚动容器（.wr-page 只负责内边距），
-           否则页面内容超出视口时没有可滚动容器，整页卡死 */
-        <main className="main page-pad wr-page">
+           否则页面内容超出视口时没有可滚动容器，整页卡死。
+          详情态额外挂 wr-page-detail：让正文区撑满剩余视口，不留大片空白 */
+        <main
+          className={`main page-pad wr-page${
+            agentSelected && !agentEditing ? " wr-page-detail" : ""
+          }`}
+        >
           <header className="wr-page-head">
+            {/* 详情态把返回入口提到页头，省掉单独一行，正文能多占一截高度 */}
+            {agentSelected && !agentEditing && (
+              <button
+                className="btn ghost wr-back"
+                type="button"
+                onClick={() => {
+                  playSfx("click");
+                  setAgentSelectedId(null);
+                }}
+              >
+                ← {tr("wrBackToRoster")}
+              </button>
+            )}
             <h2>{tr("forgeTitle")}</h2>
             <span className="wr-hint">{tr("forgeHint")}</span>
             <div className="wr-head-right">
@@ -4752,19 +4770,7 @@ export default function App() {
               )}
             </>
           ) : agentSelected ? (
-              <>
-                <div className="wr-head-right" style={{ marginBottom: 10 }}>
-                  <button
-                    className="btn ghost wr-back"
-                    type="button"
-                    onClick={() => {
-                      playSfx("click");
-                      setAgentSelectedId(null);
-                    }}
-                  >
-                    ← {tr("wrBackToRoster")}
-                  </button>
-                </div>
+              <div className="wr-agent-detail">
                 <article className="kb-article">
                 <div className="topbar">
                   <div>
@@ -4803,7 +4809,7 @@ export default function App() {
                   {tr("byAuthor")} {agentSelected.author_name} · {agentSelected.updated_at}
                 </p>
               </article>
-              </>
+              </div>
             ) : (
               <div className="wr-roster">
                 {filteredAgents.map((a) => (
