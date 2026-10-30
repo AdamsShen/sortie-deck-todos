@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from sortie_deck import service as service_mod
@@ -65,14 +67,51 @@ def test_verify_resolves_user_and_updates_last_used(stores):
     assert verified.last_used_at is not None
 
 
-def test_revoked_key_is_rejected(stores):
-    _auth, keys, user, _other = stores
-    key, plaintext = keys.create(user_id=user.id, name="to-revoke")
-    assert keys.revoke(user_id=user.id, key_id=key.id) is True
+def test_deleted_key_is_rejected_and_row_is_gone(stores):
+    """删除是物理删除：记录不再存在，且不能跨用户删。"""
+    _auth, keys, user, other = stores
+    key, plaintext = keys.create(user_id=user.id, name="to-delete")
+
+    assert keys.delete(user_id=other.id, key_id=key.id) is False  # 他人删不掉
+    assert keys.delete(user_id=user.id, key_id=key.id) is True
+    assert keys.get(key.id) is None
     assert keys.verify(plaintext) is None
+    assert keys.delete(user_id=user.id, key_id=key.id) is False  # 已不存在
+
     with pytest.raises(ServiceError) as exc:
         resolve_principal(f"Bearer {plaintext}")
     assert exc.value.code == "auth_required"
+
+
+def test_expiry_defaults_to_one_month(stores):
+    _auth, keys, user, _other = stores
+    key, _plaintext = keys.create(user_id=user.id, name="ttl")
+    assert key.expires_at is not None
+    # 日历月：1 个月落在 28~31 天内（+1s 容差，时间戳是浮点）
+    assert 28 * 86400 <= key.expires_at - key.created_at <= 31 * 86400 + 1
+    assert key.is_active() is True
+
+
+def test_expired_key_is_rejected(stores):
+    _auth, keys, user, _other = stores
+    key, plaintext = keys.create(user_id=user.id, name="expired", expires_in_months=3)
+    keys._conn.execute(
+        "UPDATE api_keys SET expires_at=? WHERE id=?", (time.time() - 10, key.id)
+    )
+    keys._conn.commit()
+
+    assert keys.verify(plaintext) is None
+    # 过期行仍留在列表里，前端标「已过期」，由用户手动删除
+    assert [k.id for k in keys.list_for_user(user.id)] == [key.id]
+    with pytest.raises(ServiceError) as exc:
+        resolve_principal(f"Bearer {plaintext}")
+    assert exc.value.code == "auth_required"
+
+
+def test_invalid_ttl_is_rejected(stores):
+    _auth, keys, user, _other = stores
+    with pytest.raises(ValueError):
+        keys.create(user_id=user.id, name="bad-ttl", expires_in_months=2)
 
 
 def test_invalid_credential_is_rejected(stores):
@@ -161,9 +200,17 @@ async def test_keys_http_roundtrip(stores):
     transport = ASGITransport(app=fastapi_app)
 
     async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 非法有效期直接 400，不落库
+        bad = await client.post(
+            "/api/keys",
+            json={"name": "bad", "expires_in_months": 2},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert bad.status_code == 400
+
         created = await client.post(
             "/api/keys",
-            json={"name": "macbook"},
+            json={"name": "macbook", "expires_in_months": 3},
             headers={"Authorization": f"Bearer {token}"},
         )
         assert created.status_code == 200, created.text
@@ -172,6 +219,14 @@ async def test_keys_http_roundtrip(stores):
         assert plaintext.startswith(KEY_PREFIX)
         assert body["mcp"]["url"].endswith("/mcp")
         assert plaintext in body["mcp"]["command"]
+        assert body["key"]["expires_at"] > body["key"]["created_at"]
+
+        # 四个客户端片段都带上了这把密钥
+        clients = body["mcp"]["clients"]
+        assert [c["id"] for c in clients] == ["claude-code", "codex", "cursor", "opencode"]
+        for client_cfg in clients:
+            assert client_cfg["target"]
+            assert plaintext in client_cfg["code"], client_cfg
 
         listed = await client.get(
             "/api/keys", headers={"Authorization": f"Bearer {plaintext}"}
@@ -180,16 +235,23 @@ async def test_keys_http_roundtrip(stores):
         rows = listed.json()
         assert len(rows) == 1
         assert "plaintext" not in rows[0]
+        assert rows[0]["expires_at"] == body["key"]["expires_at"]
 
-        revoked = await client.delete(
+        deleted = await client.delete(
             f"/api/keys/{rows[0]['id']}", headers={"Authorization": f"Bearer {token}"}
         )
-        assert revoked.status_code == 200
+        assert deleted.status_code == 200
+        assert deleted.json()["status"] == "deleted"
 
         after = await client.get(
             "/api/keys", headers={"Authorization": f"Bearer {plaintext}"}
         )
         assert after.status_code == 401
+
+        remaining = await client.get(
+            "/api/keys", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert remaining.json() == []
 
 
 def test_service_rejects_cross_user_access(stores, tmp_path):

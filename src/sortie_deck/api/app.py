@@ -33,6 +33,7 @@ from sortie_deck.agents import (
     CreateAgentRequest,
     UpdateAgentRequest,
 )
+from sortie_deck.api_keys import ALLOWED_TTL_MONTHS, DEFAULT_TTL_MONTHS
 from sortie_deck.auth import (
     AuthStore,
     CreateUserRequest,
@@ -480,31 +481,103 @@ async def me(user: PublicUser = Depends(require_user)) -> dict[str, Any]:
 
 class CreateApiKeyBody(BaseModel):
     name: str = ""
+    #: 有效期（月），只接受 1/3/6/12；默认 1 个月
+    expires_in_months: int = DEFAULT_TTL_MONTHS
 
 
 def _mcp_snippet(full_key: str) -> dict[str, Any]:
-    """生成可直接粘贴的 Claude Code 配置片段。
+    """生成主流 MCP 客户端的接入片段（Claude Code / Codex / Cursor / OpenCode）。
 
     ``url`` 必须是用户笔记本能访问到的地址，所以走 ``resolved_public_base_url``；
     监听 0.0.0.0 时直接抄 host 会给出一个连不上的地址。
+
+    片段格式在 2026-10 按各客户端官方文档核对：
+    - Claude Code: ``.mcp.json`` 里 ``type`` 必填，缺省会按 stdio 处理
+    - Codex: ``config.toml`` 的 ``[mcp_servers.*]``，远程用 ``url`` + ``http_headers``
+    - Cursor: ``mcp.json`` 里有 ``url`` 即判定远程，``type`` 可省
+    - OpenCode: ``opencode.json`` 里 ``type: "remote"`` + ``headers``
     """
     base = settings.resolved_public_base_url
     url = f"{base}/mcp"
-    return {
-        "url": url,
-        "json": {
-            "mcpServers": {
-                "sortie-deck": {
-                    "type": "http",
-                    "url": url,
-                    "headers": {"Authorization": f"Bearer {full_key}"},
-                }
+    auth = f"Bearer {full_key}"
+
+    claude_json = {
+        "mcpServers": {
+            "sortie-deck": {
+                "type": "http",
+                "url": url,
+                "headers": {"Authorization": auth},
+            }
+        }
+    }
+    cursor_json = {
+        "mcpServers": {
+            "sortie-deck": {
+                "url": url,
+                "headers": {"Authorization": auth},
+            }
+        }
+    }
+    opencode_json = {
+        "$schema": "https://opencode.ai/config.json",
+        "mcp": {
+            "sortie-deck": {
+                "type": "remote",
+                "url": url,
+                "enabled": True,
+                "headers": {"Authorization": auth},
             }
         },
-        "command": (
-            f"claude mcp add --transport http sortie-deck {url} "
-            f'--header "Authorization: Bearer {full_key}"'
-        ),
+    }
+    codex_toml = (
+        "[mcp_servers.sortie-deck]\n"
+        f'url = "{url}"\n'
+        f'http_headers = {{ Authorization = "{auth}" }}\n'
+    )
+    command = (
+        f"claude mcp add --transport http sortie-deck {url} "
+        f'--header "Authorization: Bearer {full_key}"'
+    )
+
+    def dump(payload: dict[str, Any]) -> str:
+        return json.dumps(payload, ensure_ascii=False, indent=2)
+
+    return {
+        "url": url,
+        # 旧字段保留一个版本，避免外部脚本直接失效；前端只读 clients
+        "json": claude_json,
+        "command": command,
+        "clients": [
+            {
+                "id": "claude-code",
+                "label": "Claude Code",
+                "target": ".mcp.json",
+                "language": "json",
+                "code": dump(claude_json),
+                "command": command,
+            },
+            {
+                "id": "codex",
+                "label": "Codex CLI",
+                "target": "~/.codex/config.toml",
+                "language": "toml",
+                "code": codex_toml,
+            },
+            {
+                "id": "cursor",
+                "label": "Cursor",
+                "target": "~/.cursor/mcp.json",
+                "language": "json",
+                "code": dump(cursor_json),
+            },
+            {
+                "id": "opencode",
+                "label": "OpenCode",
+                "target": "opencode.json",
+                "language": "json",
+                "code": dump(opencode_json),
+            },
+        ],
     }
 
 
@@ -520,10 +593,19 @@ async def list_api_keys(user: PublicUser = Depends(require_user)) -> list[dict[s
 async def create_api_key(
     body: CreateApiKeyBody, user: PublicUser = Depends(require_user)
 ) -> dict[str, Any]:
-    """创建 Key：明文只在这一次响应里出现。"""
+    """创建 Key：明文只在这一次响应里出现，有效期默认 1 个月。"""
     from sortie_deck.service import get_api_key_store
 
-    key, plaintext = get_api_key_store().create(user_id=user.id, name=body.name)
+    if body.expires_in_months not in ALLOWED_TTL_MONTHS:
+        raise HTTPException(
+            400,
+            f"expires_in_months must be one of {list(ALLOWED_TTL_MONTHS)}",
+        )
+    key, plaintext = get_api_key_store().create(
+        user_id=user.id,
+        name=body.name,
+        expires_in_months=body.expires_in_months,
+    )
     return {
         "key": key.model_dump(mode="json"),
         "plaintext": plaintext,
@@ -532,14 +614,15 @@ async def create_api_key(
 
 
 @app.delete("/api/keys/{key_id}")
-async def revoke_api_key(
+async def delete_api_key(
     key_id: str, user: PublicUser = Depends(require_user)
 ) -> dict[str, str]:
+    """物理删除 Key：记录直接从 sqlite 移除，使用它的客户端立即失效。"""
     from sortie_deck.service import get_api_key_store
 
-    if not get_api_key_store().revoke(user_id=user.id, key_id=key_id):
+    if not get_api_key_store().delete(user_id=user.id, key_id=key_id):
         raise HTTPException(404, "key not found")
-    return {"status": "revoked"}
+    return {"status": "deleted"}
 
 
 @app.get("/api/admin/users")
