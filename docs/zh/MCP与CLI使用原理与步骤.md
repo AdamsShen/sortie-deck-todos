@@ -336,9 +336,10 @@ sortie mission status
 # 4) 解门禁
 sortie mission hitl --approve
 
-# 5) 看产物
+# 5) 看产物（--cat 支持三种写法：完整路径 / stage/文件 / 唯一文件名）
 sortie mission artifacts
-sortie mission artifacts --cat prd.md
+sortie mission artifacts --cat qa_verify/test_cases.md
+sortie mission artifacts --cat test_cases.md
 
 # 6) 持续跟随（SSE）
 sortie mission watch
@@ -447,6 +448,8 @@ sortie logout      # 删掉 ~/.sortie/config.json，回到 embedded
 | 网页不实时 | api 与 worker 的 `TDT_DATA_DIR` 不是同一个卷 | 检查 compose 的 volume 挂载 |
 | 网页能看到任务但点不动门禁 | 不是任务 owner 且未被共享 | 用任务所有者账号，或 `shared_with` 授权 |
 | `sortie worker` 启动即报错 | 不是 `sqlite` 运行后端 | 需 `TDT_RUN_BACKEND=sqlite` + `TDT_STORAGE=sqlite` |
+| 每个阶段都卡 60 秒才动 | 没配模型，但机器上有 `claude`，走了 CLI 回退并等超时 | 设 `TDT_LLM_CLI_FALLBACK=0`（或配好 `TDT_LLM_API_KEY`） |
+| `--cat 文件名` 报 404 | 旧版本只认完整存储路径 | 新版本三种写法都支持；确认为最新代码 |
 | 工具报错只有 `Error executing tool xxx` | SDK 屏蔽了普通异常消息 | 已改成 `ToolError`；若仍出现，检查是不是非业务异常（栈内异常本身不外泄） |
 | 反代后 `initialize` 无响应 / 工具列表空 | Nginx 默认 `proxy_buffering on`，SSE 帧被缓冲 | `proxy_buffering off; proxy_read_timeout 300s; proxy_http_version 1.1;` |
 
