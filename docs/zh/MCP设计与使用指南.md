@@ -394,6 +394,13 @@ sortie login --url http://<host>:8787 --key sk_sortie_...
 sortie mission start --brief "..." --track standard --wait
 sortie mission start --brief "..." --json          # 纯 JSON 输出，给脚本/CI
 sortie mission start --brief "..." --dry-run       # 只打印将要做什么
+```
+
+> **两种模式的区别**：`sortie login` 之后走远程 REST（任务由云端 worker 持有，
+> `start` 可立即返回）；没登录则是**嵌入式**——CLI 进程直接 `import Orchestrator`，
+> 不起 HTTP、也不走 MCP，任务就在这个进程里跑。嵌入式模式下进程即执行载体，
+> 所以 `start` 会一直等到门禁/终态才退出（没有 `--wait` 也一样），
+> 退出即中断是设计使然，不是卡住。
 
 # 查看（省略 id = 最近一个任务）
 sortie mission status
@@ -562,5 +569,6 @@ WORKER_REPLICAS=3 docker compose up -d --scale worker=3
 | `src/sortie_deck/mcp_http.py` | Streamable HTTP 客户端（自测用） |
 | `apps/web/src/components/ApiKeysPanel.tsx` | 网页「API 密钥」面板 |
 | `docs/zh/modules/mcp.md` / `docs/en/modules/mcp.md` | 站点文档（简版） |
+| `docs/zh/MCP与CLI使用原理与步骤.md` | 姊妹篇：只讲原理串讲与分场景操作步骤、排错表 |
 | `docs/plans/2026-10-30-mcp-apikey-cli.md` | 实施计划与逐阶段验收 |
 | `docker-compose.yml` / `Dockerfile` / `docker/entrypoint.sh` | 部署 |
