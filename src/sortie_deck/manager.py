@@ -284,7 +284,7 @@ class MissionManager:
             try:
                 from sortie_deck.llm import LlmClient
 
-                client = LlmClient(cli_fallback=True)
+                client = LlmClient()
             except Exception:  # noqa: BLE001 — 无客户端等价于裁决不了
                 return None
         if not getattr(client, "enabled", False):
@@ -349,7 +349,7 @@ class MissionManager:
             try:
                 from sortie_deck.llm import LlmClient
 
-                client = LlmClient(cli_fallback=True)
+                client = LlmClient()
             except Exception:  # noqa: BLE001 — no client is a valid state
                 return None
         if not getattr(client, "enabled", False):

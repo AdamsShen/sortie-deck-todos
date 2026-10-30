@@ -230,7 +230,8 @@ class AgentForge:
             return self._llm
         from sortie_deck.llm import LlmClient
 
-        return LlmClient(cli_fallback=True)
+        # 尊重 TDT_LLM_CLI_FALLBACK：硬编码 True 会让"关闭 CLI 回退"失效
+        return LlmClient()
 
     # --- propose -------------------------------------------------------
 

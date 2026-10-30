@@ -15,5 +15,8 @@ os.environ.setdefault("TDT_DEFAULT_CODING_EXECUTOR", "mock")
 os.environ.setdefault("TDT_KB_BACKEND", "local")
 # 工具箱召回同理：.env 开启 weknora 镜像后，单测若走真实 KB 会依赖外部服务且结果随库内容漂移
 os.environ.setdefault("TDT_TOOLKIT_RECALL_BACKEND", "local")
+# 记忆检索同理：.env 开 weknora 后，本地打分用例会被语义召回序覆盖，
+# 结果随外部库内容漂移。单测固定走本地打分路径。
+os.environ.setdefault("TDT_MEMORY_RETRIEVAL", "local")
 os.environ.setdefault("TDT_LLM_API_KEY", "")
 os.environ.setdefault("TDT_DEFAULT_HARNESS", "mock")

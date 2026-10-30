@@ -264,6 +264,13 @@ export interface ExternalMaterial {
   pinned: boolean;
   /** Decoded text for text-like materials */
   text_excerpt?: string;
+  /** 任务输入快照（missions/<id>/input/）中的相对路径；空表示只有摘录 */
+  stored_path?: string;
+  text_path?: string;
+  sha256?: string;
+  /** ok | skipped | failed | pending */
+  extract_status?: string;
+  extract_error?: string;
   added_at?: string;
 }
 
@@ -585,3 +592,26 @@ export class ApiError extends Error {
     this.code = code;
   }
 }
+
+// --- API keys（远程 MCP / CLI 凭据）----------------------------------------
+
+export type ApiKeyRecord = {
+  id: string;
+  user_id: string;
+  name: string;
+  prefix: string;
+  scopes: string[];
+  created_at: number;
+  last_used_at: number | null;
+  revoked_at: number | null;
+};
+
+export type ApiKeyCreated = {
+  key: ApiKeyRecord;
+  plaintext: string;
+  mcp: {
+    url: string;
+    json: Record<string, unknown>;
+    command: string;
+  };
+};

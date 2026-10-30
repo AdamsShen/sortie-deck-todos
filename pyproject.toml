@@ -41,6 +41,9 @@ dependencies = [
   "aiosqlite>=0.20.0",
   "python-multipart>=0.0.12",
   "sse-starlette>=2.1.0",
+  # 远程 MCP 服务端（Streamable HTTP）。之前只是 claude-agent-sdk 的传递依赖，
+  # 正式能力必须直接声明并锁定，否则上游一变就消失。
+  "mcp>=2.3.0,<3",
   "pypdf>=5.0.0",
   "python-docx>=1.1.0",
   "python-pptx>=1.0.0",

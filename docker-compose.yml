@@ -1,0 +1,69 @@
+# 单机部署：api（含 /mcp）+ N 个 worker，共享一个数据卷。
+#
+#   cp .env.docker.example .env      # 填 TDT_TOKEN_SECRET 与 TDT_PUBLIC_BASE_URL
+#   docker compose build
+#   docker compose up -d
+#   WORKER_REPLICAS=3 docker compose up -d --scale worker=3   # 扩容
+#
+# 注意：api 与 worker 必须用同一个数据卷；跨机器共享需要外部数据库。
+
+x-common-env: &common-env
+  TDT_DATA_DIR: /data
+  TDT_STORAGE: sqlite
+  TDT_RUN_BACKEND: sqlite
+  TDT_WEB_DIST: /app/apps/web/dist
+
+services:
+  api:
+    build: .
+    image: sortie-deck:local
+    init: true
+    env_file:
+      - .env
+    environment:
+      <<: *common-env
+      TDT_HOST: 0.0.0.0
+      TDT_PORT: "8787"
+      # API 副本不消费队列，执行交给 worker，避免抢同一个 job
+      TDT_RUN_WORKER: "false"
+    ports:
+      - "${SORTIE_PORT:-8787}:8787"
+    volumes:
+      - sortie-data:/data
+    restart: unless-stopped
+
+  worker:
+    image: sortie-deck:local
+    build: .
+    init: true
+    command: ["worker"]
+    env_file:
+      - .env
+    environment:
+      <<: *common-env
+      TDT_RUN_WORKER: "true"
+    volumes:
+      - sortie-data:/data
+    deploy:
+      replicas: ${WORKER_REPLICAS:-2}
+    restart: unless-stopped
+
+  # 需要 HTTPS 时启用：docker compose --profile tls up -d
+  caddy:
+    image: caddy:2
+    profiles: ["tls"]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SORTIE_DOMAIN: ${SORTIE_DOMAIN:-localhost}
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: unless-stopped
+
+volumes:
+  sortie-data:
+  caddy-data:
+  caddy-config:

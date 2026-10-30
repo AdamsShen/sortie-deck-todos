@@ -123,6 +123,7 @@ nav:
       - Artifacts & Store: modules/artifacts.md
       - Web Workbench: modules/web.md
       - CLI: modules/cli.md
+      - Remote MCP: modules/mcp.md
       - Collaboration: modules/collaboration.md
       - Mission Memory: modules/mission-memory.md
   - Principles:

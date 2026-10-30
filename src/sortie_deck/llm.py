@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import shutil
@@ -25,11 +26,13 @@ class LlmClient:
         model: str | None = None,
         timeout: float = 60.0,
         cli_fallback: bool | None = None,
+        cli_timeout: float | None = None,
     ) -> None:
         cfg_key = ""
         cfg_base = ""
         cfg_model = ""
         cfg_cli: bool | None = None
+        cfg_cli_timeout = 60.0
         try:
             from sortie_deck.settings import settings as _settings
 
@@ -37,6 +40,7 @@ class LlmClient:
             cfg_base = (_settings.llm_base_url or "").strip()
             cfg_model = (_settings.llm_model or "").strip()
             cfg_cli = bool(_settings.llm_cli_fallback)
+            cfg_cli_timeout = float(_settings.llm_cli_timeout or 60.0)
         except Exception:
             pass
 
@@ -64,6 +68,18 @@ class LlmClient:
             else:
                 cli_fallback = True
         self.cli_fallback = bool(cli_fallback)
+        # CLI 回退的独立超时：它挂在阶段关键路径上，默认 60s 会让一次挂死
+        # 拖垮整个阶段；用 TDT_LLM_CLI_TIMEOUT 可单独收紧（测试/CI 常设为 2）。
+        if cli_timeout is None:
+            raw_cli_timeout = (os.environ.get("TDT_LLM_CLI_TIMEOUT") or "").strip()
+            if raw_cli_timeout:
+                try:
+                    cli_timeout = float(raw_cli_timeout)
+                except ValueError:
+                    cli_timeout = None
+        if cli_timeout is None:
+            cli_timeout = cfg_cli_timeout
+        self.cli_timeout = max(1.0, float(cli_timeout))
 
     @property
     def enabled(self) -> bool:
@@ -179,12 +195,19 @@ class LlmClient:
             )
             try:
                 stdout_b, stderr_b = await asyncio.wait_for(
-                    proc.communicate(), timeout=self.timeout
+                    proc.communicate(), timeout=self.cli_timeout
                 )
             except TimeoutError:
                 proc.kill()
                 await proc.communicate()
-                raise RuntimeError(f"claude CLI timed out after {self.timeout}s") from None
+                raise RuntimeError(f"claude CLI timed out after {self.cli_timeout}s") from None
+            except asyncio.CancelledError:
+                # 任务停止/进程退出时必须回收子进程：否则 claude 变孤儿继续跑，
+                # 还会占着 workspace 与 API 额度
+                proc.kill()
+                with contextlib.suppress(Exception):
+                    await proc.wait()
+                raise
             out = (stdout_b or b"").decode("utf-8", errors="replace").strip()
             err = (stderr_b or b"").decode("utf-8", errors="replace").strip()
             if (proc.returncode or 0) != 0 or not out:

@@ -1,0 +1,9 @@
+# 可选：需要 HTTPS 时启用（docker compose --profile tls up -d）
+# 域名解析到本机后，Caddy 会自动申请 Let's Encrypt 证书。
+{$SORTIE_DOMAIN:localhost} {
+	encode gzip
+	# SSE 需要关闭代理缓冲，否则事件会被攒成一批
+	reverse_proxy api:8787 {
+		flush_interval -1
+	}
+}

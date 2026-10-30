@@ -1,5 +1,7 @@
 import { ApiError } from "./types";
 import type {
+  ApiKeyCreated,
+  ApiKeyRecord,
   DecisionAnswerResult,
   ExternalMaterial,
   ForgeDraft,
@@ -93,6 +95,26 @@ export async function deleteOwnAccount(token: string): Promise<void> {
   await api("/api/auth/account", { token, method: "DELETE" });
 }
 
+// --- api keys -------------------------------------------------------------
+
+/** 列出当前账号的 API Key（不含明文与哈希） */
+export async function listApiKeys(token: string): Promise<ApiKeyRecord[]> {
+  return api<ApiKeyRecord[]>("/api/keys", { token });
+}
+
+/** 新建 Key：响应里的 plaintext 只出现这一次 */
+export async function createApiKey(token: string, name: string): Promise<ApiKeyCreated> {
+  return api<ApiKeyCreated>("/api/keys", {
+    token,
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function revokeApiKey(token: string, keyId: string): Promise<void> {
+  await api(`/api/keys/${encodeURIComponent(keyId)}`, { token, method: "DELETE" });
+}
+
 // --- mission shares -------------------------------------------------------
 
 /** 按账号名 / 显示名 / 用户 id 搜索账号（分享面板选人用） */
@@ -146,6 +168,47 @@ export async function updateInitiativeMaterials(
     token,
     method: "PATCH",
     body: JSON.stringify({ materials }),
+  });
+}
+
+/** 上传任务输入原件：落 missions/<id>/input/files/ 并抽文本（manifest 登记） */
+export async function uploadMissionInput(
+  token: string,
+  missionId: string,
+  file: File,
+  opts?: { kind?: string; pinned?: boolean },
+): Promise<ExternalMaterial> {
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("kind", opts?.kind || "other");
+  fd.append("pinned", String(Boolean(opts?.pinned)));
+  return api<ExternalMaterial>(`/api/missions/${encodeURIComponent(missionId)}/input`, {
+    token,
+    method: "POST",
+    body: fd,
+  });
+}
+
+export async function setMissionInputPinned(
+  token: string,
+  missionId: string,
+  materialId: string,
+  pinned: boolean,
+): Promise<ExternalMaterial> {
+  return api<ExternalMaterial>(
+    `/api/missions/${encodeURIComponent(missionId)}/input/${encodeURIComponent(materialId)}`,
+    { token, method: "PATCH", body: JSON.stringify({ pinned }) },
+  );
+}
+
+export async function deleteMissionInput(
+  token: string,
+  missionId: string,
+  materialId: string,
+): Promise<void> {
+  await api(`/api/missions/${encodeURIComponent(missionId)}/input/${encodeURIComponent(materialId)}`, {
+    token,
+    method: "DELETE",
   });
 }
 

@@ -14,6 +14,7 @@ import {
   registerUser,
   updateInitiativeHarness,
 } from "./api";
+import { ApiKeysPanel } from "./components/ApiKeysPanel";
 import { OperatorChip } from "./components/OperatorChip";
 import { PipelineEditor } from "./components/PipelineEditor";
 import { ChatComposer, SparkleIcon, type MentionOption } from "./components/ChatComposer";
@@ -2764,6 +2765,7 @@ export default function App() {
         <div className="header-meta">
           <OperatorChip user={user} tr={tr} />
           <div className="op-tools">
+            <ApiKeysPanel token={token} tr={tr} />
             {themeControls}
             <button
               type="button"

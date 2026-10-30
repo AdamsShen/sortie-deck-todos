@@ -73,7 +73,9 @@ async def _llm_plan(
 ) -> dict[str, Any] | None:
     from sortie_deck.llm import LlmClient
 
-    client = LlmClient(cli_fallback=True)
+    # 必须尊重 TDT_LLM_CLI_FALLBACK / settings.llm_cli_fallback：这里曾经硬编码
+    # True，导致关闭 CLI 回退后仍会 shell 调 `claude -p`，把阶段卡到 60s 超时。
+    client = LlmClient()
     if not client.enabled:
         return None
     ups = "\n".join(f"- {k}: {(v or '')[:400]}" for k, v in list(upstream.items())[:6])

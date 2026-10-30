@@ -26,12 +26,22 @@ class Settings(BaseSettings):
     # 仅 sqlite：JSON 存储已废弃（整文件读改写，多任务并发会互相覆盖）。
     # 保留该字段只为在配置写错时给出明确报错，以及兼容旧的 .env。
     storage: str = "sqlite"
+    # 对外可访问地址（生成 MCP / CLI 配置片段用）。留空时回落 http://{host}:{port}
+    public_base_url: str = ""
+    # 前端构建产物目录；留空时按仓库布局推导（容器里请显式指定 TDT_WEB_DIST）
+    web_dist: str = ""
+    # MCP 端点允许的 Host 白名单（逗号分隔）；留空表示关闭 DNS-rebinding 防护
+    mcp_allowed_hosts: str = ""
+    # 每个 API Key 每分钟请求上限（进程内软限流，多副本各算各的）
+    api_key_rate_limit_per_minute: int = 240
     # Optional LLM features (require TDT_LLM_API_KEY / OPENAI_API_KEY, or Claude CLI fallback)
     # Defaults on: plan_pipeline_smart / room replies fall back to heuristic/templates when unavailable
     pipeline_llm: bool = True
     room_llm: bool = True
     # When true, LlmClient may use `claude -p` if no HTTP API key is set
     llm_cli_fallback: bool = True
+    # CLI 回退的独立超时（秒）。它挂在阶段关键路径上，一次挂死就会拖垮整个阶段
+    llm_cli_timeout: float = 60.0
     # OpenAI-compatible HTTP (also read by LlmClient; prefer these over bare os.environ)
     llm_api_key: str | None = None
     llm_base_url: str = "https://api.openai.com/v1"
@@ -282,6 +292,9 @@ class Settings(BaseSettings):
     # 有未提交/未推送改动（脏状态）的改用 dirty TTL，避免误删未上库代码。
     worktree_ttl_seconds: float = 86400.0
     worktree_dirty_ttl_seconds: float = 604800.0
+    # 规划官会话（intake）目录 TTL：开了会话但从未建队的目录按此回收。
+    # 比 workspace 的 1 天更长，给用户留足「先想清楚再建队」的时间。
+    intake_ttl_days: float = 7.0
     # 磁盘水位防护：clone 前检查可用空间，低于该值（MB）拒绝新 clone
     min_disk_free_mb: int = 2048
 
@@ -325,6 +338,34 @@ class Settings(BaseSettings):
     def events_sqlite(self) -> Path:
         """mission 事件日志（SSE 的唯一数据源，多进程共享）。"""
         return self.data_dir / "events.sqlite"
+
+    @property
+    def api_keys_db(self) -> Path:
+        """用户级 API Key（远程 MCP / CLI 的长期凭据）。"""
+        return self.data_dir / "api_keys.sqlite"
+
+    @property
+    def resolved_public_base_url(self) -> str:
+        """对外可访问地址：显式配置优先，否则按 host:port 推断。
+
+        MCP / CLI 的配置片段里必须给出「用户笔记本能访问到」的地址，
+        监听 0.0.0.0 时不能把这个值直接抄进片段。
+        """
+        configured = (self.public_base_url or "").strip().rstrip("/")
+        if configured:
+            return configured
+        host = self.host
+        if host in {"0.0.0.0", "::", ""}:
+            host = "127.0.0.1"
+        return f"http://{host}:{self.port}"
+
+    @property
+    def resolved_web_dist(self) -> Path:
+        """前端构建产物目录；容器里请用 TDT_WEB_DIST 显式指定。"""
+        configured = (self.web_dist or "").strip()
+        if configured:
+            return Path(configured).expanduser()
+        return REPO_ROOT / "apps" / "web" / "dist"
 
     @property
     def resolved_worker_id(self) -> str:

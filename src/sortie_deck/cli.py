@@ -222,6 +222,56 @@ def main(argv: list[str] | None = None) -> None:
         help="Worker id (default: hostname-pid; 多副本必须彼此不同)",
     )
 
+    login = sub.add_parser("login", help="保存远程服务地址与 API Key（~/.sortie/config.json）")
+    login.add_argument("--url", required=True, help="例如 http://192.168.1.10:8787")
+    login.add_argument("--key", required=True, help="在网页「API Keys」里创建的 sk_sortie_...")
+    sub.add_parser("logout", help="删除本地保存的凭据")
+
+    mission = sub.add_parser(
+        "mission", help="任务操作：start / status / hitl / artifacts / watch / list"
+    )
+    mission_sub = mission.add_subparsers(dest="mission_cmd", required=True)
+
+    def _common(p, *, positional: bool = True) -> None:
+        if positional:
+            p.add_argument("mission_id", nargs="?", default=None, help="任务 id；省略则用最新任务")
+        p.add_argument("--json", action="store_true", help="stdout 只输出 JSON")
+        p.add_argument("--owner", default=None, help="嵌入式模式下的操作账号（默认第一个 admin）")
+
+    m_start = mission_sub.add_parser("start", help="建任务 + 确认航线 + 启动")
+    m_start.add_argument("--brief", required=True, help="任务简报 / 需求描述")
+    m_start.add_argument("--title", default=None)
+    m_start.add_argument(
+        "--track", default=None, choices=["express", "standard", "default", "research"]
+    )
+    m_start.add_argument("--harness", default=None, help="claude_code / codex / cursor / mock")
+    m_start.add_argument("--wait", action="store_true", help="等到第一个门禁或终态")
+    m_start.add_argument("--json", action="store_true")
+    m_start.add_argument("--dry-run", action="store_true")
+    m_start.add_argument("--owner", default=None)
+
+    _common(mission_sub.add_parser("status", help="查看任务状态与门禁"))
+
+    m_list = mission_sub.add_parser("list", help="列出我创建的任务")
+    m_list.add_argument("--status", default=None)
+    m_list.add_argument("--limit", type=int, default=None)
+    m_list.add_argument("--json", action="store_true")
+    m_list.add_argument("--owner", default=None)
+
+    m_hitl = mission_sub.add_parser("hitl", help="处理门禁")
+    _common(m_hitl)
+    group = m_hitl.add_mutually_exclusive_group()
+    group.add_argument("--approve", action="store_true", help="批准（默认动作）")
+    group.add_argument("--reject", action="store_true", help="驳回")
+    group.add_argument("--stop", action="store_true", help="停止任务")
+    m_hitl.add_argument("--instruction", default=None, help="附加/修改指令（等价 edit_instruction）")
+
+    m_art = mission_sub.add_parser("artifacts", help="列出/查看产物")
+    _common(m_art)
+    m_art.add_argument("--cat", default=None, help="打印指定产物内容")
+
+    _common(mission_sub.add_parser("watch", help="跟随任务进度（NDJSON when --json）"))
+
     args = parser.parse_args(argv)
     try:
         if args.cmd == "doctor":
@@ -284,6 +334,22 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit(code)
         if args.cmd == "worker":
             raise SystemExit(asyncio.run(_worker(args.id)))
+        if args.cmd in {"login", "logout", "mission"}:
+            from sortie_deck import cli_mission
+
+            if args.cmd == "login":
+                raise SystemExit(cli_mission.cmd_login(args))
+            if args.cmd == "logout":
+                raise SystemExit(cli_mission.cmd_logout(args))
+            handlers = {
+                "start": cli_mission.cmd_mission_start,
+                "status": cli_mission.cmd_mission_status,
+                "list": cli_mission.cmd_mission_list,
+                "hitl": cli_mission.cmd_mission_hitl,
+                "artifacts": cli_mission.cmd_mission_artifacts,
+                "watch": cli_mission.cmd_mission_watch,
+            }
+            raise SystemExit(handlers[args.mission_cmd](args))
         if args.cmd == "api":
             import uvicorn
 

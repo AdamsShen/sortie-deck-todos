@@ -148,6 +148,11 @@ Environment variables use prefix `TDT_` (see `sortie_deck.settings.Settings`).
 | `TDT_RUN_WORKER` | `true` (default) — set `false` on API replicas and run `sortie worker` instead |
 | `TDT_WORKER_ID` | Worker identity; defaults to `{hostname}-{pid}` (must be unique per process) |
 | `TDT_EVENT_RETENTION_DAYS` | Mission event-log retention behind SSE (default `7`, `0` = keep forever) |
+| `TDT_PUBLIC_BASE_URL` | Public URL used in generated MCP snippets (default `http://{host}:{port}`) |
+| `TDT_WEB_DIST` | Frontend build directory (default: repository `apps/web/dist`; set it in containers) |
+| `TDT_MCP_ALLOWED_HOSTS` | Host allowlist for `/mcp`; empty disables DNS-rebinding protection |
+| `TDT_API_KEY_RATE_LIMIT_PER_MINUTE` | Per-key soft rate limit (default `240`) |
+| `TDT_LLM_CLI_TIMEOUT` | Timeout for the `claude` CLI fallback (default `60`s) |
 | `TDT_ARTIFACT_BACKEND` | `local` (default) or `s3` (needs `pip install '.[s3]'`) |
 | `TDT_ORG_POLICY_PATH` | Optional JSON org policy (tracks / toolkit allowlist) |
 | `TDT_PIPELINE_LLM` / `TDT_ROOM_LLM` | Optional LLM planner / squad discussion (`true` + API key) |
