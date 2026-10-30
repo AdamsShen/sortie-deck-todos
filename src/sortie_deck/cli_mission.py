@@ -147,6 +147,21 @@ def _resolve_principal(owner: str | None):
     return Principal(user=admins[0], source="cli")
 
 
+async def _drain_tasks() -> None:
+    """取消并回收本事件循环里的其余任务。
+
+    嵌入式模式下 mission 是通过 ``asyncio.create_task`` 跑的，进程退出前若不先
+    收掉，``shutdown()`` 关掉 sqlite 连接后它们再写库会抛 "Connection closed"，
+    任务也会停在半截（看起来像 failed）。
+    """
+    current = asyncio.current_task()
+    pending = [t for t in asyncio.all_tasks() if t is not current and not t.done()]
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+
+
 async def _with_orchestrator(fn):
     from sortie_deck.observability import init_tracing, shutdown_tracing
     from sortie_deck.orchestrator import Orchestrator
@@ -161,6 +176,7 @@ async def _with_orchestrator(fn):
     try:
         return await fn(orch)
     finally:
+        await _drain_tasks()
         await orch.shutdown()
         await asyncio.sleep(0.05)
         shutdown_tracing()
@@ -401,11 +417,15 @@ def cmd_mission_start(args: Any) -> int:
             return _fail(exc.code, exc.message)
         remember_mission(ini.id)
         printer.note(f"→ 已创建 {ini.id}")
-        if args.wait:
-            return await _wait_embedded(orch, principal, ini.id, printer)
-        fresh = orch.get(ini.id) or ini
-        printer.data(_mission_brief(fresh), human=_render_status(_mission_brief(fresh)))
-        return EXIT_OK
+        if not args.wait:
+            # 嵌入式模式没有后台进程接管：任务跑在本进程里，进程一退就被取消，
+            # 状态会停在 failed。所以这里必须等到门禁/终态；想让 start 立即返回，
+            # 请用 sortie login 连远程服务，由云端 worker 持有任务。
+            printer.note(
+                "→ 嵌入式模式：任务由本进程执行，已等待到门禁/终态"
+                "（远程模式可立即返回）"
+            )
+        return await _wait_embedded(orch, principal, ini.id, printer)
 
     return asyncio.run(_with_orchestrator(run))
 
