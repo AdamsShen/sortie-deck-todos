@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **API key revocation is a hard delete**: `DELETE /api/keys/{id}` now removes the row from `data/api_keys.sqlite` instead of writing `revoked_at`; clients using the key fail on their next request. `POST /api/keys` accepts `expires_in_months` and rejects anything outside 1/3/6/12. Existing rows are migrated with `expires_at = NULL` (treated as non-expiring) so an upgrade never invalidates keys in use
+
 ### Added
 
+- **API key page (pass design)**: keys now live on a dedicated page at the same nav level as Decisions / Admin instead of a header modal. Each key is a time-boxed "agent pass": lifetime is chosen in calendar months (1 / 3 / 6 / 12, default 1), the stub shows the expiry date and days left, and an expired key is watermarked and rejected by `verify()` while staying visible for manual revocation. Issuing returns four client snippets (Claude Code `.mcp.json` + `claude mcp add`, Codex `~/.codex/config.toml`, Cursor `~/.cursor/mcp.json`, OpenCode `opencode.json`) alongside the one-time plaintext
 - **Mission input snapshots (`missions/<id>/input/`)**: imported materials are no longer "an excerpt inside the mission JSON". Originals land in `input/files/<material_id>__<name>`, extracted text in `input/text/<material_id>.md`, and `input/manifest.json` is the single index (id / kind / mime / size / sha256 / pinned / extract status / relative paths). `mission_input.py` owns atomic writes (lock + `tmp`→`os.replace`), sha256 de-duplication, per-mission quota (50MB per file / 500MB per mission) and best-effort text extraction (pdf/docx/xlsx/text; missing dependency degrades to `extract_status=failed` without blocking the upload). `input/brief.md` becomes the canonical brief snapshot, `input_index_block()` gives prompts a path-only index so large files are read on demand instead of being inlined. `ExternalMaterial` gained `stored_path` / `text_path` / `sha256` / `extract_status` / `extract_error` / `origin`
 - **Mission input API**: `POST/GET/PATCH/DELETE /api/missions/{id}/input` uploads originals as multipart (browser no longer sends only a text excerpt), pins/unpins and deletes them; the guard accepts the planning-session owner before the mission row exists and falls back to the usual run-control rule afterwards. The intake page uploads each picked file as soon as the briefing session hands back its pre-generated mission id, and chat-composer images are converted back from their data URL so they land in `input/files/` too
 - **Dynamic input injection**: `StageContext.inputs` carries a path-only projection of `input/manifest.json`; `render_input_index()` renders an `## Input index` prompt section for both the harness executor and the Cursor coding executor, while `compose_brief()` inlines only excerpts up to 4000 chars and turns longer (or binary) pinned materials into "read `input/...` on demand" pointers
@@ -78,6 +83,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Stage consult bypassed the LLM switch**: `stage_consult` / `manager` / `agent_forge` hard-coded `LlmClient(cli_fallback=True)`, so `TDT_LLM_CLI_FALLBACK=0` was ignored and every stage shelled out to `claude -p`; with no API key the CLI hung until its 60s timeout and the mission appeared stuck at `intake`. All call sites now respect the setting, the CLI fallback gets its own `TDT_LLM_CLI_TIMEOUT`, and the child process is killed when a mission is cancelled
 - **Orphaned CLI processes**: cancelling a stage left the `claude` subprocess running; it is now killed on `CancelledError`
+- **Embedded `sortie mission start` lost its own run**: without `--wait` the CLI exited immediately and dropped the in-process run task, and `shutdown()` closed the SQLite connection while the task was still writing, so the mission landed in `failed` with a `Connection closed` traceback. Embedded mode now always waits for the first gate/terminal state (the process *is* the executor), and `_drain_tasks()` cancels leftover tasks before shutdown
 
 ### Changed
 

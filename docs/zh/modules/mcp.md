@@ -76,26 +76,36 @@ Key 继续调用。
 
 ## 6. 客户端配置
 
-在网页「API 密钥」里新建一把，复制生成的片段：
+密钥在网页导航「密钥」页签发（与「决策中心 / 管理」同级）。每把 Key 绑定一个账号，
+一个账号可签发多把；有效期只能选 1 / 3 / 6 / 12 个**日历月**（默认 1 个月）。到期后
+`/api/*` 与 `/mcp` 立即 401，列表里保留记录并标「已过期」，由用户手动作废。
 
-```json
-{
-  "mcpServers": {
-    "sortie-deck": {
-      "type": "http",
-      "url": "http://<host>:8787/mcp",
-      "headers": { "Authorization": "Bearer sk_sortie_..." }
-    }
-  }
-}
-```
+签发成功后明文只出现一次，页面同时给出四套客户端配置：
 
-或：
+| 客户端 | 目标文件 | 形态 |
+|---|---|---|
+| Claude Code | 项目根 `.mcp.json` | `mcpServers.*` + `type: "http"`（`type` 必填） |
+| Codex CLI | `~/.codex/config.toml` | `[mcp_servers.*]` + `url` + `http_headers` |
+| Cursor | `~/.cursor/mcp.json`（或项目 `.cursor/mcp.json`） | `mcpServers.*` + `url` + `headers` |
+| OpenCode | `opencode.json` | `mcp.*` + `type: "remote"` + `headers` |
+
+Claude Code 也可以直接执行：
 
 ```bash
 claude mcp add --transport http sortie-deck http://<host>:8787/mcp \
   --header "Authorization: Bearer sk_sortie_..."
 ```
+
+Codex 的 `config.toml` 写法：
+
+```toml
+[mcp_servers.sortie-deck]
+url = "http://<host>:8787/mcp"
+http_headers = { Authorization = "Bearer sk_sortie_..." }
+```
+
+> 片段里是明文 Key。建议写进本机全局配置而不是提交进仓库；泄漏后立即在「密钥」页作废。
+> 作废是物理删除：记录从 `data/api_keys.sqlite` 移除，正在使用它的客户端下一次请求即断开。
 
 ## 7. 部署注意
 

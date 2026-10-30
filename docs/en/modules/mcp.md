@@ -78,26 +78,39 @@ get `conflict` with who handled it.
 
 ## 6. Client setup
 
-Create a key in the workbench ("API keys") and paste the generated snippet:
+Issue keys from the "API keys" nav page (same level as Decisions / Admin). A key
+belongs to one account and an account may hold several. Lifetime is **calendar
+months** — 1 / 3 / 6 / 12, defaulting to 1 month. Once expired, `/api/*` and
+`/mcp` return 401 immediately; the row stays in the list marked "expired" until
+you revoke it.
 
-```json
-{
-  "mcpServers": {
-    "sortie-deck": {
-      "type": "http",
-      "url": "http://<host>:8787/mcp",
-      "headers": { "Authorization": "Bearer sk_sortie_..." }
-    }
-  }
-}
-```
+The secret is shown once, together with four ready-to-paste client configs:
 
-or:
+| Client | Target file | Shape |
+|---|---|---|
+| Claude Code | `.mcp.json` (project root) | `mcpServers.*` + `type: "http"` (required) |
+| Codex CLI | `~/.codex/config.toml` | `[mcp_servers.*]` + `url` + `http_headers` |
+| Cursor | `~/.cursor/mcp.json` (or project `.cursor/mcp.json`) | `mcpServers.*` + `url` + `headers` |
+| OpenCode | `opencode.json` | `mcp.*` + `type: "remote"` + `headers` |
+
+Claude Code can also run:
 
 ```bash
 claude mcp add --transport http sortie-deck http://<host>:8787/mcp \
   --header "Authorization: Bearer sk_sortie_..."
 ```
+
+Codex `config.toml`:
+
+```toml
+[mcp_servers.sortie-deck]
+url = "http://<host>:8787/mcp"
+http_headers = { Authorization = "Bearer sk_sortie_..." }
+```
+
+> The snippets contain the plaintext key. Keep them in a local (not committed)
+> config. Revoking is a hard delete: the row disappears from
+> `data/api_keys.sqlite` and clients using it fail on their next request.
 
 ## 7. Deployment notes
 
