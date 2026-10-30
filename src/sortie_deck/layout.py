@@ -4,7 +4,8 @@
 
     data/missions/<initiative_id>/
     ├── memory/                   任务记忆 + 编码会话（MissionMemoryStore，历史上已在此）
-    ├── artifacts/<stage>/        阶段产物（原 data/artifacts/<id>/）
+    ├── artifacts/<stage>/        阶段交付产物（对用户展示；原 data/artifacts/<id>/）
+    ├── logs/<stage>/             阶段过程文件（回复全文/沟通记录/工具审计，不对外展示）
     ├── workspace/repos/<name>/   编码沙盒 + mission clone（原 data/worktrees/<id>/）
     └── chat/<file>.jsonl         任务群聊记录（原 data/rooms/<id>*.jsonl）
 
@@ -20,7 +21,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_MISSION_SUBDIRS = ("artifacts", "workspace", "chat", "memory")
+_MISSION_SUBDIRS = ("artifacts", "logs", "workspace", "chat", "memory")
 
 
 def missions_root(data_dir: Path) -> Path:
@@ -44,6 +45,15 @@ def mission_workspace_dir(data_dir: Path, initiative_id: str) -> Path:
 
 def mission_chat_dir(data_dir: Path, initiative_id: str) -> Path:
     return mission_root(data_dir, initiative_id) / "chat"
+
+
+def mission_logs_dir(data_dir: Path, initiative_id: str) -> Path:
+    """阶段过程文件目录（回复全文 / 沟通记录 / 工具审计）。
+
+    这些是排查与审计材料，不是交付物，因此不放进对用户展示的
+    ``artifacts/<stage>/``；布局为 ``missions/<id>/logs/<stage>/``。
+    """
+    return mission_root(data_dir, initiative_id) / "logs"
 
 
 def _move_if_missing(src: Path, dst: Path) -> bool:

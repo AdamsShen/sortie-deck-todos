@@ -915,12 +915,15 @@ export default function App() {
   useEffect(() => {
     if (!token || !selectedId || (!lootOpen && view !== "squad")) return;
     void loadWorkspace(selectedId);
+    // 运行中的任务刷新更快：文档型阶段产物直接写在 artifacts/<stage>/，
+    // 需要尽快在面板里看到文件增长（见 docs/plans/2026-10-30-artifact-direct-write.md）。
+    const interval = selected?.status === "running" ? 2000 : 4000;
     const timer = window.setInterval(() => {
       void loadWorkspace(selectedId);
-    }, 4000);
+    }, interval);
     return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- loadWorkspace closes over token/selectedId
-  }, [token, selectedId, lootOpen, artCount, view]);
+  }, [token, selectedId, lootOpen, artCount, view, selected?.status]);
 
   // 小群只对任务所有权人可见：切换器候选 = 我创建的任务（被共享的不算）
   const myMissions = useMemo(
@@ -3470,6 +3473,32 @@ export default function App() {
                       ))}
                       {!selected.artifacts?.length && <p className="empty-queue">{tr("noArtifacts")}</p>}
                     </div>
+                    {workspace?.artifacts_exists && workspace.artifact_files.length > 0 ? (
+                      <div className="worktree-files">
+                        <div className="panel-label tiny">{tr("liveArtifacts")}</div>
+                        <div className="artifacts worktree-list">
+                          {workspace.artifact_files.map((f) => {
+                            const full = `artifacts/${f.path}`;
+                            return (
+                              <button
+                                key={f.path}
+                                type="button"
+                                className={artifactPreviewPath === full ? "active" : undefined}
+                                onClick={() => void openArtifact(full, f.name)}
+                                title={f.path}
+                              >
+                                <span className="art-stage">
+                                  {f.path.includes("/")
+                                    ? f.path.split("/").slice(0, -1).join("/")
+                                    : "·"}
+                                </span>
+                                <span className="art-kind">{f.name}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : null}
                     {workspace?.worktree_exists && workspace.worktree_files.length > 0 ? (
                       <div className="worktree-files">
                         <div className="panel-label tiny">{tr("worktreeFiles")}</div>

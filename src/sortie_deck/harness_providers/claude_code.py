@@ -103,6 +103,7 @@ class ClaudeCodeProvider:
         *,
         cwd: str | None = None,
         context_pack: dict[str, Any] | None = None,
+        extra_dirs: list[str] | None = None,
     ) -> Any:
         from sortie_deck.harness_providers.base import HarnessReply
 
@@ -115,7 +116,11 @@ class ClaudeCodeProvider:
             )
         try:
             return await self._send_via_sdk(
-                session, prompt, cwd=cwd, context_pack=context_pack
+                session,
+                prompt,
+                cwd=cwd,
+                context_pack=context_pack,
+                extra_dirs=extra_dirs,
             )
         except Exception as exc:  # noqa: BLE001 — degrade to a fail reply, never raise
             return HarnessReply(
@@ -132,6 +137,7 @@ class ClaudeCodeProvider:
         *,
         cwd: str | None,
         context_pack: dict[str, Any] | None = None,
+        extra_dirs: list[str] | None = None,
     ) -> Any:
         from claude_agent_sdk import ClaudeAgentOptions, query  # type: ignore[import-untyped]
         from claude_agent_sdk.types import (  # type: ignore[import-untyped]
@@ -150,6 +156,10 @@ class ClaudeCodeProvider:
             permission_mode=settings.coding_permission_mode,
             resume=session.native_id or None,
             setting_sources=_setting_sources(settings.harness_setting_sources),
+            # 额外可写目录（阶段产物目录 / 沙盒）：CLI 会把它当 --add-dir 处理。
+            # 注意 add_dirs 同时会加载该目录下的 .claude 配置（skills/commands），
+            # 阶段产物目录里没有这类文件，影响可忽略。
+            add_dirs=[str(d) for d in (extra_dirs or []) if str(d or "").strip()],
             # strict 模式下这就是本阶段 MCP 的全部；空 dict = 本阶段不挂任何 MCP
             mcp_servers=dict(pack.get("mcp_servers") or {}),
             strict_mcp_config=strict,

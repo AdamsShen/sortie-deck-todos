@@ -92,6 +92,7 @@ class CodexProvider:
         *,
         cwd: str | None = None,
         context_pack: dict[str, Any] | None = None,
+        extra_dirs: list[str] | None = None,
     ) -> Any:
         from sortie_deck.harness_providers.base import HarnessReply
 
@@ -113,6 +114,11 @@ class CodexProvider:
             sandbox = str(getattr(settings, "codex_sandbox", "") or "").strip()
             if sandbox:
                 args += ["--sandbox", sandbox]
+            # 额外可写目录（阶段产物目录）：codex 首轮通过 --add-dir 扩展沙箱边界；
+            # resume 不支持再改沙箱，故只在首轮生效。
+            for extra in extra_dirs or []:
+                if str(extra or "").strip():
+                    args += ["--add-dir", str(extra)]
         args.append(prompt)
         try:
             proc = await asyncio.create_subprocess_exec(

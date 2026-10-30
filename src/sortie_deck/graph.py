@@ -92,6 +92,51 @@ async def _maybe_publish(
 _SALVAGE_SKIP_DIRS = frozenset({".git", "node_modules", ".venv", "venv", "dist", "build", "repos"})
 _SALVAGE_MAX_DEPTH = 2
 
+# 过程文件：回复全文 / 上下游沟通记录 / 工具审计。属于排查材料而非交付物，
+# 落到 missions/<id>/logs/<stage>/，不进对用户展示的产物目录。
+_PROCESS_ARTIFACT_NAMES = frozenset(
+    {"reply.md", "consult_log.md", "toolkit_meta.json", "skill_runs.json", "mcp_calls.json"}
+)
+
+
+def _stage_logs_dir(store: ArtifactStore, initiative_id: str, stage: str) -> Path | None:
+    """过程文件目录（仅本地存储有；S3 后端无本地目录，返回 None）。"""
+    root = getattr(store, "root", None)
+    if not root:
+        return None
+    return Path(str(root)) / initiative_id / "logs" / stage
+
+
+def _write_process_artifact(target_dir: Path, filename: str, content: str) -> None:
+    """写过程文件；失败只告警（审计材料缺失不能影响阶段判定）。"""
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        (target_dir / filename).write_text(content, encoding="utf-8")
+    except OSError:
+        logger.warning("过程文件写入失败: %s", target_dir / filename, exc_info=True)
+
+
+def _persist_stage_artifacts(
+    store: ArtifactStore,
+    initiative_id: str,
+    stage: str,
+    artifacts: dict[str, str],
+) -> dict[str, str]:
+    """阶段收尾落盘分流：交付物进产物库，过程文件进 ``logs/<stage>/``。
+
+    返回交付物的相对路径映射；过程文件不返回，因此也不会进 ``upstream``，
+    下游阶段拿不到回复全文/审计日志这类噪音。
+    """
+    written: dict[str, str] = {}
+    logs_dir = _stage_logs_dir(store, initiative_id, stage)
+    for filename, content in artifacts.items():
+        if filename in _PROCESS_ARTIFACT_NAMES and logs_dir is not None:
+            _write_process_artifact(logs_dir, filename, content)
+            continue
+        ref = store.write_text(initiative_id, stage, filename, content)
+        written[filename] = ref.path
+    return written
+
 
 def _absolute_artifact_path(store: ArtifactStore, relative_path: str) -> str:
     """把产物引用解析成本地绝对路径，供 prompt 里「按需读取」指路。
@@ -144,27 +189,52 @@ def _validate_or_explain(stage: str, result: StageResult) -> None:
         raise
 
 
-def _salvage_stage_artifacts(stage: str, workspace: Path | None) -> dict[str, str]:
-    """从 workspace 回收已写出的契约产物（超时/执行器失败的兜底）。
+def _salvage_stage_artifacts(
+    stage: str,
+    workspace: Path | None,
+    extra_dirs: list[Path] | None = None,
+) -> dict[str, str]:
+    """从产物目录与 workspace 回收已写出的契约产物（超时/执行器失败的兜底）。
 
-    执行器只在正常返回路径组装 ``result.artifacts``（harness 由回复文本合成），
-    一旦被 ``asyncio.wait_for`` 取消或直接抛错，磁盘上写好的文件就无人认领。
+    执行器只在正常返回路径组装 ``result.artifacts``，一旦被 ``asyncio.wait_for``
+    取消或直接抛错，磁盘上写好的文件就无人认领。文档型阶段把产物直接写在
+    ``artifacts/<stage>/``，所以这里按「产物目录优先、workspace 兜底」扫描；
     只认 ``REQUIRED`` 里的文件名且要求内容非空，避免把半成品当成阶段产物。
     """
     required = REQUIRED.get(stage, [])
-    if not required or workspace is None or not workspace.is_dir():
+    if not required:
         return {}
+    roots = [*(extra_dirs or []), workspace]
     found: dict[str, str] = {}
     for name in required:
-        for candidate in _workspace_candidates(workspace, name):
-            try:
-                content = candidate.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
+        for root in roots:
+            if root is None or not root.is_dir():
                 continue
-            if content.strip():
-                found[name] = content
+            for candidate in _workspace_candidates(root, name):
+                try:
+                    content = candidate.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError):
+                    continue
+                if content.strip():
+                    found[name] = content
+                    break
+            if name in found:
                 break
     return found
+
+
+def _stage_artifact_dir(
+    store: ArtifactStore, initiative_id: str, stage: str
+) -> Path | None:
+    """本阶段产物目录（仅本地存储可用；S3 后端没有可写本地目录，返回 None）。"""
+    initiative_dir = getattr(store, "initiative_dir", None)
+    if not callable(initiative_dir):
+        return None
+    try:
+        return Path(initiative_dir(initiative_id)) / stage
+    except Exception:  # noqa: BLE001 — 产物目录属基础设施，解析失败按不可用处理
+        logger.warning("产物目录解析失败: initiative=%s stage=%s", initiative_id, stage)
+        return None
 
 
 def _coding_perm_from_instruction(instruction: str | None) -> dict[str, str]:
@@ -1330,7 +1400,9 @@ def build_graph_from_template(
         role = _role_id(str(cfg.get("role", "product")))
         executor_name = _executor_name(stage, role.value, state, cfg)
         executor = registry.get(executor_name)
-        artifact_dir = str(artifact_store.initiative_dir(state["initiative_id"]) / stage)
+        # 产物目录（本地存储才有；S3 后端没有可写本地目录，执行器退回旧行为）
+        stage_dir = _stage_artifact_dir(artifact_store, state["initiative_id"], stage)
+        artifact_dir = str(stage_dir) if stage_dir else ""
 
         upstream_paths = state.get("upstream", {})
         upstream_content: dict[str, str] = {}
@@ -1554,7 +1626,15 @@ def build_graph_from_template(
         # 但 agent 已写进 workspace 的契约文件仍然有效。回收后可继续推进，
         # 避免 15 分钟的产出只因超时被整体丢弃。
         if result.status == "fail":
-            salvaged = _salvage_stage_artifacts(stage, _stage_workspace(state))
+            # 产物目录优先（文档型阶段直写），workspace 兜底（编码型阶段）
+            salvage_extra = [
+                p
+                for p in (_stage_artifact_dir(artifact_store, state["initiative_id"], stage),)
+                if p is not None
+            ]
+            salvaged = _salvage_stage_artifacts(
+                stage, _stage_workspace(state), salvage_extra
+            )
             if salvaged:
                 failure_message = result.message
                 result.artifacts = {**salvaged, **result.artifacts}
@@ -1671,14 +1751,20 @@ def build_graph_from_template(
             )
 
         written: dict[str, str] = dict(upstream_paths)
-        for filename, content in {
-            **consult_artifacts,
-            **result.artifacts,
-            **mcp_artifacts,
-            **meta_artifacts,
-        }.items():
-            ref = artifact_store.write_text(state["initiative_id"], stage, filename, content)
-            written[filename] = ref.path
+        # 分流落盘：交付文档进产物库，过程文件（回复全文/沟通记录/工具审计）进 logs/
+        written.update(
+            _persist_stage_artifacts(
+                artifact_store,
+                state["initiative_id"],
+                stage,
+                {
+                    **consult_artifacts,
+                    **result.artifacts,
+                    **mcp_artifacts,
+                    **meta_artifacts,
+                },
+            )
+        )
 
         _validate_or_explain(stage, result)
 

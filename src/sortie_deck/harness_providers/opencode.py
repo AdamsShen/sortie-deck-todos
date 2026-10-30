@@ -70,8 +70,13 @@ class OpenCodeProvider:
         *,
         cwd: str | None = None,
         context_pack: dict[str, Any] | None = None,
+        extra_dirs: list[str] | None = None,
     ) -> Any:
         from sortie_deck.harness_providers.base import HarnessReply
+
+        # opencode 的会话绑定单个 directory（HTTP API 无额外目录参数），
+        # extra_dirs 在这里不可兑现，交由阶段收尾归档兜底。
+        _ = extra_dirs
 
         try:
             return await self._send_http(session, prompt)

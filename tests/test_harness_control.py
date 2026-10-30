@@ -30,7 +30,8 @@ def _ctx(**overrides: Any) -> StageContext:
         "stage": "build",
         "role": "eng",
         "brief": "test brief",
-        "artifact_dir": "/tmp/artifacts",
+        # 不落真实产物目录：默认走回复包装，产物直写由专门的用例覆盖
+        "artifact_dir": "",
         "next_targets": [
             {"stage": "qa_verify", "role": "qa", "label": "QA"},
             {"stage": "deploy_preview", "role": "deploy", "label": "Deploy"},

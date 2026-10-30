@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     # When the chosen harness provider is unavailable, fall back to the legacy
     # stage executors (mock / claude_code CLI / ...) instead of failing the stage.
     harness_fallback: bool = True
+    # 文档型阶段（PRD / 用例 / 技术方案）把 cwd 直接指向 artifacts/<stage>/，
+    # 让契约产物在运行期就落进任务档案（见 docs/plans/2026-10-30-artifact-direct-write.md）。
+    # 关闭后退回旧行为：cwd=workspace，阶段结束再从 workspace 归档。
+    harness_artifact_direct_write: bool = True
     # Token budget for the per-mission context pack injected into harness prompts
     # (rough estimate: 4 chars ≈ 1 token). Exceeding it triggers auto-summary.
     mission_context_token_limit: int = 60_000

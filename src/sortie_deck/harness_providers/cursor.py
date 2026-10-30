@@ -62,6 +62,7 @@ class CursorProvider:
         *,
         cwd: str | None = None,
         context_pack: dict[str, Any] | None = None,
+        extra_dirs: list[str] | None = None,
     ) -> Any:
         from sortie_deck.harness_providers.base import HarnessReply
 
@@ -73,6 +74,9 @@ class CursorProvider:
                 session_id=session.id,
                 meta={"missing": True},
             )
+        # cursor-agent CLI 只有单个 --workspace（无 --add-dir），额外目录无法授权；
+        # 忽略 extra_dirs，阶段收尾会从 cwd 里回收契约文件归档。
+        _ = extra_dirs
         args = [binary, "-p", prompt, "--output-format", "json"]
         if session.native_id:
             args += ["--resume", session.native_id]

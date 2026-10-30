@@ -50,7 +50,8 @@ def _ctx(stage: str = "product_prd", role: str = "product", harness: str = "mock
         stage=stage,
         role=RoleId(role),
         brief="Build a notification center",
-        artifact_dir="/tmp/artifacts",
+        # 测试不落真实产物目录：传空串走旧行为（产物用回复包装满足契约）
+        artifact_dir="",
         harness=harness,
     )
 

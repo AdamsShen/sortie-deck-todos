@@ -211,6 +211,180 @@ logger = logging.getLogger(__name__)
 # 反思触发下限：回复太短（如纯确认语）没有沉淀价值，跳过 LLM 反思
 _REFLECT_MIN_REPLY_CHARS = 200
 
+# --- 阶段产物直写（运行期）------------------------------------------------------
+# 文档型阶段的契约产物就是文档本身，把 cwd 直接指向 artifacts/<stage>/，写入即进
+# 任务档案；workspace 只保留代码与仓库副本（见
+# docs/plans/2026-10-30-artifact-direct-write.md）。
+_DOC_STAGE_NAMES = frozenset({"product_prd", "qa_cases", "design_ui"})
+_UPSTREAM_DIRNAME = ".upstream"
+_RUNS_DIRNAME = ".runs"
+_WORKSPACE_LINK = "workspace"
+
+
+def _is_doc_stage(stage: str) -> bool:
+    """是否文档型阶段（产物为 md/json 文档，无代码改动）。"""
+    return stage in _DOC_STAGE_NAMES or stage.endswith("_tech_design")
+
+
+def _contract_names(stage: str) -> list[str]:
+    """本阶段契约文件名（不含 diff.patch：它由 git 生成，不能由 agent 直写）。"""
+    from sortie_deck.contracts import REQUIRED
+
+    return [name for name in REQUIRED.get(stage, []) if name != "diff.patch"]
+
+
+def _snapshot_contract_files(
+    dirs: list[Path | None], names: list[str]
+) -> dict[str, tuple[float, int]]:
+    """记录阶段开始时契约文件的 (mtime, size)，用于识别「本轮是否真的写了」。
+
+    没有快照就无法区分「agent 刚写的」与「上一轮/上游留下的」，失败阶段会拿旧文件
+    通过契约校验——这是直写产物目录后最需要防的一类脏数据。
+    """
+    snapshot: dict[str, tuple[float, int]] = {}
+    for root in dirs:
+        if root is None:
+            continue
+        for name in names:
+            path = root / name
+            try:
+                if not path.is_file():
+                    continue
+                stat = path.stat()
+            except OSError:
+                continue
+            snapshot[str(path)] = (stat.st_mtime, stat.st_size)
+    return snapshot
+
+
+def _is_fresh(path: Path, snapshot: dict[str, tuple[float, int]]) -> bool:
+    """文件是否属于本阶段产出：阶段开始时不存在，或 mtime/size 已变化。"""
+    try:
+        stat = path.stat()
+    except OSError:
+        return False
+    previous = snapshot.get(str(path))
+    if previous is None:
+        return True
+    return (stat.st_mtime, stat.st_size) != previous
+
+
+def _supports_extra_dirs(provider: Any) -> bool:
+    """provider 是否接受 ``extra_dirs``（第三方/测试 provider 可能还是旧签名）。"""
+    import inspect
+
+    try:
+        params = inspect.signature(provider.send).parameters
+    except (TypeError, ValueError):
+        return False
+    if "extra_dirs" in params:
+        return True
+    return any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
+async def _send_turn(
+    provider: Any,
+    session: Any,
+    prompt: str,
+    *,
+    cwd: Path,
+    pack: dict[str, Any],
+    extra_dirs: list[str] | None = None,
+) -> Any:
+    """统一的 provider 调用：按能力决定是否传 extra_dirs（旧签名 provider 不传）。"""
+    kwargs: dict[str, Any] = {"cwd": str(cwd), "context_pack": pack}
+    if extra_dirs and _supports_extra_dirs(provider):
+        kwargs["extra_dirs"] = list(extra_dirs)
+    return await provider.send(session, prompt, **kwargs)
+
+
+def _read_contract_text(path: Path) -> str | None:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    return text if text.strip() else None
+
+
+def _archive_previous_artifacts(artifact_dir: Path, names: list[str]) -> Path | None:
+    """重跑前把上一轮契约文件挪进 ``.runs/<时间戳>/``，保留审计但不冒充本轮结果。"""
+    import time
+
+    existing = [name for name in names if (artifact_dir / name).is_file()]
+    if not existing:
+        return None
+    target = artifact_dir / _RUNS_DIRNAME / time.strftime("%Y%m%dT%H%M%S")
+    target.mkdir(parents=True, exist_ok=True)
+    for name in existing:
+        try:
+            (artifact_dir / name).replace(target / name)
+        except OSError:
+            logger.warning("旧产物归档失败: %s", artifact_dir / name)
+    return target
+
+
+def _prepare_stage_output(
+    *,
+    stage: str,
+    artifact_dir: Path,
+    workspace: Path,
+    upstream: dict[str, str],
+) -> tuple[dict[str, str], dict[str, tuple[float, int]]]:
+    """准备文档型阶段的产物目录（cwd）。
+
+    做三件事：
+    1. 上一轮契约文件移入 ``.runs/``，避免旧文件让本轮失败阶段通过校验；
+    2. 上游产物复制到 ``.upstream/``（agent 只能读 cwd 内的文件，直接给档案路径
+       在多数 harness 下会被权限拒绝）；
+    3. 建 ``workspace`` 软链（仓库 clone 与历史遗留草稿只读可达）。
+
+    返回 ``(上游 name → 阶段内路径, 阶段开始时契约文件快照)``。
+    """
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    names = _contract_names(stage)
+    _archive_previous_artifacts(artifact_dir, names)
+    snapshot = _snapshot_contract_files([artifact_dir, workspace], names)
+
+    local_upstream: dict[str, str] = {}
+    upstream_dir = artifact_dir / _UPSTREAM_DIRNAME
+    if upstream:
+        upstream_dir.mkdir(parents=True, exist_ok=True)
+        for name, content in upstream.items():
+            if not str(content or "").strip():
+                continue
+            target = upstream_dir / Path(name).name
+            try:
+                target.write_text(content, encoding="utf-8")
+            except OSError:
+                logger.warning("上游产物镜像失败: %s", target)
+                continue
+            local_upstream[name] = str(target)
+
+    # 上一阶段可能把同名契约文件直接留在 workspace（如 intake 的 prd.md v1.0）：
+    # 这些文件不在 artifact 索引里，但正是本阶段需要审校的草稿，一并镜像进 .upstream/
+    for name in names:
+        if name in local_upstream:
+            continue
+        draft = workspace / name
+        if not draft.is_file():
+            continue
+        try:
+            upstream_dir.mkdir(parents=True, exist_ok=True)
+            target = upstream_dir / name
+            target.write_text(draft.read_text(encoding="utf-8", errors="replace"), encoding="utf-8")
+        except OSError:
+            logger.warning("历史草稿镜像失败: %s", draft)
+            continue
+        local_upstream[name] = str(target)
+
+    link = artifact_dir / _WORKSPACE_LINK
+    if not link.is_symlink() and not link.exists():
+        try:
+            link.symlink_to(workspace, target_is_directory=True)
+        except OSError:
+            logger.warning("workspace 软链创建失败: %s", link)
+    return local_upstream, snapshot
+
 
 def _parse_toolkit_intents(text: str) -> dict[str, Any]:
     """从 harness 回复文本提取元工具意图 → 可并入 StageResult.meta 的 dict。
@@ -362,9 +536,49 @@ class HarnessStageExecutor:
         workspace = ensure_worktree(data_dir.parent, ctx.initiative_id, worktrees_dir)
         repo_section, repo_log = await clone_repos(ctx.repos, workspace, ctx.initiative_id)
 
+        # 产物目录：文档型阶段 cwd 直接指向 artifacts/<stage>（运行期可实时看到真产物），
+        # 编码型阶段 cwd 仍是 workspace，产物目录只作为额外可写目录 / 收尾归档目标。
+        artifact_dir = Path(ctx.artifact_dir) if ctx.artifact_dir else None
+        direct_write = bool(getattr(settings, "harness_artifact_direct_write", True))
+        doc_stage = bool(direct_write and artifact_dir is not None and _is_doc_stage(ctx.stage))
+        snapshot: dict[str, tuple[float, int]] = {}
+        extra_dirs: list[str] = []
+        if doc_stage and artifact_dir is not None:
+            local_upstream, snapshot = _prepare_stage_output(
+                stage=ctx.stage,
+                artifact_dir=artifact_dir,
+                workspace=workspace,
+                upstream=ctx.upstream_artifacts,
+            )
+            if local_upstream:
+                # prompt 里的「按需读取」路径必须落在 cwd 内，否则多数 harness 读不了
+                ctx = ctx.model_copy(update={"upstream_paths": local_upstream})
+            cwd = artifact_dir
+            # workspace 作为额外目录：claude/codex 可读写，其余 harness 忽略
+            extra_dirs = [str(workspace)]
+            if repo_section:
+                # clone_repos 生成的是 workspace 下的绝对路径，改写为阶段内的只读软链
+                repo_section = repo_section.replace(
+                    str(workspace), str(artifact_dir / _WORKSPACE_LINK)
+                )
+        else:
+            cwd = workspace
+            snapshot = _snapshot_contract_files(
+                [workspace, artifact_dir], _contract_names(ctx.stage)
+            )
+            if direct_write and artifact_dir is not None:
+                artifact_dir.mkdir(parents=True, exist_ok=True)
+                extra_dirs = [str(artifact_dir)]
+
         pack = await self._build_context_pack(ctx)
         prompt = self._build_prompt(
-            ctx, workspace, pack, repo_section, with_subroom=host is not None
+            ctx,
+            cwd,
+            pack,
+            repo_section,
+            with_subroom=host is not None,
+            artifact_dir=artifact_dir,
+            doc_stage=doc_stage,
         )
         provider = get_harness_registry().get(harness)
         session = await provider.start_session(
@@ -372,10 +586,17 @@ class HarnessStageExecutor:
             stage=ctx.stage,
             meta={"role": str(getattr(ctx.role, "value", ctx.role))},
         )
-        reply = await provider.send(session, prompt, cwd=str(workspace), context_pack=pack)
+        reply = await _send_turn(
+            provider,
+            session,
+            prompt,
+            cwd=cwd,
+            pack=pack,
+            extra_dirs=extra_dirs,
+        )
         # 模型声明小群讨论意图时，立即拉群并把结论回注成第二轮收尾
         reply = await self._maybe_consult_subroom(
-            ctx, provider, session, reply, pack, host, workspace
+            ctx, provider, session, reply, pack, host, cwd, extra_dirs
         )
 
         # 控制平面意图：handoff 交给图的条件边跳转，escalate 先 Manager 后真人。
@@ -397,7 +618,8 @@ class HarnessStageExecutor:
                         resolution = answer[len("manager:") :].strip()
                         control_meta["escalation"] = {"level": "manager", "resolution": resolution}
                         try:
-                            follow = await provider.send(
+                            follow = await _send_turn(
+                                provider,
                                 session,
                                 (
                                     "任务管理器已对你升级的问题给出裁决：\n\n"
@@ -405,8 +627,9 @@ class HarnessStageExecutor:
                                     "请据此完成本阶段的最终产出（结尾保留 `## Result`）；"
                                     "不要再声明 escalate。"
                                 ),
-                                cwd=str(workspace),
-                                context_pack=pack,
+                                cwd=cwd,
+                                pack=pack,
+                                extra_dirs=extra_dirs,
                             )
                         except Exception:  # noqa: BLE001 — 二次调用失败保留首轮结果
                             logger.warning(
@@ -528,14 +751,25 @@ class HarnessStageExecutor:
 
         needs_hitl = reply.status in {"needs_permission", "needs_auth"}
         ok = reply.status == "ok" and bool(reply.text.strip())
-        artifacts, diff = await self._artifacts(ctx, workspace, reply, log_lines, harness=harness)
+        artifacts, diff, artifact_meta = await self._artifacts(
+            ctx,
+            workspace,
+            reply,
+            log_lines,
+            harness=harness,
+            artifact_dir=artifact_dir,
+            snapshot=snapshot,
+        )
         meta = {
             "harness": harness,
             "session_id": session.native_id or session.id,
             "provider_reply_status": reply.status,
             "workspace": str(workspace),
+            "artifact_dir": str(artifact_dir) if artifact_dir else "",
+            "artifact_direct_write": doc_stage,
             "files_written": _count_impl_files(workspace),
             "context_tokens": int(pack.get("token_estimate") or 0),
+            **artifact_meta,
         }
         # provider 侧的会话观测（轮次 / 压缩边界 / 成本）：工作台据此判断
         # 「这一阶段是否被压缩过、跑了多少轮」，不必翻 SDK 日志
@@ -586,7 +820,8 @@ class HarnessStageExecutor:
         reply: Any,
         pack: dict[str, Any],
         host: Any,
-        workspace: Path,
+        cwd: Path,
+        extra_dirs: list[str] | None = None,
     ) -> Any:
         """模型声明小群讨论意图时拉群，并把结论回注成第二轮回复。
 
@@ -632,15 +867,17 @@ class HarnessStageExecutor:
         if native_id:
             session.native_id = native_id
         try:
-            follow = await provider.send(
+            follow = await _send_turn(
+                provider,
                 session,
                 (
                     "你申请的小组讨论已经完成，结论如下：\n\n"
                     f"{conclusion.strip()}\n\n"
                     "请据此完成本阶段的最终产出（结尾保留 `## Result` 小结），不要再申请新的讨论。"
                 ),
-                cwd=str(workspace),
-                context_pack=pack,
+                cwd=cwd,
+                pack=pack,
+                extra_dirs=extra_dirs,
             )
         except Exception:  # noqa: BLE001 — 二次调用失败时保留首轮结果
             logger.warning(
@@ -877,9 +1114,30 @@ class HarnessStageExecutor:
         repo_section: str,
         *,
         with_subroom: bool = False,
+        artifact_dir: Path | None = None,
+        doc_stage: bool = False,
     ) -> str:
         prd = ctx.upstream_artifacts.get("prd.md", ctx.brief)
         briefs = pack.get("briefs") or {}
+        contract_hint = "、".join(f"`{n}`" for n in _contract_names(ctx.stage))
+        if doc_stage:
+            # 文档型阶段的 cwd 就是产物目录：契约文件必须写在这里，才能在运行中
+            # 实时出现在任务档案里；workspace 只作为只读输入入口。
+            location_line = (
+                f"Output dir (cwd): `{workspace}` — write the contract artifacts HERE "
+                f"({contract_hint or 'no contract file'}).\n"
+                f"Read-only inputs: `{workspace / _UPSTREAM_DIRNAME}` (upstream artifacts "
+                "and previous drafts) and "
+                f"`{workspace / _WORKSPACE_LINK}` (repo checkouts). "
+                "Do not write contract files into those directories."
+            )
+        else:
+            location_line = f"Workspace (cwd): `{workspace}` — you may create/edit files here."
+            if artifact_dir is not None:
+                location_line += (
+                    f"\nContract artifacts dir: `{artifact_dir}` — write "
+                    f"{contract_hint or 'the contract files'} there too; it is the mission archive."
+                )
         sections: list[str] = [
             ctx.persona or f"You are the {ctx.role} agent in Sortie Deck.",
             (
@@ -887,7 +1145,7 @@ class HarnessStageExecutor:
                 "produce the stage artifact. Do not ask the user questions — decide and act."
             ),
             f"Stage: `{ctx.stage}` — Role: `{getattr(ctx.role, 'value', ctx.role)}`",
-            f"Workspace (cwd): `{workspace}` — you may create/edit files here.",
+            location_line,
             f"Human instruction: {ctx.human_instruction or 'none'}",
             f"Mission brief:\n{ctx.brief}",
         ]
@@ -956,8 +1214,19 @@ class HarnessStageExecutor:
         log_lines: list[str],
         *,
         harness: str,
-    ) -> tuple[dict[str, str], str]:
-        """Build the stage's artifact set, always satisfying the stage contract."""
+        artifact_dir: Path | None = None,
+        snapshot: dict[str, tuple[float, int]] | None = None,
+    ) -> tuple[dict[str, str], str, dict[str, Any]]:
+        """组装阶段产物：优先取磁盘真文件，读不到才回退回复包装。
+
+        解析顺序（三级）：
+        1. ``artifacts/<stage>/`` 里本次新写的契约文件（文档型阶段的正常路径）；
+        2. ``workspace/`` 里的同名文件（编码型阶段 / 不听话的 agent），复制进产物目录；
+        3. 回复文本包装（历史兜底），并标记 ``artifact_degraded`` 便于发现。
+
+        ``snapshot`` 是阶段开始时的 (mtime, size) 快照：旧文件（快照里存在且未变化）
+        不算本阶段产物，避免失败阶段拿上一轮结果通过校验。
+        """
         from sortie_deck.contracts import REQUIRED
         from sortie_deck.plugins.coding import _count_impl_files, _git_diff
         from sortie_deck.settings import settings
@@ -973,10 +1242,40 @@ class HarnessStageExecutor:
             f"## Log\n{log[:4000]}\n"
         )
         artifacts: dict[str, str] = {"reply.md": reply_md}
+        snap = snapshot or {}
+        sources: dict[str, str] = {}
+        degraded: list[str] = []
         for name in REQUIRED.get(ctx.stage, []):
             if name == "diff.patch":
                 artifacts[name] = diff
-            elif name.endswith(".json"):
+                continue
+
+            text: str | None = None
+            for source, root in (("artifact_dir", artifact_dir), ("workspace", workspace)):
+                if root is None:
+                    continue
+                path = root / name
+                if not _is_fresh(path, snap):
+                    continue
+                text = _read_contract_text(path)
+                if text is None:
+                    continue
+                sources[name] = source
+                break
+
+            if text is not None:
+                artifacts[name] = text
+                # 来自 workspace 的真文件顺手归档进产物目录，任务档案不再是包装
+                if sources.get(name) == "workspace" and artifact_dir is not None:
+                    try:
+                        artifact_dir.mkdir(parents=True, exist_ok=True)
+                        (artifact_dir / name).write_text(text, encoding="utf-8")
+                    except OSError:
+                        logger.warning("产物归档失败: %s", artifact_dir / name)
+                continue
+
+            degraded.append(name)
+            if name.endswith(".json"):
                 artifacts[name] = json.dumps(
                     {
                         "stage": ctx.stage,
@@ -985,6 +1284,7 @@ class HarnessStageExecutor:
                         "harness": harness,
                         "workspace": str(workspace),
                         "files_written": _count_impl_files(workspace),
+                        "degraded": True,
                     },
                     ensure_ascii=False,
                     indent=2,
@@ -994,4 +1294,16 @@ class HarnessStageExecutor:
                     f"# {name} — stage `{ctx.stage}` (harness `{harness}`)\n\n"
                     f"{reply.text}\n\n## Log\n{log[:2000]}\n"
                 )
-        return artifacts, diff
+
+        artifact_meta: dict[str, Any] = {}
+        if sources:
+            artifact_meta["artifact_sources"] = sources
+        if degraded:
+            artifact_meta["artifact_degraded"] = degraded
+            logger.warning(
+                "阶段产物回退为回复包装: initiative=%s stage=%s files=%s",
+                ctx.initiative_id,
+                ctx.stage,
+                ",".join(degraded),
+            )
+        return artifacts, diff, artifact_meta

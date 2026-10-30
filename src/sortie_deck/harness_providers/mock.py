@@ -32,8 +32,12 @@ class MockHarnessProvider:
         *,
         cwd: str | None = None,
         context_pack: dict[str, Any] | None = None,
+        extra_dirs: list[str] | None = None,
     ) -> Any:
         from sortie_deck.harness_providers.base import HarnessReply
+
+        # mock 不写文件：额外目录参数仅为满足 provider 协议
+        _ = extra_dirs
 
         head = prompt.strip().splitlines()[0] if prompt.strip() else "(empty prompt)"
         return HarnessReply(

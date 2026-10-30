@@ -93,6 +93,7 @@ class HarnessProvider(Protocol):
         *,
         cwd: str | None = None,
         context_pack: dict[str, Any] | None = None,
+        extra_dirs: list[str] | None = None,
     ) -> HarnessReply: ...
 
     async def close(self, session: HarnessSession) -> None: ...

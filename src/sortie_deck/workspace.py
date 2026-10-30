@@ -34,7 +34,15 @@ def list_files(root: Path, *, limit: int = 80, max_depth: int = 4) -> list[dict[
             rel = path.relative_to(root)
         except ValueError:
             continue
-        if any(part in _SKIP_DIRS for part in rel.parts):
+        # 隐藏目录（阶段产物目录下的 .runs / .upstream）不是交付物，索引里不展示；
+        # 软链（workspace → 任务沙盒）也不能递归，否则会把代码仓库文件重复列一遍。
+        if any(part in _SKIP_DIRS or part.startswith(".") for part in rel.parts):
+            continue
+        if path.is_symlink():
+            continue
+        # 一级目录是软链（文档型阶段产物目录里的 workspace → 任务沙盒）时不展开，
+        # 否则会把代码仓库文件当成档案产物重复列出。
+        if rel.parts and (root / rel.parts[0]).is_symlink():
             continue
         if len(rel.parts) > max_depth:
             continue
