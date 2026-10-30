@@ -10,6 +10,7 @@ from typing import Any
 from langgraph.types import Command
 from pydantic import ValidationError
 
+from sortie_deck import mission_input
 from sortie_deck import observability as obs
 from sortie_deck.agents import AgentCatalog
 from sortie_deck.artifacts_s3 import build_artifact_store
@@ -155,6 +156,15 @@ def set_orchestrator(orch: Orchestrator | None) -> None:
     _orch = orch
 
 
+_HITL_SOURCE_LABELS = {"web": "网页", "cli": "命令行", "mcp": "Claude Code"}
+
+
+def hitl_source_label(source: str | None) -> str:
+    """审批通道的人话名称：写进时间线与房间消息。"""
+    key = (source or "web").strip().lower()
+    return _HITL_SOURCE_LABELS.get(key, key or "网页")
+
+
 class Orchestrator:
     def __init__(self, cfg: Settings | None = None) -> None:
         self.cfg = cfg or settings
@@ -215,6 +225,7 @@ class Orchestrator:
         self._sweep_task = asyncio.create_task(self._sweep_loop())
         # 启动时先做一次 TTL 兜底扫描（回收上次进程崩溃残留的 workspace）
         self._sweep_worktrees_once()
+        self._sweep_orphan_intakes_once()
         self._prune_events_once()
 
     def _migrate_storage_once(self) -> None:
@@ -1023,7 +1034,15 @@ class Orchestrator:
         await self._emit(ini.id, {"type": "update", "initiative": ini.model_dump(mode="json")})
         return ini
 
-    async def create_initiative(self, req: CreateInitiativeRequest) -> Initiative:
+    async def create_initiative(
+        self, req: CreateInitiativeRequest, *, initiative_id: str | None = None
+    ) -> Initiative:
+        """创建任务并落库。
+
+        ``initiative_id`` 用于复用规划官会话预生成的任务 id（会话目录
+        ``missions/<id>/`` 在会话开启时就已建好，见 PlannerSessionStore），
+        为空时按常规生成新 id。
+        """
         from sortie_deck.llm import LlmClient, resolve_coding_executor
 
         # Resolve the mission-level agent harness (user choice → global default)
@@ -1075,6 +1094,7 @@ class Orchestrator:
         }
 
         ini = Initiative(
+            id=initiative_id or new_id("ini_"),
             title=req.title,
             brief=compose_brief(req.brief, req.materials),
             template=role_template,
@@ -1375,7 +1395,14 @@ class Orchestrator:
             from sortie_deck.mission_memory import MissionMemoryStore
 
             mm = MissionMemoryStore(self.cfg.missions_dir)
-            mm.bind_context_file(ini.id, "brief.md", f"# Brief\n\n{ini.brief}")
+            # brief 的唯一事实源是 input/brief.md：不再往 memory/context 复制一份，
+            # 否则改资料后两份内容会各说各话（历史上就是这样漂移的）。
+            mission_input.rebuild_brief(
+                Path(self.cfg.data_dir),
+                ini.id,
+                str((ini.meta or {}).get("brief_base") or ini.brief),
+                materials=list(ini.materials or []),
+            )
             rail = ini.meta.get("pipeline_rail") or ini.meta.get("pipeline_stages") or []
             if rail:
                 lines = [s.get("label", s) if isinstance(s, dict) else str(s) for s in rail]
@@ -1518,11 +1545,31 @@ class Orchestrator:
             logger.info("workspace TTL sweep 清理: %s", cleaned)
         return cleaned
 
+    def _sweep_orphan_intakes_once(self) -> list[str]:
+        """回收「规划会话开了但从未建队」的孤儿任务目录。
+
+        这类目录不在任务表里，``delete_initiative`` 永远不会碰到它们；不清理
+        会随「随手点了新建任务又放弃」线性增长。
+        """
+        try:
+            from sortie_deck.maintenance import sweep_orphan_missions
+
+            known = {ini.id for ini in self.store.list()}
+            return sweep_orphan_missions(
+                self.cfg.data_dir,
+                known,
+                ttl_days=float(getattr(self.cfg, "intake_ttl_days", 7.0)),
+            )
+        except Exception as exc:  # noqa: BLE001 — 兜底扫描失败不影响主流程
+            logger.warning("孤儿 intake 目录扫描异常: %s", exc)
+            return []
+
     async def _sweep_loop(self) -> None:
-        """定时维护（每小时一次）：回收非活跃 workspace + 清理过期事件。"""
+        """定时维护（每小时一次）：回收非活跃 workspace / 孤儿 intake + 清理过期事件。"""
         while True:
             await asyncio.sleep(3600.0)
             await asyncio.to_thread(self._sweep_worktrees_once)
+            await asyncio.to_thread(self._sweep_orphan_intakes_once)
             await asyncio.to_thread(self._prune_events_once)
 
     def _cleanup_mission_workspace(self, initiative_id: str) -> None:
@@ -1612,10 +1659,22 @@ class Orchestrator:
         base = str(meta.get("brief_base") or strip_materials_section(ini.brief))
         meta["brief_base"] = base
         ini.meta = meta
-        ini.materials = list(materials)
+        # 以 manifest 为准做投影：客户端快照不含 stored_path/sha/抽取状态，
+        # 直接覆盖会把已落盘原件的信息抹掉（上传接口是唯一写原件的入口）。
+        ini.materials = mission_input.upsert_materials(
+            Path(self.cfg.data_dir), initiative_id, materials
+        )
         ini.brief = compose_brief(base, ini.materials)
         ini.updated_at = utc_now()
         self.store.upsert(ini)
+        # 同步重建 input/brief.md：任务目录里的快照必须与存储里的 brief 一致，
+        # 否则新会话 bootstrap 会读到过期版本。
+        try:
+            mission_input.rebuild_brief(
+                Path(self.cfg.data_dir), initiative_id, base, materials=ini.materials
+            )
+        except Exception:  # noqa: BLE001 — 快照失败不应阻断资料更新
+            logger.warning("input/brief.md 重建失败: %s", initiative_id, exc_info=True)
         return ini
 
     async def delete_initiative(self, initiative_id: str) -> None:
@@ -1892,6 +1951,13 @@ class Orchestrator:
                 prompt=payload.get("prompt", "Confirm to continue"),
                 allowed_actions=[HitlAction(a) for a in payload.get("allowed_actions", [e.value for e in HitlAction])],
                 artifacts=[a for a in ini.artifacts if a.stage == stage],
+                # 结构化门禁：CLI/MCP 据此能让 agent 复述"在批什么、风险多大"
+                artifact_summary=str(payload.get("artifact_summary") or ""),
+                risk=str(payload.get("risk") or ""),
+                irreversible=bool(payload.get("irreversible") or False),
+                action_help={
+                    str(k): str(v) for k, v in (payload.get("action_help") or {}).items()
+                },
             )
             ini.status = InitiativeStatus.WAITING_HITL
             ini.current_stage = stage
@@ -2175,18 +2241,22 @@ class Orchestrator:
                 )
                 return ini
 
+        # 三端（网页 / CLI / MCP）都会走到这里：来源要落到时间线与房间，
+        # 否则事后没法回答"这个门禁是谁、从哪批的"
+        source_label = hitl_source_label(decision.source)
+        actor_label = author_name if decision.source in {"", "web"} else f"{author_name}（{source_label}）"
         self._append_timeline(
             ini,
             TimelineEvent(
                 stage=ini.current_stage,
                 kind="hitl",
-                message=f"Human action: {decision.action.value}",
+                message=f"Human action: {decision.action.value} via {source_label}",
                 data=decision.model_dump(mode="json"),
             ),
         )
         await self._post_room(
             ini.id,
-            text=f"{author_name} → `{decision.action.value}`"
+            text=f"{actor_label} → `{decision.action.value}`"
             + (f"：{decision.instruction or decision.note}" if (decision.instruction or decision.note) else ""),
             actor_kind=ActorKind.HUMAN,
             actor_name=author_name,
@@ -2199,6 +2269,11 @@ class Orchestrator:
             ini = await self.switch_harness_via_hitl(ini, decision)
         ini.pending_hitl = None
         ini.status = InitiativeStatus.RUNNING
+        # 记下"谁批的"：另一端并发提交时据此提示"已被处理"，而不是静默冲突
+        meta = dict(ini.meta or {})
+        meta["last_hitl_by"] = actor_label
+        meta["last_hitl_at"] = utc_now().isoformat()
+        ini.meta = meta
         self.store.upsert(ini)
 
         decision_payload = decision.model_dump(mode="json")
@@ -2394,7 +2469,10 @@ class Orchestrator:
             self.store.upsert(ini)
         return expired
 
-    async def stop(self, initiative_id: str, author_name: str = "Operator") -> Initiative:
+    async def stop(
+        self, initiative_id: str, author_name: str = "Operator", *, source: str = "web"
+    ) -> Initiative:
+        """停止任务。``source`` 记录通道（web/cli/mcp），停在门禁上时随决策一起落库。"""
         ini = self.store.get(initiative_id)
         if not ini:
             raise KeyError(initiative_id)
@@ -2402,7 +2480,9 @@ class Orchestrator:
             return ini
         if ini.status == InitiativeStatus.WAITING_HITL:
             return await self.submit_hitl(
-                initiative_id, HitlDecision(action=HitlAction.STOP), author_name=author_name
+                initiative_id,
+                HitlDecision(action=HitlAction.STOP, source=source),
+                author_name=author_name,
             )
         ini.status = InitiativeStatus.STOPPED
         self._append_timeline(

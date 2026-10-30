@@ -5,9 +5,10 @@
     data/missions/<initiative_id>/
     ├── memory/                   任务记忆 + 编码会话（MissionMemoryStore，历史上已在此）
     ├── artifacts/<stage>/        阶段交付产物（对用户展示；原 data/artifacts/<id>/）
+    ├── input/                    任务输入快照（原件 + 抽取文本 + manifest + brief.md）
     ├── logs/<stage>/             阶段过程文件（回复全文/沟通记录/工具审计，不对外展示）
     ├── workspace/repos/<name>/   编码沙盒 + mission clone（原 data/worktrees/<id>/）
-    └── chat/<file>.jsonl         任务群聊记录（原 data/rooms/<id>*.jsonl）
+    └── chat/<file>.jsonl         任务群聊与规划官会话（原 data/rooms/<id>*.jsonl）
 
 集中存储保持原位（initiatives 元数据、checkpoints、runs、RAG、toolkit/agents/users），
 与业内 CDE/Agent 产品的 "workspace 即隔离单元 + 元数据集中管理" 一致。
@@ -21,7 +22,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_MISSION_SUBDIRS = ("artifacts", "logs", "workspace", "chat", "memory")
+_MISSION_SUBDIRS = ("artifacts", "input", "logs", "workspace", "chat", "memory")
 
 
 def missions_root(data_dir: Path) -> Path:
@@ -54,6 +55,34 @@ def mission_logs_dir(data_dir: Path, initiative_id: str) -> Path:
     ``artifacts/<stage>/``；布局为 ``missions/<id>/logs/<stage>/``。
     """
     return mission_root(data_dir, initiative_id) / "logs"
+
+
+def mission_input_dir(data_dir: Path, initiative_id: str) -> Path:
+    """任务输入快照根目录：原件、抽取文本、manifest 与 brief 快照。
+
+    与 ``artifacts/`` 的区别：这里放「用户给我的东西」（只读输入），
+    artifacts 放「agent 产出的东西」（交付物）。两者生命周期都是随任务保留。
+    """
+    return mission_root(data_dir, initiative_id) / "input"
+
+
+def mission_input_files_dir(data_dir: Path, initiative_id: str) -> Path:
+    """原件目录：``input/files/<material_id>__<原文件名>``。"""
+    return mission_input_dir(data_dir, initiative_id) / "files"
+
+
+def mission_input_text_dir(data_dir: Path, initiative_id: str) -> Path:
+    """抽取文本目录：``input/text/<material_id>.md``，抽取失败/跳过时不存在。"""
+    return mission_input_dir(data_dir, initiative_id) / "text"
+
+
+def mission_knowledge_logs_dir(data_dir: Path, initiative_id: str) -> Path:
+    """知识包归档：``logs/knowledge-pack/``。
+
+    知识包同时会写一份到 workspace（供 Cursor 自动加载），但 workspace 会被
+    回收，这里保留的任务目录副本才是「当时给 agent 灌了什么」的审计依据。
+    """
+    return mission_logs_dir(data_dir, initiative_id) / "knowledge-pack"
 
 
 def _move_if_missing(src: Path, dst: Path) -> bool:

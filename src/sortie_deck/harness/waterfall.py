@@ -12,8 +12,8 @@ pipeline/loadout/roles``）渲染瀑布动画，``draft`` 的构造也假设这�
 - 失败容忍：工具失败不中断流程（``call_tool`` 已把异常收成 ``ok=False``），
   只是不写 ``context``，与旧实现一致
 
-不配置 checkpointer：会话持久化仍由 ``BriefingStore`` 负责，图是一次性 DAG，
-双写会带来两份真相。
+不配置 checkpointer：会话持久化仍由 ``PlannerSessionStore``（missions/<id>/chat/）负责，
+图是一次性 DAG，双写会带来两份真相。
 """
 
 from __future__ import annotations

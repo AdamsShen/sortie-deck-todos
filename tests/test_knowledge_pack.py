@@ -69,3 +69,48 @@ def test_load_pack_for_cursor(tmp_path):
     assert "Portal health" in text or "health" in text.lower()
     pack = render_knowledge_pack(search_for_mission(store, "portal health"), query="portal")
     assert "Sortie Deck knowledge pack" in pack
+
+
+def test_load_pack_archives_into_mission_logs(tmp_path):
+    """workspace 会被回收：知识包必须同时归档到 missions/<id>/logs/knowledge-pack/。"""
+    from sortie_deck.knowledge import CreateKnowledgeRequest
+
+    store = KnowledgeStore(tmp_path / "knowledge.json")
+    store.create(
+        CreateKnowledgeRequest(
+            title="Portal health",
+            summary="health check",
+            body="GET /api/health",
+            tags=["api", "portal"],
+            category="reference",
+        ),
+        author_id="u1",
+        author_name="t",
+    )
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    mission_root = tmp_path / "missions" / "ini_x"
+
+    meta = load_pack_for_cursor(
+        store,
+        workspace,
+        "portal health endpoint",
+        mission_root=mission_root,
+        stage="build",
+    )
+
+    archive = mission_root / "logs" / "knowledge-pack" / "build.md"
+    assert archive.exists()
+    assert meta["archive"] == str(archive)
+    text = archive.read_text(encoding="utf-8")
+    assert "stage=build" in text
+    assert "alwaysApply" in text
+
+
+def test_load_pack_archive_is_optional(tmp_path):
+    """未传 mission_root 时不产生归档（保持旧调用方的行为）。"""
+    store = KnowledgeStore(tmp_path / "knowledge.json")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    meta = load_pack_for_cursor(store, workspace, "anything")
+    assert meta["archive"] == ""

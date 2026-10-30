@@ -34,6 +34,14 @@ sortie api
 # API 端配 TDT_RUN_WORKER=false，否则它会抢同一个 job）
 sortie worker --id w1
 
+# 任务操作（默认嵌入式直连；配了 ~/.sortie/config.json 则走远程 API）
+sortie login --url http://<host>:8787 --key sk_sortie_...
+sortie mission start --brief "..." --track standard [--wait] [--json]
+sortie mission status [ini_xxx]      # 省略 id = 最新任务
+sortie mission hitl [--approve|--reject|--instruction "..."]
+sortie mission artifacts [--cat prd.md]
+sortie mission watch
+
 # 启动前端工作台（默认 http://127.0.0.1:5173，需 API 已运行）
 cd apps/web && npm install && npm run dev
 npm run typecheck                # tsc -b，CI 校验项
@@ -66,7 +74,7 @@ Orchestrator (orchestrator.py) ──► LangGraph 图 (graph.py)
         └─► 执行器注册表 (registry.py + plugins/) ──► claude_code / cursor_cli / deploy_shell / mock
 ```
 
-数据流：创建任务 → **航线规划官** 提案阶段 → 人工确认 → 编译 LangGraph → 逐阶段执行（写产物到 `data/artifacts/<initiative>/<stage>/`）→ 命中 HITL 时 `interrupt()` 暂停并等 `Command(resume=...)` → 全程经 SSE 推送事件到工作台。
+数据流：创建任务 → **航线规划官** 提案阶段 → 人工确认 → 编译 LangGraph → 逐阶段执行（交付物写 `data/missions/<id>/artifacts/<stage>/`，过程文件写 `logs/<stage>/`，输入资料在 `input/`）→ 命中 HITL 时 `interrupt()` 暂停并等 `Command(resume=...)` → 全程经 SSE 推送事件到工作台。
 
 ## 关键文件地图
 
@@ -81,7 +89,9 @@ Orchestrator (orchestrator.py) ──► LangGraph 图 (graph.py)
 - `src/sortie_deck/store.py` + `src/sortie_deck/repositories/` — Initiative 持久化（JSON 默认 / SQLite）。
 
 **重要**
+- `service.py`（身份/权限/任务服务，API·CLI·MCP 共用）、`api_keys.py`（用户级 API Key）、`mcp_server.py`（`/mcp` Streamable HTTP 服务端）、`cli_mission.py`（`sortie mission` 子命令）。
 - `run_queue.py`（SQLite 租约式运行队列，多 worker）、`event_log.py`（mission 事件表，SSE 的唯一数据源，跨进程续读）、`parallel.py`（并行波次/依赖边纯函数）、`stage_consult.py`（阶段上下游咨询）、`pipeline_llm.py`（LLM 规划 + 规则回退）。
+- `mission_input.py`（任务输入快照：原件落盘 + 文本抽取 + `input/manifest.json` 索引 + `input/brief.md`）、`layout.py`（`missions/<id>/{artifacts,input,logs,workspace,chat,memory}` 布局与旧布局迁移）、`maintenance.py`（孤儿 intake 目录回收）。
 - `auth.py`（PBKDF2 密码 + HMAC 令牌）、`artifacts.py` / `artifacts_s3.py`、`memory.py`、`runtime.py`（doctor/日志/目录）、`org_policy.py`（组织策略）、`contracts.py`（阶段产物契约校验）。
 - `harness/__init__.py`（通用 agent 循环，独立于阶段执行器）、`cli.py`（`sortie` 子命令）。
 
@@ -100,7 +110,8 @@ Orchestrator (orchestrator.py) ──► LangGraph 图 (graph.py)
 - **航线（Track / Pipeline）**：三条内置轨道 —— `express`（热修：Intake→build→QA→ship）、`standard`（完整：PRD→cases→build→self-test→integrate→handoff→QA→ship）、`default`（办公迭代：PRD→build→QA→ship）。**创建后必须确认**（UI 或 `/confirm`）才能 `/start`，未确认会抛 `PipelineNotConfirmedError`（API code `pipeline_not_confirmed`）。
 - **HITL**：图内 `interrupt(payload)` 暂停，人工通过 `Command(resume=..., goto=...)` 恢复。动作：`approve` / `reject` / `edit_instruction` / `stop` / `reroute`。编码执行器的权限阻断会转成 `needs_hitl`。
 - **执行器（Executor）**：实现 `StageExecutor` Protocol（`name` + `async run(ctx) -> StageResult`）。按阶段/角色解析：`intake→mock_intake`、`product_prd→mock_product`、编码阶段按 `coding_executor` 选 `mock_eng` / `claude_code` / `cursor_cli`。CLI 缺失时执行器 **soft-fail** 并给出可操作提示（不静默回退 mock）。
-- **产物（Artifacts）**：写入 `data/artifacts/<initiative_id>/<stage>/`，由 `contracts.py` 按 `output_contract` 校验必需文件。
+- **产物（Artifacts）**：写入 `data/missions/<initiative_id>/artifacts/<stage>/`，由 `contracts.py` 按 `output_contract` 校验必需文件。
+- **输入快照（Input）**：用户导入的资料落 `data/missions/<id>/input/`（原件 + 抽取文本 + manifest），pinned 长文本只给路径指针，执行期通过 `StageContext.inputs` 注入 `## Input index` 由 agent 按需读取。
 - **房间（Squad Rooms）**：每任务一个 `.jsonl` 消息流；支持 `@product`/`@eng`/… 与斜杠命令 `/confirm` `/start` `/approve` `/reject` `/rewrite` `/stop`。
 
 ## 代码约定
@@ -129,6 +140,11 @@ Orchestrator (orchestrator.py) ──► LangGraph 图 (graph.py)
 | `TDT_RUN_WORKER` | `true` | 本进程是否消费队列；API 多副本时置 false，另起 `sortie worker` |
 | `TDT_WORKER_ID` | 空（= `{hostname}-{pid}`） | worker 身份，多副本必须唯一 |
 | `TDT_EVENT_RETENTION_DAYS` | `7` | mission 事件表保留天数（SSE 补播窗口） |
+| `TDT_PUBLIC_BASE_URL` | 空 | 生成 MCP/CLI 配置片段用的对外地址 |
+| `TDT_WEB_DIST` | 空（= `apps/web/dist`） | 前端产物目录，容器里必须显式指定 |
+| `TDT_MCP_ALLOWED_HOSTS` | 空 | `/mcp` 的 Host 白名单；留空关闭 DNS-rebinding 防护 |
+| `TDT_API_KEY_RATE_LIMIT_PER_MINUTE` | `240` | 每个 API Key 的进程内软限流 |
+| `TDT_LLM_CLI_TIMEOUT` | `60` | `claude` CLI 回退超时（挂在阶段关键路径上） |
 | `TDT_ARTIFACT_BACKEND` | `local` | `local` / `s3`（需 `pip install '.[s3]'`） |
 | `TDT_DEPLOY_EXECUTOR` | `mock` | `mock` / `deploy_shell`（配 `TDT_DEPLOY_CMD`） |
 | `TDT_DEFAULT_CODING_EXECUTOR` | `auto` | 编码阶段执行器 |

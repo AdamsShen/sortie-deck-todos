@@ -58,6 +58,8 @@ type Props = {
   onImportFiles: (atts: ComposerAttachment[]) => void;
   /** Materials restored from a resumed briefing session (backfill the panel). */
   onMaterialsLoaded?: (mats: ExternalMaterial[]) => void;
+  /** Session id == pre-generated mission id; parent uses it to upload originals. */
+  onSessionReady?: (missionId: string) => void;
   /** Clears the parent's external-materials panel — wired to the "新会话" button. */
   onReset?: () => void;
   labels: {
@@ -94,6 +96,7 @@ export function MissionBriefingChat({
   materials,
   onImportFiles,
   onMaterialsLoaded,
+  onSessionReady,
   onReset,
 }: Props) {
   const [session, setSession] = useState<BriefingSession | null>(null);
@@ -116,6 +119,7 @@ export function MissionBriefingChat({
           if (!cancelled) {
             setSession(s);
             setBootError("");
+            onSessionReady?.(s.id);
             onMaterialsLoaded?.(s.materials || []);
             return;
           }
@@ -132,6 +136,7 @@ export function MissionBriefingChat({
         if (!cancelled) {
           setSession(s);
           setBootError("");
+          onSessionReady?.(s.id);
           try {
             localStorage.setItem(SESSION_KEY, s.id);
           } catch {

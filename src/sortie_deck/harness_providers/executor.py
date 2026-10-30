@@ -1168,6 +1168,14 @@ class HarnessStageExecutor:
         context_files = pack.get("context_files") or {}
         for name, content in context_files.items():
             sections.append(f"Bound file `{name}`:\n{content.strip()[:6000]}")
+        # 任务输入快照：只列路径与元数据，正文让 agent 按需 Read（动态加载）
+        inputs = list(getattr(ctx, "inputs", []) or [])
+        if inputs:
+            from sortie_deck.mission_input import render_input_index
+
+            index_block = render_input_index(inputs)
+            if index_block:
+                sections.append(index_block)
         rag = str(pack.get("rag_brief") or "")
         if rag:
             sections.append(rag)

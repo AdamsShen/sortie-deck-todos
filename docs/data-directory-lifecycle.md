@@ -12,15 +12,20 @@
 data/missions/<initiative_id>/
 ├── memory/                   任务记忆 + 编码会话（MissionMemoryStore）
 ├── artifacts/<stage>/        阶段产物
+├── input/                    输入快照（原件 + 抽取文本 + manifest + brief.md）
+├── logs/<stage>/             阶段过程文件（回复全文 / 工具审计）
 ├── workspace/repos/<name>/   编码沙盒（clone 的目标仓库工作副本）
-└── chat/<file>.jsonl         任务群聊记录
+└── chat/                     任务群聊 + 规划官会话（planner.jsonl / planner.state.json）
 ```
 
 | 子目录 | 作用 | 是否随任务完成自动删 |
 |---|---|---|
 | `memory/` | 任务记忆 + 编码会话 | 否（档案，保留） |
 | `artifacts/<stage>/` | 各阶段产物 | 否（档案，保留） |
-| `chat/*.jsonl` | 任务群聊记录 | 否（档案，保留） |
+| `input/` | 用户导入资料的原件、抽取文本与 `manifest.json` 清单 | 否（档案，保留） |
+| `logs/<stage>/` | 阶段过程文件（不对外展示） | 否（档案，保留） |
+| `chat/planner.jsonl`、`chat/planner.state.json` | 规划官建队会话（任务创建前就落盘） | 否（档案，保留） |
+| `chat/<ini>.jsonl` | 任务群聊记录 | 否（档案，保留） |
 | `workspace/` | 编码沙盒（见下） | **是（自动回收）** |
 
 ### 2. 集中存储区（跨任务共享，按 id 索引）
@@ -50,7 +55,9 @@ data/missions/<initiative_id>/
 
 ### 创建阶段（基本都是**惰性** mkdir，首次写入时建）
 
-- **提交需求**：`create_initiative` 在 `initiatives.sqlite` 落元数据。`missions/<id>/` 根及四个子目录不预建，由各模块第一次写时 `mkdir(parents=True)` 连带创建。
+- **提交需求**：`create_initiative` 在 `initiatives.sqlite` 落元数据。`missions/<id>/` 根及六个子目录不预建，由各模块第一次写时 `mkdir(parents=True)` 连带创建。
+- **规划官会话**：`POST /api/briefing/sessions` 时就预生成任务 id 并 `ensure_mission_dirs()`，因此 `input/`、`chat/` 在任务创建前就已存在；`chat/planner.state.json` 首轮写入，消息追加到 `chat/planner.jsonl`。确认建队复用同一 id，不产生迁移。
+- `input/`：`manifest.json` 与原件在首次上传时写入；`input/brief.md` 由 pinned 资料重建。
 - `chat/`：第一条群聊消息即追加 `.jsonl`。
 - `memory/`：第一次写记忆或编码会话时建（`mission_memory.py:71-73`、`106`、`112`、`123`）。
 - `artifacts/<stage>/`：每个 stage 跑完落产物时建 `stage_dir`（`artifacts.py:79-80`）。

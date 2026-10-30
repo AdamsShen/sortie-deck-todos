@@ -222,6 +222,16 @@ class ExternalMaterial(BaseModel):
     pinned: bool = False
     # Decoded text for text-like materials (markdown / json / csv / …)
     text_excerpt: str = ""
+    # --- 任务输入快照（missions/<id>/input/）--------------------------------
+    # 相对 input/ 的路径；空串表示「只有摘录、没有原件」（旧数据或纯文本内联）
+    stored_path: str = ""
+    text_path: str = ""
+    sha256: str = ""
+    # ok | skipped（二进制/图片无文本可抽）| failed（依赖缺失或解析失败）| pending
+    extract_status: str = "pending"
+    extract_error: str = ""
+    # intake（新建任务时导入）| mission（任务中追加）
+    origin: str = "intake"
     added_at: datetime = Field(default_factory=utc_now)
 
 
@@ -266,6 +276,15 @@ class HitlRequest(BaseModel):
         ]
     )
     artifacts: list[ArtifactRef] = Field(default_factory=list)
+    # --- 结构化门禁信息：给 agent / CLI 读，避免「盲批」---
+    # 一句话说明这批产物是什么、该看哪个文件
+    artifact_summary: str = ""
+    # 风险描述，如「只读评审」/「会推代码」/「不可逆发布」
+    risk: str = ""
+    # 该门禁放行后是否不可撤销（部署/发布类阶段为 True）
+    irreversible: bool = False
+    # 每个 action 的语义说明，键为 action value
+    action_help: dict[str, str] = Field(default_factory=dict)
 
 
 class HitlDecision(BaseModel):
@@ -275,6 +294,8 @@ class HitlDecision(BaseModel):
     note: str | None = None
     # Target harness for `switch_harness` decisions
     harness: str | None = None
+    # 审批通道：web / cli / mcp —— 三端共存时用于审计与"已被谁处理"提示
+    source: str = "web"
 
 
 class ActorKind(str, Enum):
@@ -359,6 +380,9 @@ class StageContext(BaseModel):
     permissions: dict[str, Any] = Field(default_factory=dict)
     toolkit_ids: list[str] = Field(default_factory=list)
     toolkit_brief: str = ""
+    # 任务输入快照索引（input/manifest.json 的投影）：只有路径与元数据，
+    # 正文由 agent 按需读取，避免把大文件全文灌进每个阶段的 prompt。
+    inputs: list[dict[str, Any]] = Field(default_factory=list)
     # Mission-scoped git repos for this role (cloned into the workspace by
     # coding executors before the agent starts iterating)
     repos: list[RepoConfig] = Field(default_factory=list)

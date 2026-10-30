@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import Any
 
 from sortie_deck.knowledge import KnowledgeDoc, KnowledgeStore
+
+logger = logging.getLogger(__name__)
 
 # Categories suited for enterprise KB (product / API / design / …)
 ENTERPRISE_HINT_TAGS = (
@@ -126,12 +129,18 @@ def load_pack_for_cursor(
     *,
     limit: int = 6,
     gateway: Any | None = None,
+    mission_root: Path | None = None,
+    stage: str = "",
 ) -> dict[str, str]:
     """
     Retrieve KB passages for this mission and write Cursor-consumable context.
 
     When `gateway` uses WeKnora, retrieval is WeKnora hybrid-search.
     Otherwise falls back to local catalog keyword ranking.
+
+    ``mission_root`` 非空时，额外把同一份内容归档到
+    ``<mission_root>/logs/knowledge-pack/<stage>.md``：workspace 会被回收，
+    任务目录里的副本才是「这次 agent 拿到了什么知识」的审计依据。
     """
     if gateway is not None:
         hits = gateway.retrieve(query, limit=limit)
@@ -164,9 +173,28 @@ def load_pack_for_cursor(
     pack_path = sortie_dir / "knowledge-pack.md"
     rule_path.write_text(mdc, encoding="utf-8")
     pack_path.write_text(pack, encoding="utf-8")
+
+    archive_rel = ""
+    if mission_root is not None:
+        try:
+            target_dir = Path(mission_root) / "logs" / "knowledge-pack"
+            target_dir.mkdir(parents=True, exist_ok=True)
+            safe_stage = re.sub(r"[^A-Za-z0-9_.-]+", "_", stage or "pack")[:60] or "pack"
+            archive = target_dir / f"{safe_stage}.md"
+            archive.write_text(
+                f"<!-- mission knowledge pack | stage={stage or '-'} | "
+                f"source={source} | hits={hit_count} -->\n\n{mdc}",
+                encoding="utf-8",
+            )
+            archive_rel = str(archive)
+        except OSError as exc:
+            # 归档是审计增强项，写失败不能影响本阶段执行
+            logger.warning("知识包归档失败: %s: %s", mission_root, exc)
+
     return {
         "rule": str(rule_path.relative_to(workspace)),
         "pack": str(pack_path.relative_to(workspace)),
+        "archive": archive_rel,
         "hits": str(hit_count),
         "source": source,
     }

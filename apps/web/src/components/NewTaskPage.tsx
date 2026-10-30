@@ -1,5 +1,5 @@
-import { useMemo, useRef, useState, type DragEvent } from "react";
-import { updateInitiativeMaterials } from "../api";
+import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { updateInitiativeMaterials, uploadMissionInput } from "../api";
 import { playSfx } from "../sfx";
 import type { I18nKey } from "../i18n";
 import type { ExternalMaterial, Lang } from "../types";
@@ -17,8 +17,14 @@ type Props = {
   onError: (msg: string) => void;
 };
 
-/** Local draft row — carries the decoded text excerpt that the API receives. */
-type DraftMaterial = ExternalMaterial & { uid: string };
+/** Local draft row — carries the decoded excerpt and the original File for upload. */
+type DraftMaterial = ExternalMaterial & {
+  uid: string;
+  /** 本地选中的原件；从会话恢复的行没有 File，只能保留摘录 */
+  file?: File;
+  /** 聊天附件只带 data URL，上传前用它还原成 File */
+  data_url?: string;
+};
 
 const KIND_ORDER = ["prd", "plan", "design", "data", "other"] as const;
 type MaterialKind = (typeof KIND_ORDER)[number];
@@ -108,8 +114,24 @@ async function toDraft(file: File): Promise<DraftMaterial> {
     mime: file.type || "application/octet-stream",
     size: file.size,
     pinned: defaultPinned(kind),
+    file,
     text_excerpt: textExcerpt,
   };
+}
+
+/** data URL → File：聊天附件（图片）没有 File 句柄，上传前在这里还原。 */
+async function dataUrlToFile(
+  dataUrl: string,
+  name: string,
+  mime: string,
+): Promise<File | undefined> {
+  try {
+    const res = await fetch(dataUrl);
+    const blob = await res.blob();
+    return new File([blob], name || "file", { type: mime || blob.type });
+  } catch {
+    return undefined;
+  }
 }
 
 /** Chat-composer attachments land in the external-materials panel (single intake). */
@@ -125,6 +147,7 @@ function fromAttachment(a: ComposerAttachment): DraftMaterial | null {
     mime: a.mime || "application/octet-stream",
     size: a.size || 0,
     pinned: defaultPinned(kind),
+    data_url: a.dataUrl,
     text_excerpt: a.textExcerpt || "",
   };
 }
@@ -133,6 +156,33 @@ export function NewTaskPage({ token, lang, tr, busy, setBusy, onCancel, onCreate
   const [materials, setMaterials] = useState<DraftMaterial[]>([]);
   const [dragging, setDragging] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  // 规划会话一开启就会预生成任务 id，拿到 id 后立刻把原件传进任务目录
+  const [missionId, setMissionId] = useState("");
+  const uploadedRef = useRef<Set<string>>(new Set());
+
+  async function uploadDraft(id: string, m: DraftMaterial) {
+    if (!m.file || uploadedRef.current.has(m.uid)) return;
+    uploadedRef.current.add(m.uid);
+    try {
+      const saved = await uploadMissionInput(token, id, m.file, {
+        kind: m.kind,
+        pinned: m.pinned,
+      });
+      setMaterials((prev) =>
+        prev.map((x) => (x.uid === m.uid ? { ...x, ...saved, uid: x.uid } : x)),
+      );
+    } catch (err) {
+      // 上传失败退回「仅摘录」：规划讨论仍可继续，但不能假装原件已落盘
+      uploadedRef.current.delete(m.uid);
+      onError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  // 会话 id 到位后补传「先选文件、后建会话」的那批；上传成功会写回 stored_path
+  useEffect(() => {
+    if (!missionId) return;
+    for (const m of materials) void uploadDraft(missionId, m);
+  }, [missionId, materials]);
 
   const pinned = useMemo(() => materials.filter((m) => m.pinned), [materials]);
   const pinnedTokens = useMemo(
@@ -188,6 +238,16 @@ export function NewTaskPage({ token, lang, tr, busy, setBusy, onCancel, onCreate
     if (drafts.length) {
       playSfx("toggle");
       setMaterials((prev) => [...prev, ...drafts]);
+      // 聊天附件只有 data URL：还原成 File 后同样落任务目录（否则图片等于没给）
+      for (const d of drafts) {
+        if (!d.data_url) continue;
+        const dataUrl = d.data_url;
+        void (async () => {
+          const file = await dataUrlToFile(dataUrl, d.name, d.mime || "");
+          if (!file) return;
+          setMaterials((prev) => prev.map((x) => (x.uid === d.uid ? { ...x, file } : x)));
+        })();
+      }
     }
   }
 
@@ -275,6 +335,7 @@ export function NewTaskPage({ token, lang, tr, busy, setBusy, onCancel, onCreate
                 labels={plannerLabels}
                 materials={materialsPayload}
                 onImportFiles={addAttachments}
+                onSessionReady={setMissionId}
                 onMaterialsLoaded={(mats) =>
                   setMaterials(mats.map((m) => ({ ...m, uid: `rst_${m.id}` })))
                 }

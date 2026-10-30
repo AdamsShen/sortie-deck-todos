@@ -9,13 +9,24 @@ from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
+from sortie_deck import mission_input
 from sortie_deck.agent_forge import ForgeRequest, get_agent_forge
 from sortie_deck.agents import (
     AgentCatalog,
@@ -90,10 +101,10 @@ _briefing: Any = None
 
 
 def get_auth() -> AuthStore:
-    global _auth
-    if _auth is None:
-        _auth = AuthStore(settings.users_db, token_secret=settings.resolved_token_secret())
-    return _auth
+    """复用 service 层的单例：两个 AuthStore 实例会各自 read-modify-write users.json。"""
+    from sortie_deck.service import get_auth_store
+
+    return get_auth_store()
 
 
 def _ensure_mission_delete(ini: Any, user: PublicUser) -> None:
@@ -310,6 +321,10 @@ async def lifespan(app: FastAPI):
     migrated = migrate_legacy_layout(settings.data_dir)
     if migrated:
         logger.info("mission layout 迁移完成: %s", migrated)
+    # 旧全局 briefings.json → 按约定不迁移、直接删除（会话改落 missions/<id>/chat/）
+    from sortie_deck.mission_briefing import drop_legacy_briefing_store
+
+    drop_legacy_briefing_store(settings.data_dir)
     validate_settings(settings)
     orch = get_orchestrator()
     await orch.startup()
@@ -349,10 +364,17 @@ def _bearer(authorization: str | None) -> str | None:
 
 
 def require_user(authorization: str | None = Header(default=None)) -> PublicUser:
-    user = get_auth().resolve(_bearer(authorization))
-    if not user:
-        raise HTTPException(401, "login required")
-    return user
+    """同时接受登录 token 与用户级 API Key。
+
+    两条凭据最终都解析成 ``PublicUser``，下游路由不需要知道调用方是浏览器
+    还是本地 Claude Code——这正是「MCP 建的任务归属到 Key 所属账号」的基础。
+    """
+    from sortie_deck.service import ServiceError, resolve_principal
+
+    try:
+        return resolve_principal(authorization, source="web").user
+    except ServiceError as exc:
+        raise HTTPException(exc.http_status, exc.message) from exc
 
 
 def require_admin(user: PublicUser = Depends(require_user)) -> PublicUser:
@@ -449,6 +471,75 @@ async def delete_own_account(user: PublicUser = Depends(require_user)) -> dict[s
 @app.get("/api/auth/me")
 async def me(user: PublicUser = Depends(require_user)) -> dict[str, Any]:
     return user.model_dump()
+
+
+# ---------------------------------------------------------------------------
+# 用户级 API Key：远程 MCP / CLI 长期凭据
+# ---------------------------------------------------------------------------
+
+
+class CreateApiKeyBody(BaseModel):
+    name: str = ""
+
+
+def _mcp_snippet(full_key: str) -> dict[str, Any]:
+    """生成可直接粘贴的 Claude Code 配置片段。
+
+    ``url`` 必须是用户笔记本能访问到的地址，所以走 ``resolved_public_base_url``；
+    监听 0.0.0.0 时直接抄 host 会给出一个连不上的地址。
+    """
+    base = settings.resolved_public_base_url
+    url = f"{base}/mcp"
+    return {
+        "url": url,
+        "json": {
+            "mcpServers": {
+                "sortie-deck": {
+                    "type": "http",
+                    "url": url,
+                    "headers": {"Authorization": f"Bearer {full_key}"},
+                }
+            }
+        },
+        "command": (
+            f"claude mcp add --transport http sortie-deck {url} "
+            f'--header "Authorization: Bearer {full_key}"'
+        ),
+    }
+
+
+@app.get("/api/keys")
+async def list_api_keys(user: PublicUser = Depends(require_user)) -> list[dict[str, Any]]:
+    """只返回自己的 Key，且不含明文与哈希。"""
+    from sortie_deck.service import get_api_key_store
+
+    return [k.model_dump(mode="json") for k in get_api_key_store().list_for_user(user.id)]
+
+
+@app.post("/api/keys")
+async def create_api_key(
+    body: CreateApiKeyBody, user: PublicUser = Depends(require_user)
+) -> dict[str, Any]:
+    """创建 Key：明文只在这一次响应里出现。"""
+    from sortie_deck.service import get_api_key_store
+
+    key, plaintext = get_api_key_store().create(user_id=user.id, name=body.name)
+    return {
+        "key": key.model_dump(mode="json"),
+        "plaintext": plaintext,
+        "mcp": _mcp_snippet(plaintext),
+    }
+
+
+@app.delete("/api/keys/{key_id}")
+async def revoke_api_key(
+    key_id: str, user: PublicUser = Depends(require_user)
+) -> dict[str, str]:
+    from sortie_deck.service import get_api_key_store
+
+    if not get_api_key_store().revoke(user_id=user.id, key_id=key_id):
+        raise HTTPException(404, "key not found")
+    return {"status": "revoked"}
 
 
 @app.get("/api/admin/users")
@@ -1817,6 +1908,101 @@ async def patch_initiative_materials(
         raise HTTPException(404, "Initiative not found") from None
 
 
+def _mission_input_guard(
+    mission_id: str, user: PublicUser = Depends(require_user)
+) -> PublicUser:
+    """输入快照读写校验。
+
+    规划官会话阶段任务还没写入 ``initiatives`` 表，此时只能按
+    ``chat/planner.state.json`` 的 owner_id 放行；任务已落库后沿用运行控制
+    权限（创建者或被共享用户，admin 只读）。
+    """
+    ini = orch().get(mission_id)
+    if ini is not None:
+        _ensure_mission_control(ini, user)
+        return user
+    try:
+        sess = get_briefing().store.get(mission_id)
+    except KeyError:
+        raise HTTPException(404, "mission not found") from None
+    owner = (sess.owner_id or "").strip()
+    if owner and owner != user.id and user.role != "admin":
+        raise HTTPException(403, "mission input belongs to another user")
+    return user
+
+
+class UpdateMissionInputBody(BaseModel):
+    pinned: bool | None = None
+    # prd | plan | design | data | other（UI 分类）
+    kind: str | None = None
+
+
+@app.get("/api/missions/{mission_id}/input")
+async def list_mission_input(
+    mission_id: str, _user: PublicUser = Depends(_mission_input_guard)
+) -> dict[str, Any]:
+    materials = mission_input.list_materials(Path(settings.data_dir), mission_id)
+    return {"materials": [m.model_dump(mode="json") for m in materials]}
+
+
+@app.post("/api/missions/{mission_id}/input")
+async def upload_mission_input(
+    mission_id: str,
+    file: UploadFile = File(...),
+    kind: str = Form("other"),
+    pinned: bool = Form(False),
+    _user: PublicUser = Depends(_mission_input_guard),
+) -> dict[str, Any]:
+    """上传任务输入原件：落 input/files/ → 抽文本 → 登记 input/manifest.json。"""
+    raw = await file.read()
+    try:
+        material = mission_input.save_upload(
+            Path(settings.data_dir),
+            mission_id,
+            file.filename or "file",
+            raw,
+            kind=(kind or "other").strip() or "other",
+            mime=file.content_type or "",
+            pinned=bool(pinned),
+        )
+    except mission_input.InputTooLarge as exc:
+        raise HTTPException(413, str(exc)) from exc
+    return material.model_dump(mode="json")
+
+
+@app.patch("/api/missions/{mission_id}/input/{material_id}")
+async def update_mission_input(
+    mission_id: str,
+    material_id: str,
+    body: UpdateMissionInputBody,
+    _user: PublicUser = Depends(_mission_input_guard),
+) -> dict[str, Any]:
+    if body.pinned is None and body.kind is None:
+        raise HTTPException(400, "nothing to update")
+    material = mission_input.update_material(
+        Path(settings.data_dir),
+        mission_id,
+        material_id,
+        pinned=body.pinned,
+        kind=body.kind,
+    )
+    if material is None:
+        raise HTTPException(404, "material not found")
+    return material.model_dump(mode="json")
+
+
+@app.delete("/api/missions/{mission_id}/input/{material_id}")
+async def delete_mission_input(
+    mission_id: str,
+    material_id: str,
+    _user: PublicUser = Depends(_mission_input_guard),
+) -> dict[str, Any]:
+    removed = mission_input.remove_material(Path(settings.data_dir), mission_id, material_id)
+    if removed is None:
+        raise HTTPException(404, "material not found")
+    return {"removed": removed.model_dump(mode="json")}
+
+
 @app.get("/api/pipelines")
 async def list_pipelines(_user: PublicUser = Depends(require_user)) -> dict[str, Any]:
     return {"tracks": list_tracks(), "catalog": stage_catalog()}
@@ -1850,11 +2036,17 @@ async def get_stage_catalog(_user: PublicUser = Depends(require_user)) -> dict[s
 @app.get("/api/initiatives")
 async def list_initiatives(
     status: str | None = Query(default=None),
+    mine: bool = Query(default=False, description="只看我创建的（CLI 解析\u300c最新任务\u300d用）"),
+    limit: int | None = Query(default=None, ge=1, le=500),
     user: PublicUser = Depends(require_user),
 ) -> list[dict[str, Any]]:
     items = _visible_initiatives(orch().list_initiatives(), user)
+    if mine:
+        items = [i for i in items if getattr(i, "created_by", None) == user.id]
     if status:
         items = [i for i in items if i.status.value == status]
+    if limit:
+        items = items[:limit]
     return [i.model_dump(mode="json") for i in items]
 
 
@@ -1878,21 +2070,39 @@ class BriefingMessageBody(BaseModel):
     materials: list[ExternalMaterial] = Field(default_factory=list)
 
 
+def _guard_briefing_owner(sess: Any, user: PublicUser) -> None:
+    """建队会话尚未写入 initiatives 表，只能用 planner.state.json 的 owner_id 鉴权。"""
+    owner = (getattr(sess, "owner_id", "") or "").strip()
+    if owner and owner != user.id and user.role != "admin":
+        raise HTTPException(403, "briefing session belongs to another user")
+
+
+def _load_briefing_session(session_id: str) -> Any:
+    try:
+        return get_briefing().store.get(session_id)
+    except KeyError:
+        raise HTTPException(404, "briefing session not found") from None
+
+
 @app.post("/api/briefing/sessions")
 async def start_briefing(user: PublicUser = Depends(require_user)) -> dict[str, Any]:
     # 会话发起人即任务归属人：确认建队时写入 created_by（见 MissionBriefingAgent._commit）
     sess = get_briefing().start(owner_id=user.id)
-    return sess.model_dump(mode="json")
+    payload = sess.model_dump(mode="json")
+    # 任务 id 在会话开启时已预生成，session_id 与 initiative_id 是同一个值，
+    # 前端后续所有请求都可以直接用 initiative_id（不再有「先会话后建队」的映射）。
+    payload["session_id"] = sess.id
+    payload["initiative_id"] = sess.id
+    return payload
 
 
 @app.get("/api/briefing/sessions/{session_id}")
 async def get_briefing_session(
-    session_id: str, _user: PublicUser = Depends(require_user)
+    session_id: str, user: PublicUser = Depends(require_user)
 ) -> dict[str, Any]:
-    try:
-        return get_briefing().store.get(session_id).model_dump(mode="json")
-    except KeyError:
-        raise HTTPException(404, "briefing session not found") from None
+    sess = _load_briefing_session(session_id)
+    _guard_briefing_owner(sess, user)
+    return sess.model_dump(mode="json")
 
 
 @app.post("/api/briefing/sessions/{session_id}/messages")
@@ -1905,6 +2115,7 @@ async def post_briefing_message(
     from sortie_deck.mission_briefing import BriefingAttachment
 
     atts = [BriefingAttachment.model_validate(a) for a in (body.attachments or [])]
+    _guard_briefing_owner(_load_briefing_session(session_id), user)
     # Run planning as a task so a client abort ("stop" button) cancels it.
     task = asyncio.create_task(
         get_briefing().handle(
@@ -1942,13 +2153,14 @@ class BriefingReposBody(BaseModel):
 async def set_briefing_repos(
     session_id: str,
     body: BriefingReposBody,
-    _user: PublicUser = Depends(require_user),
+    user: PublicUser = Depends(require_user),
 ) -> dict[str, Any]:
     """Attach per-slot git/github repos & branches to the pending briefing draft.
 
     Called before the briefing confirm; each slot's dev agent clones & reads
     these repos in its workspace before iterating.
     """
+    _guard_briefing_owner(_load_briefing_session(session_id), user)
     try:
         sess = get_briefing().set_role_repos(session_id, body.role_repos)
     except KeyError:
@@ -2632,13 +2844,51 @@ async def get_org_policy(_user: PublicUser = Depends(require_user)) -> dict[str,
     return {"policy": policy.model_dump() if policy else None}
 
 
-WEB_DIST = Path(__file__).resolve().parents[3] / "apps" / "web" / "dist"
+# 前端产物目录：默认按仓库布局推导，容器里用 TDT_WEB_DIST 显式指定
+WEB_DIST = settings.resolved_web_dist
 if WEB_DIST.exists():
     app.mount("/assets", StaticFiles(directory=WEB_DIST / "assets"), name="assets")
 
     @app.get("/")
     async def index() -> FileResponse:
         return FileResponse(WEB_DIST / "index.html")
+
+
+# ---------------------------------------------------------------------------
+# MCP：Streamable HTTP 服务端（与 API 同进程，共享 Orchestrator 与 data_dir）
+# ---------------------------------------------------------------------------
+
+_mcp_cm_factory: Any = None
+try:
+    from sortie_deck.mcp_server import build_mcp_app
+    from sortie_deck.mcp_server import lifespan_context as _mcp_lifespan_context
+
+    # 挂在根路径、由子应用自带 "/mcp" 路由：Mount("/mcp") 会把 /mcp 307 重定向到
+    # /mcp/，而 MCP 客户端（含 Claude Code）通常不跟随 POST 重定向。
+    _allowed_hosts = [h.strip() for h in (settings.mcp_allowed_hosts or "").split(",") if h.strip()]
+    app.mount("/", build_mcp_app(allowed_hosts=_allowed_hosts or None))
+    _mcp_cm_factory = _mcp_lifespan_context
+    logger.info("MCP Streamable HTTP 已挂载: /mcp（stateless）")
+except Exception as exc:  # noqa: BLE001 — MCP 初始化失败不能拖垮 API
+    logger.warning("MCP 服务端初始化失败（API 仍可用）: %s", exc)
+
+
+@asynccontextmanager
+async def _lifespan_with_mcp(app_instance: FastAPI):
+    """把 MCP 子应用的 lifespan 挂进父应用。
+
+    Starlette 的 Mount 不会自动运行子应用 lifespan；不代为进入的话
+    session manager 不会启动，所有 MCP 请求都会失败。
+    """
+    if _mcp_cm_factory is None:
+        async with lifespan(app_instance):
+            yield
+        return
+    async with _mcp_cm_factory(), lifespan(app_instance):
+        yield
+
+
+app.router.lifespan_context = _lifespan_with_mcp
 
 
 def run() -> None:

@@ -113,9 +113,11 @@ def test_briefing_role_repos_pass_to_create(tmp_path: Path):
     created: list[Initiative] = []
     captured: list[CreateInitiativeRequest] = []
 
-    async def create(req: CreateInitiativeRequest) -> Initiative:
+    async def create(req: CreateInitiativeRequest, *, initiative_id: str | None = None) -> Initiative:
         captured.append(req)
-        ini = Initiative(title=req.title, brief=req.brief, template="default")
+        ini = Initiative(
+            id=initiative_id or "ini_fallback", title=req.title, brief=req.brief, template="default"
+        )
         created.append(ini)
         return ini
 

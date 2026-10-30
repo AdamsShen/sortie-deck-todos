@@ -12,7 +12,7 @@
     python scripts/backfill_mission_owner.py --owner admin --share-with chenmo
     python scripts/backfill_mission_owner.py --storage sqlite   # sqlite 后端
 
-归属推断顺序：briefings.json 中该任务的会话 owner_id → --owner 指定账号。
+归属推断顺序：missions/<id>/chat/planner.state.json 的 owner_id → --owner 指定账号。
 写盘前会生成 *.bak-<时间戳> 备份；--dry-run 不做任何写入。
 """
 
@@ -78,16 +78,14 @@ def _resolve_shares(
 
 
 def _briefing_owners(data_dir: Path) -> dict[str, str]:
-    """briefings.json 中 initiative_id -> owner_id（存量会话可能没有 owner_id）。"""
-    raw = _load_json(data_dir / "briefings.json", {})
-    rows = list(raw.values()) if isinstance(raw, dict) else list(raw)
-    out: dict[str, str] = {}
-    for sess in rows:
-        ini_id = sess.get("initiative_id")
-        owner_id = (sess.get("owner_id") or "").strip()
-        if ini_id and owner_id:
-            out[ini_id] = owner_id
-    return out
+    """missions/<id>/chat/planner.state.json 中 mission_id -> owner_id。
+
+    旧版从全局 briefings.json 读取；该文件已按新布局约定移除，会话状态
+    改为随任务目录存放，这里直接扫描任务目录。
+    """
+    from sortie_deck.mission_briefing import planner_owners
+
+    return planner_owners(data_dir)
 
 
 def _share_entry(user: dict[str, Any], added_by: str) -> dict[str, Any]:

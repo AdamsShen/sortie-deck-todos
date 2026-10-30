@@ -40,8 +40,8 @@ START → search_history → retrieve_knowledge → propose_pipeline
   the previous implementation.
 - **A failing tool does not break the chain**: `call_tool` folds exceptions into
   `ok=False`, the value is simply not written to `context`.
-- **No checkpointer**: `BriefingStore` remains the single source of truth, so
-  there is no double write.
+- **No checkpointer**: `PlannerSessionStore` (`missions/<id>/chat/planner.*`)
+  remains the single source of truth, so there is no double write.
 - `harness/__init__.py` contracts (`HarnessEvent` / `ToolSpec` / `Harness`) are
   unchanged — the workbench, storage format and `harness_providers/` are untouched.
 

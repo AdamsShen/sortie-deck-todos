@@ -54,3 +54,19 @@ Executor returns map → `ArtifactStore.write_text` → relative path into graph
 ## 6. Dependencies
 
 - Graph writes, Orchestrator sync, Web preview pane, Contracts filenames
+
+## 7. Mission input snapshots (`input/`, 2026-10)
+
+Imported materials no longer live as a text excerpt inside the mission JSON: originals are stored on disk, text is extracted, and a manifest is the single index.
+
+| Path | Content |
+|---|---|
+| `data/missions/<id>/input/manifest.json` | Single index: `id/name/kind/mime/size/sha256/pinned/extract_status` + relative paths |
+| `input/files/<mat_id>__<name>` | Original binary (PDF / DOCX / XLSX / images …) |
+| `input/text/<mat_id>.md` | Extracted text (text formats, pdf, docx, xlsx; images report `skipped`) |
+| `input/brief.md` | The only brief snapshot (pinned materials inlined or referenced by path) |
+
+- Code: `mission_input.py` — atomic writes (lock + `tmp`→`os.replace`), sha256 de-duplication, 50MB per file / 500MB per mission quota.
+- API: `POST /api/missions/{id}/input` (multipart), `GET` (list), `PATCH` (pin), `DELETE` (removes the stored files too).
+- Injection (dynamic loading): pinned text ≤4000 chars is inlined into the brief; longer or binary materials only leave an `input/...` pointer, and executors add an `## Input index` section (`StageContext.inputs`) so the agent reads content on demand.
+- Lifecycle: kept with the mission (workspace recycling does not touch it); intake directories that never became a mission are reclaimed by `maintenance.sweep_orphan_missions` after `TDT_INTAKE_TTL_DAYS` (default 7 days).

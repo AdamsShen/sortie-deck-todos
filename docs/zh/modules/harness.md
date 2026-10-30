@@ -38,7 +38,7 @@ START → search_history → retrieve_knowledge → propose_pipeline
 - **先 emit 事件、再调工具**，事件文案与顺序与旧实现逐字一致。
 - **工具失败不中断链路**：`call_tool` 把异常收成 `ok=False`，只是不写
   `context`，后续节点读到空值继续跑。
-- **不挂 checkpointer**：会话持久化仍由 `BriefingStore` 承担，避免双写。
+- **不挂 checkpointer**：会话持久化由 `PlannerSessionStore`（`missions/<id>/chat/planner.*`）承担，避免双写。
 - `harness/__init__.py` 的 `HarnessEvent` / `ToolSpec` / `Harness` 契约不变，
   前端、存储格式与 `harness_providers/` 零改动。
 

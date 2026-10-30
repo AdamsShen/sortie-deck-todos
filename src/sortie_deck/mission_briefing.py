@@ -7,14 +7,17 @@ Replaces the complex create-task form with:
 from __future__ import annotations
 
 import json
+import logging
+import os
 import re
-import threading
+import tempfile
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
+from sortie_deck import mission_input
 from sortie_deck.agent_forge import AgentForge, ForgeRequest
 from sortie_deck.agents import AgentCatalog, CreateAgentRequest
 from sortie_deck.harness import (
@@ -29,11 +32,13 @@ from sortie_deck.harness import (
 )
 from sortie_deck.harness.waterfall import run_waterfall
 from sortie_deck.knowledge_gateway import KnowledgeGateway, gateway_from_settings
+from sortie_deck.layout import ensure_mission_dirs, mission_chat_dir
 from sortie_deck.models import (
     CreateInitiativeRequest,
     ExternalMaterial,
     Initiative,
     RepoConfig,
+    new_id,
     utc_now,
 )
 from sortie_deck.pipeline import apply_proposal_to_meta
@@ -41,7 +46,13 @@ from sortie_deck.settings import Settings
 from sortie_deck.settings import settings as default_settings
 from sortie_deck.templates import load_persona
 
-CreateFn = Callable[[CreateInitiativeRequest], Awaitable[Initiative]]
+if TYPE_CHECKING:  # 仅类型标注用，避免顶层导入 llm 造成循环依赖
+    from sortie_deck.llm import LlmClient
+
+logger = logging.getLogger(__name__)
+
+# create_initiative 需要接受预生成的任务 id（见 PlannerSessionStore 说明）
+CreateFn = Callable[..., Awaitable[Initiative]]
 ListFn = Callable[[], list[Any]]
 SaveFn = Callable[[Initiative], Awaitable[Any] | Any]
 
@@ -80,6 +91,12 @@ class BriefingSession(BaseModel):
     owner_id: str = ""
     created_at: str = Field(default_factory=lambda: utc_now().isoformat())
     updated_at: str = Field(default_factory=lambda: utc_now().isoformat())
+    # 建队完成时间：区分「会话还开着」与「已交付成任务」，供清理/审计判断
+    committed_at: str = ""
+    # 已落盘边界：save() 只追加这之后的新消息/事件（append-only 语义）。
+    # 用私有属性而非字段，避免被 model_dump 写进 state 文件。
+    _persisted_messages: int = PrivateAttr(default=0)
+    _persisted_events: int = PrivateAttr(default=0)
 
 
 _MAX_ATTACH = 6
@@ -150,49 +167,169 @@ def _materials_context(mats: list[ExternalMaterial]) -> str:
     return "【外部资料 · 规划讨论】\n" + "\n".join(parts)
 
 
-class BriefingStore:
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.Lock()
-        if not self.path.exists():
-            self._write([])
+class PlannerSessionStore:
+    """规划会话存储：一个任务一个目录（``missions/<id>/chat/``）。
 
-    def _read(self) -> list[BriefingSession]:
-        return [BriefingSession.model_validate(x) for x in json.loads(self.path.read_text(encoding="utf-8"))]
+    与原 ``BriefingStore`` 的差异（这是本次改造的核心）：
 
-    def _write(self, rows: list[BriefingSession]) -> None:
-        self.path.write_text(
-            json.dumps([r.model_dump(mode="json") for r in rows], ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+    - 不再读写全局 ``data/briefings.json`` —— 单文件全量读改写，多用户并发建任务
+      会互相覆盖，且会话数与文件体积线性膨胀；
+    - 消息与事件 append-only 追加到 JSONL，只有小状态写 ``planner.state.json``；
+    - 状态写入走 tmp→``os.replace`` 原子替换，读侧永远看到完整 JSON；
+    - 任务 id（``ini_`` 前缀）在会话开启时预生成，建队确认复用同一 id，
+      因此「会话—输入资料—任务产物」从头到尾在同一个目录里，零迁移。
 
-    def create(self) -> BriefingSession:
-        sess = BriefingSession()
-        with self._lock:
-            rows = self._read()
-            rows.append(sess)
-            self._write(rows)
+    会话期任务尚未写入 initiatives 表，鉴权只能依赖 state 里的 ``owner_id``
+    （见 API 层 ``_guard_briefing_owner``）。
+    """
+
+    STATE_NAME = "planner.state.json"
+    MESSAGES_NAME = "planner.jsonl"
+    EVENTS_NAME = "planner.events.jsonl"
+
+    def __init__(self, settings: Settings) -> None:
+        self.cfg = settings
+        self.data_dir = Path(settings.data_dir)
+
+    # --- paths ---------------------------------------------------------------
+
+    def _chat_dir(self, mission_id: str) -> Path:
+        return mission_chat_dir(self.data_dir, mission_id)
+
+    def state_path(self, mission_id: str) -> Path:
+        return self._chat_dir(mission_id) / self.STATE_NAME
+
+    # --- crud ----------------------------------------------------------------
+
+    def create(self, owner_id: str = "") -> BriefingSession:
+        """预生成任务 id 并建好任务目录，返回空白会话。"""
+        mission_id = new_id("ini_")
+        ensure_mission_dirs(self.data_dir, mission_id)
+        sess = BriefingSession(id=mission_id, owner_id=owner_id)
+        return self.save(sess)
+
+    def get(self, mission_id: str) -> BriefingSession:
+        path = self.state_path(mission_id)
+        if not path.exists():
+            raise KeyError(mission_id)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8") or "{}")
+        except (OSError, json.JSONDecodeError) as exc:
+            # 状态文件损坏按「会话不存在」处理：调用方拿不到半截状态更安全
+            logger.warning("planner state 读取失败: %s: %s", path, exc)
+            raise KeyError(mission_id) from exc
+        sess = BriefingSession.model_validate(data)
+        sess.messages = self._read_rows(mission_id, self.MESSAGES_NAME, BriefingMessage)
+        sess.events = self._read_rows(mission_id, self.EVENTS_NAME, HarnessEvent)
+        # 资料以 input/manifest.json 为唯一事实源，state 里不存副本
+        sess.materials = mission_input.list_materials(self.data_dir, mission_id)
+        sess._persisted_messages = len(sess.messages)
+        sess._persisted_events = len(sess.events)
         return sess
-
-    def get(self, session_id: str) -> BriefingSession:
-        for s in self._read():
-            if s.id == session_id:
-                return s
-        raise KeyError(session_id)
 
     def save(self, sess: BriefingSession) -> BriefingSession:
+        """写状态 + 追加尚未落盘的消息/事件（加锁，避免并发请求交错写）。"""
         sess.updated_at = utc_now().isoformat()
-        with self._lock:
-            rows = self._read()
-            for i, s in enumerate(rows):
-                if s.id == sess.id:
-                    rows[i] = sess
-                    self._write(rows)
-                    return sess
-            rows.append(sess)
-            self._write(rows)
+        lock_path = self.state_path(sess.id).with_suffix(".lock")
+        with mission_input.exclusive_lock(lock_path):
+            self._chat_dir(sess.id).mkdir(parents=True, exist_ok=True)
+            state = sess.model_dump(mode="json", exclude={"messages", "events"})
+            state.pop("materials", None)
+            # 显式写 mission_id：目录名与状态文件自证归属，便于脱离目录扫库
+            state["mission_id"] = sess.id
+            _atomic_write_json(self.state_path(sess.id), state)
+            self._append_rows(sess.id, self.MESSAGES_NAME, sess.messages[sess._persisted_messages :])
+            sess._persisted_messages = len(sess.messages)
+            self._append_rows(sess.id, self.EVENTS_NAME, sess.events[sess._persisted_events :])
+            sess._persisted_events = len(sess.events)
         return sess
+
+    def delete(self, mission_id: str) -> None:
+        """删除会话文件（不动 input/ 与任务目录，供测试与清理使用）。"""
+        for name in (self.STATE_NAME, self.MESSAGES_NAME, self.EVENTS_NAME):
+            target = self._chat_dir(mission_id) / name
+            if target.exists():
+                target.unlink()
+
+    # --- jsonl helpers -------------------------------------------------------
+
+    def _read_rows(self, mission_id: str, name: str, model: type[BaseModel]) -> list[Any]:
+        path = self._chat_dir(mission_id) / name
+        if not path.exists():
+            return []
+        rows: list[Any] = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(model.model_validate(json.loads(line)))
+            except Exception:  # noqa: BLE001 — 单行损坏不应丢掉整个会话
+                logger.warning("planner 记录损坏（跳过）: %s: %.120s", path, line)
+        return rows
+
+    def _append_rows(self, mission_id: str, name: str, rows: list[Any]) -> None:
+        if not rows:
+            return
+        path = self._chat_dir(mission_id) / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            for row in rows:
+                fh.write(row.model_dump_json() + "\n")
+
+
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    """同目录临时文件 + fsync + os.replace；避免读到写了一半的 state。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-", suffix=".json")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def planner_owners(data_dir: Path) -> dict[str, str]:
+    """扫描任务目录，返回 ``mission_id -> owner_id``（供归属回填脚本使用）。"""
+    out: dict[str, str] = {}
+    for state_path in sorted(Path(data_dir).glob(f"missions/*/chat/{PlannerSessionStore.STATE_NAME}")):
+        try:
+            data = json.loads(state_path.read_text(encoding="utf-8") or "{}")
+        except (OSError, json.JSONDecodeError):
+            continue
+        mission_id = str(data.get("mission_id") or state_path.parent.parent.name)
+        owner = str(data.get("owner_id") or "").strip()
+        if mission_id and owner:
+            out[mission_id] = owner
+    return out
+
+
+def drop_legacy_briefing_store(data_dir: Path) -> int:
+    """删除全局 ``data/briefings.json``，返回被丢弃的会话数。
+
+    新布局把会话写到 ``missions/<id>/chat/``，旧文件已无读取方；留着只会
+    让人误以为数据仍在生效。按约定不做迁移，启动时直接清理。
+    """
+    path = Path(data_dir) / "briefings.json"
+    if not path.exists():
+        return 0
+    count = 0
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8") or "[]")
+        count = len(raw) if isinstance(raw, list) else len(raw or {})
+    except (OSError, json.JSONDecodeError):
+        count = 0
+    try:
+        path.unlink()
+    except OSError as exc:
+        logger.warning("删除旧 briefings.json 失败（保留原文件）: %s: %s", path, exc)
+        return 0
+    logger.warning("已删除旧全局 briefings.json（%s 个会话，按约定不迁移）: %s", count, path)
+    return count
 
 
 _CONFIRM_RE = re.compile(r"^(确认|confirm|/confirm|同意|就这样|开干|组建)\b", re.I)
@@ -223,7 +360,7 @@ class MissionBriefingAgent:
         self,
         *,
         settings: Settings | None = None,
-        store: BriefingStore | None = None,
+        store: PlannerSessionStore | None = None,
         agents: AgentCatalog | None = None,
         knowledge: KnowledgeGateway | None = None,
         forge: AgentForge | None = None,
@@ -232,7 +369,8 @@ class MissionBriefingAgent:
         save_initiative: SaveFn | None = None,
     ) -> None:
         self.cfg = settings or default_settings
-        self.store = store or BriefingStore(self.cfg.data_dir / "briefings.json")
+        self.data_dir = Path(self.cfg.data_dir)
+        self.store = store or PlannerSessionStore(self.cfg)
         self.agents = agents
         self.forge = forge
         # Brief of the mission currently being planned — used to seed forge drafts
@@ -253,9 +391,13 @@ class MissionBriefingAgent:
         return resolve_coding_executor(self.cfg.default_coding_executor)
 
     def start(self, *, owner_id: str = "") -> BriefingSession:
-        """开启建队会话；owner_id 为发起人用户 id，确认建队时作为任务创建者。"""
-        sess = self.store.create()
-        sess.owner_id = owner_id
+        """开启建队会话；owner_id 为发起人用户 id，确认建队时作为任务创建者。
+
+        任务 id 在这里预生成并落盘（``missions/<id>/``）：会话消息、导入资料
+        从第一轮就写进任务目录，确认建队时复用同一 id，不存在「先写全局文件、
+        再迁移一次」的空窗，也不会出现会话与任务两份数据。
+        """
+        sess = self.store.create(owner_id=owner_id)
         coding = self._coding_executor()
         sess.coding_executor = coding
         llm = self._llm()
@@ -301,7 +443,11 @@ class MissionBriefingAgent:
         # Materials snapshot is refreshed only when provided, so the confirm
         # turn (which sends no materials) keeps the session's last panel state.
         if materials is not None:
-            sess.materials = [ExternalMaterial.model_validate(m) for m in materials]
+            # 落 missions/<id>/input/manifest.json：任务目录是唯一事实源，
+            # state 文件里不再冗余一份（原件/抽取信息由 mission_input 维护）。
+            sess.materials = mission_input.upsert_materials(
+                self.data_dir, sess.id, [ExternalMaterial.model_validate(m) for m in materials]
+            )
         if not text and not atts:
             return self.store.save(sess)
         if sess.status == "done":
@@ -518,7 +664,8 @@ class MissionBriefingAgent:
             auto_confirm_pipeline=False,
             auto_start=False,
         )
-        ini = await self._create_initiative(req)
+        # 复用会话预生成的任务 id：input/chat 目录从头到尾是同一个任务目录
+        ini = await self._create_initiative(req, initiative_id=sess.id)
         stages = draft.get("stages") or []
         if stages:
             proposal = draft.get("pipeline") or {
@@ -547,6 +694,7 @@ class MissionBriefingAgent:
                 if hasattr(maybe, "__await__"):
                     await maybe  # type: ignore[misc]
         sess.initiative_id = ini.id
+        sess.committed_at = utc_now().isoformat()
         sess.status = "done"
         state.status = "done"
         msg = f"小队已组建：`{ini.id}`。请到「小队」确认航线后出击。"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import socket
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -173,4 +174,41 @@ def run_doctor(cfg: Settings | None = None) -> DoctorReport:
             else f"{storage} — 已废弃，需改 TDT_STORAGE=sqlite（旧 JSON 会自动导入）",
         )
     )
+
+    # LLM 体检：半配置（有 base_url/model 但没 key）最容易表现为"任务卡在某个阶段"
+    llm_key = (cfg.llm_api_key or "").strip()
+    if llm_key:
+        llm_detail = f"http · {cfg.llm_base_url or 'default'} · {cfg.llm_model or 'default'}"
+    elif cfg.llm_cli_fallback and shutil.which("claude"):
+        # CLI 回退可用但每次调用可能很慢，明确标出最坏耗时
+        llm_detail = (
+            f"claude CLI 回退（单次最长 {cfg.llm_cli_timeout:.0f}s）；"
+            "建议配 TDT_LLM_API_KEY，否则每个阶段都可能等满超时"
+        )
+    else:
+        llm_detail = "未配置（LLM 相关能力走规则/模板降级）"
+    report.checks.append(DoctorCheck("llm", True, llm_detail))
+
+    # 任务目录体检：目录总数 + 待 TTL 回收的 intake 目录（会话开了但没建队）
+    try:
+        from sortie_deck.repositories.sqlite_initiatives import SqliteInitiativeStore
+
+        missions_dir = Path(cfg.missions_dir)
+        dirs = [p.name for p in missions_dir.iterdir() if p.is_dir()] if missions_dir.is_dir() else []
+        known = {ini.id for ini in SqliteInitiativeStore(cfg.initiatives_sqlite).list()}
+        pending = [
+            name
+            for name in dirs
+            if name not in known and (missions_dir / name / "chat" / "planner.state.json").exists()
+        ]
+        report.checks.append(
+            DoctorCheck(
+                "missions",
+                True,
+                f"{len(dirs)} mission dirs, {len(pending)} intake pending sweep "
+                f"(ttl {getattr(cfg, 'intake_ttl_days', 7)}d)",
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 — 体检项失败不应让 doctor 崩掉
+        report.checks.append(DoctorCheck("missions", False, str(exc)))
     return report

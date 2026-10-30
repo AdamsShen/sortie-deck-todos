@@ -434,7 +434,17 @@ def ensure_worktree(repo_root: Path, initiative_id: str, worktrees_root: Path) -
 
 
 def _count_impl_files(workspace: Path) -> int:
-    skip = {".git", "__pycache__", "node_modules", ".write_probe", "repos"}
+    # .cursor / .sortie-deck 是知识包注入产物，不是 agent 写的实现文件；
+    # 不排除会让「exit=0 但没写代码」的失败判定永远不触发。
+    skip = {
+        ".git",
+        "__pycache__",
+        "node_modules",
+        ".write_probe",
+        "repos",
+        ".cursor",
+        ".sortie-deck",
+    }
     n = 0
     for p in workspace.rglob("*"):
         if not p.is_file():
@@ -653,11 +663,25 @@ class CursorCliExecutor:
             from sortie_deck.settings import settings as _settings
 
             gw = gateway_from_settings(_settings)
-            kb_meta = load_pack_for_cursor(gw.store, workspace, query, gateway=gw)
+            # 知识包除 workspace（供 Cursor 自动加载）外，再归档一份到任务目录，
+            # 否则 workspace 回收后无法追溯「当时给 agent 灌了什么」。
+            mission_root = (
+                Path(ctx.data_dir) / "missions" / ctx.initiative_id if ctx.data_dir else None
+            )
+            kb_meta = load_pack_for_cursor(
+                gw.store, workspace, query, gateway=gw, mission_root=mission_root, stage=ctx.stage
+            )
         except Exception as exc:  # noqa: BLE001 — soft-fail knowledge load
             kb_meta = {"error": str(exc)}
 
         mcp_extra, mcp_log = await _mcp_prompt_and_log(ctx)
+        inputs_hint = ""
+        if ctx.inputs:
+            from sortie_deck.mission_input import render_input_index
+
+            index_block = render_input_index(ctx.inputs)
+            if index_block:
+                inputs_hint = "\n" + index_block
         kb_hint = ""
         if kb_meta.get("rule"):
             kb_hint = (
@@ -666,11 +690,14 @@ class CursorCliExecutor:
                 f"- Full pack: `{kb_meta.get('pack', '')}` "
                 f"({kb_meta.get('hits', '0')} docs)\n"
             )
+            if kb_meta.get("archive"):
+                kb_hint += f"- Mission archive: `{kb_meta['archive']}`\n"
         prompt = (
             f"{ctx.persona}\n\nImplement against PRD in this isolated worktree.\n"
             f"Workspace: {workspace}\n"
             f"You may create/edit files here without asking for write approval.\n"
             f"Instruction: {ctx.human_instruction or 'none'}\n\n{artifact_section}"
+            f"{inputs_hint}"
             f"{repo_section}"
             f"{kb_hint}"
             f"{mcp_extra}"

@@ -99,6 +99,36 @@ _PROCESS_ARTIFACT_NAMES = frozenset(
 )
 
 
+def _mission_inputs(cfg: Any, initiative_id: str) -> list[dict[str, Any]]:
+    """把任务目录的 ``input/manifest.json`` 投影成 ``StageContext.inputs``。
+
+    只做投影不做读取内容：prompt 里给路径，agent 按需 Read。任何异常都返回
+    空列表——输入索引是增强项，不能因为磁盘问题让阶段起不来。
+    """
+    data_dir = str(getattr(cfg, "data_dir", "") or "")
+    if not data_dir:
+        return []
+    try:
+        from sortie_deck import mission_input
+
+        return [
+            {
+                "id": str(row.get("id") or ""),
+                "name": str(row.get("name") or ""),
+                "kind": str(row.get("kind") or "other"),
+                "size": int(row.get("size") or 0),
+                "pinned": bool(row.get("pinned")),
+                "stored_path": str(row.get("stored_path") or ""),
+                "text_path": str(row.get("text_path") or ""),
+                "extract_status": str(row.get("extract_status") or "pending"),
+            }
+            for row in mission_input.list_input_rows(Path(data_dir), initiative_id)
+        ]
+    except Exception:  # noqa: BLE001 — 索引失败不影响阶段执行
+        logger.warning("mission input 索引读取失败: %s", initiative_id, exc_info=True)
+        return []
+
+
 def _stage_logs_dir(store: ArtifactStore, initiative_id: str, stage: str) -> Path | None:
     """过程文件目录（仅本地存储有；S3 后端无本地目录，返回 None）。"""
     root = getattr(store, "root", None)
@@ -871,6 +901,60 @@ def _executor_name(stage: str, role: str, state: PipelineState, stage_cfg: dict[
     return _BUILTIN_ROLE_EXECUTORS.get(role, "mock_intake")
 
 
+# 门禁动作的语义说明：给 agent 读，避免模型只看到一个 action 枚举就盲批
+HITL_ACTION_HELP: dict[str, str] = {
+    "approve": "认可本阶段产物，继续下一阶段",
+    "reject": "不认可，回到本阶段重做",
+    "edit_instruction": "带补充指令重做本阶段（instruction 必填）",
+    "stop": "终止整个任务",
+    "reroute": "换一条航线，跳到指定阶段",
+    "switch_harness": "切换执行器（需要人工授权）",
+}
+
+# 命中这些前缀的阶段视为不可逆（对外发布/部署）
+_IRREVERSIBLE_STAGE_TOKENS = ("deploy", "ship", "release", "publish")
+
+
+def stage_is_irreversible(stage: str, cfg: dict[str, Any] | None = None) -> bool:
+    """阶段放行后是否不可撤销；`irreversible: true` 可显式覆盖。"""
+    if (cfg or {}).get("irreversible"):
+        return True
+    lowered = (stage or "").strip().lower()
+    return any(lowered.startswith(token) for token in _IRREVERSIBLE_STAGE_TOKENS)
+
+
+def describe_stage_risk(stage: str, cfg: dict[str, Any] | None = None) -> str:
+    if stage_is_irreversible(stage, cfg):
+        return "会对外发布/部署，执行后不可撤销"
+    return "只读评审：产物可回看，驳回会回退到本阶段重做"
+
+
+def summarize_artifacts(
+    stage: str, upstream: dict[str, str] | None, result: dict[str, Any] | None = None
+) -> str:
+    """一句话产物摘要：文件名列表，给门禁 payload 用。
+
+    优先用阶段自身产出的 artifacts（更贴近「这次要审什么」），
+    缺失时退回 upstream 继承的产物。
+    """
+    names: list[str] = []
+    produced = (result or {}).get("artifacts")
+    if isinstance(produced, (dict, list)):
+        names.extend(str(p).rsplit("/", 1)[-1] for p in produced)
+    if not names:
+        names.extend(str(p).rsplit("/", 1)[-1] for p in (upstream or {}))
+    if not names:
+        return ""
+    # 去重保序，最多列 5 个，其余折叠成 +N
+    seen: list[str] = []
+    for name in names:
+        if name and name not in seen:
+            seen.append(name)
+    head = "、".join(seen[:5])
+    extra = f" 等 {len(seen)} 个文件" if len(seen) > 5 else ""
+    return f"`{stage}` 产出 {head}{extra}"
+
+
 def _linear_next(stages: list[dict[str, Any]], index: int) -> str:
     """Next graph node after stages[index], collapsing parallel members into their wave."""
     if index + 1 >= len(stages):
@@ -1574,6 +1658,7 @@ def build_graph_from_template(
             },
             toolkit_ids=toolkit_ids,
             toolkit_brief=toolkit_brief,
+            inputs=_mission_inputs(app_cfg, state["initiative_id"]),
             repos=[
                 RepoConfig.model_validate(r)
                 for r in (role_repos_state.get(role.value) or [])
@@ -2190,6 +2275,13 @@ def build_graph_from_template(
                 "message": result.get("message", ""),
                 "artifacts": list((state.get("upstream") or {}).keys()),
                 "allowed_actions": [a.value for a in HitlAction],
+                # 结构化门禁信息：CLI / MCP / 前端都用同一份，避免 agent 盲批
+                "artifact_summary": summarize_artifacts(
+                    stage, state.get("upstream"), result
+                ),
+                "risk": describe_stage_risk(stage, cfg),
+                "irreversible": stage_is_irreversible(stage, cfg),
+                "action_help": dict(HITL_ACTION_HELP),
             }
             decision_raw = interrupt(payload)
             if isinstance(decision_raw, dict):
