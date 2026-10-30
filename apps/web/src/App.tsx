@@ -14,7 +14,7 @@ import {
   registerUser,
   updateInitiativeHarness,
 } from "./api";
-import { ApiKeysPanel } from "./components/ApiKeysPanel";
+import { ApiKeysPage } from "./components/ApiKeysPage";
 import { OperatorChip } from "./components/OperatorChip";
 import { PipelineEditor } from "./components/PipelineEditor";
 import { ChatComposer, SparkleIcon, type MentionOption } from "./components/ChatComposer";
@@ -2748,6 +2748,17 @@ export default function App() {
           >
             {tr("decisions")}
           </button>
+          <button
+            type="button"
+            className={view === "keys" ? "on" : ""}
+            onClick={() => {
+              unlockSfx();
+              playSfx("whoosh");
+              setView("keys");
+            }}
+          >
+            {tr("keysNav")}
+          </button>
           {user.role === "admin" && (
             <button
               type="button"
@@ -2765,7 +2776,6 @@ export default function App() {
         <div className="header-meta">
           <OperatorChip user={user} tr={tr} />
           <div className="op-tools">
-            <ApiKeysPanel token={token} tr={tr} />
             {themeControls}
             <button
               type="button"
@@ -5945,6 +5955,12 @@ export default function App() {
             initiativeOptions={myMissions.map((m) => ({ id: m.id, title: m.title }))}
             onSelectInitiative={setSubroomMissionId}
           />
+        </main>
+      )}
+
+      {view === "keys" && (
+        <main className="main page-pad">
+          <ApiKeysPage token={token} lang={lang} tr={tr} />
         </main>
       )}
 

@@ -102,16 +102,23 @@ export async function listApiKeys(token: string): Promise<ApiKeyRecord[]> {
   return api<ApiKeyRecord[]>("/api/keys", { token });
 }
 
-/** 新建 Key：响应里的 plaintext 只出现这一次 */
-export async function createApiKey(token: string, name: string): Promise<ApiKeyCreated> {
+/** 新建 Key：响应里的 plaintext 只出现这一次；有效期按日历月（1/3/6/12） */
+export async function createApiKey(
+  token: string,
+  body: { name: string; expiresInMonths?: number },
+): Promise<ApiKeyCreated> {
   return api<ApiKeyCreated>("/api/keys", {
     token,
     method: "POST",
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({
+      name: body.name,
+      expires_in_months: body.expiresInMonths ?? 1,
+    }),
   });
 }
 
-export async function revokeApiKey(token: string, keyId: string): Promise<void> {
+/** 删除 Key：后端物理删除，使用它的客户端立即失效 */
+export async function deleteApiKey(token: string, keyId: string): Promise<void> {
   await api(`/api/keys/${encodeURIComponent(keyId)}`, { token, method: "DELETE" });
 }
 

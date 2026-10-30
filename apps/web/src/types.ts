@@ -12,6 +12,7 @@ export type View =
   | "forge"
   | "subrooms"
   | "decisions"
+  | "keys"
   | "admin";
 
 export type UserRole = "admin" | "member";
@@ -604,6 +605,19 @@ export type ApiKeyRecord = {
   created_at: number;
   last_used_at: number | null;
   revoked_at: number | null;
+  /** 到期时间戳；null 表示长期有效（历史数据） */
+  expires_at: number | null;
+};
+
+/** 一个 MCP 客户端的接入片段：目标文件 + 可直接粘贴的内容 */
+export type McpClientSnippet = {
+  id: "claude-code" | "codex" | "cursor" | "opencode" | string;
+  label: string;
+  target: string;
+  language: string;
+  code: string;
+  /** 仅 Claude Code 提供等价命令行 */
+  command?: string;
 };
 
 export type ApiKeyCreated = {
@@ -611,7 +625,9 @@ export type ApiKeyCreated = {
   plaintext: string;
   mcp: {
     url: string;
-    json: Record<string, unknown>;
-    command: string;
+    /** 兼容旧字段，前端不再使用 */
+    json?: Record<string, unknown>;
+    command?: string;
+    clients: McpClientSnippet[];
   };
 };
