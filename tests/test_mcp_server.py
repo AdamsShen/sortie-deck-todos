@@ -124,6 +124,40 @@ async def test_missing_credential_is_rejected(wired, monkeypatch):
             assert resp.json()["error"]["code"] == "auth_required"
 
 
+@pytest.mark.asyncio
+async def test_tool_error_message_reaches_the_client(wired, monkeypatch):
+    """业务错误必须带 code 透给模型。
+
+    SDK 默认屏蔽普通异常的消息，客户端只会看到 "Error executing tool xxx"，
+    模型无从判断该重试、换 id 还是放弃——所以工具里要抛 ``ToolError``。
+    """
+    from sortie_deck.mcp_http import HttpMcpSession
+    from sortie_deck.service import ServiceError
+
+    class _Boom:
+        def __init__(self) -> None:
+            self.orch = SimpleNamespace(run_queue=None)
+
+        def get(self, principal, mission_id):
+            raise ServiceError("not_found", f"任务不存在: {mission_id}")
+
+    monkeypatch.setattr(mcp_server, "get_mission_service", lambda: _Boom())
+    app = mcp_server.build_mcp_app()
+    item = ToolkitItem(kind="mcp", name="sortie-deck", transport="http", url="http://test/mcp")
+
+    async with mcp_server.lifespan_context():
+        session = HttpMcpSession(item, http_transport=httpx.ASGITransport(app=app))
+        try:
+            await session.start()
+            result = await session.call_tool("get_mission", {"mission_id": "ini_nope"})
+            assert result["isError"] is True
+            text = result["content"][0]["text"]
+            assert "not_found" in text
+            assert "ini_nope" in text
+        finally:
+            await session.close()
+
+
 def test_api_app_mounts_mcp_route():
     """根挂载 + 子应用自带 /mcp 路由：避免 Mount("/mcp") 的 307 重定向。"""
     from sortie_deck import mcp_server

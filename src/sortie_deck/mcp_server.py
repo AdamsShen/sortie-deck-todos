@@ -18,6 +18,7 @@ import logging
 from typing import Any
 
 from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 from sortie_deck.service import (
     Principal,
@@ -44,6 +45,17 @@ server = MCPServer(
 )
 
 
+def _tool_error(exc: ServiceError) -> ToolError:
+    """把业务错误翻译成 MCP 可见的错误消息。
+
+    SDK 默认会屏蔽普通异常的消息（客户端只看到 "Error executing tool xxx"），
+    只有 ``ToolError`` 的文案会原样透给模型。业务错误的 ``code`` 是稳定契约，
+    必须让模型看见（not_found / forbidden / conflict ...），否则它无法决定重试、
+    换 id 还是放弃。
+    """
+    return ToolError(f"{exc.code}: {exc.message}")
+
+
 def _principal_from(ctx: Context) -> Principal:
     """从本次 MCP 请求的 HTTP 头解析调用者。
 
@@ -56,7 +68,7 @@ def _principal_from(ctx: Context) -> Principal:
     try:
         return resolve_principal(token, source="mcp")
     except ServiceError as exc:
-        raise ValueError(f"{exc.code}: {exc.message}") from exc
+        raise _tool_error(exc) from exc
 
 
 def _shape(mission: Any, response_format: str = "concise") -> dict[str, Any]:
@@ -118,7 +130,7 @@ async def start_mission(
             principal, brief=brief, title=title, track=track, harness=harness
         )
     except ServiceError as exc:
-        raise ValueError(f"{exc.code}: {exc.message}") from exc
+        raise _tool_error(exc) from exc
     # 队列深度：让调用方知道是排队还是立刻执行（取不到就算了，不能因此失败）
     queue = getattr(getattr(get_mission_service(), "orch", None), "run_queue", None)
     try:
@@ -149,7 +161,7 @@ async def submit_hitl(
             principal, mission_id, action=action, instruction=instruction
         )
     except ServiceError as exc:
-        raise ValueError(f"{exc.code}: {exc.message}") from exc
+        raise _tool_error(exc) from exc
     return _shape(ini)
 
 
@@ -159,7 +171,7 @@ async def stop_mission(mission_id: str, ctx: Context = None) -> dict[str, Any]: 
     try:
         ini = await get_mission_service().stop(principal, mission_id)
     except ServiceError as exc:
-        raise ValueError(f"{exc.code}: {exc.message}") from exc
+        raise _tool_error(exc) from exc
     return _shape(ini)
 
 
@@ -181,7 +193,7 @@ async def get_mission(
     try:
         ini = get_mission_service().get(principal, mission_id)
     except ServiceError as exc:
-        raise ValueError(f"{exc.code}: {exc.message}") from exc
+        raise _tool_error(exc) from exc
     return _shape(ini, response_format)
 
 
@@ -210,7 +222,7 @@ async def await_mission(
         try:
             ini = svc.get(principal, mission_id)
         except ServiceError as exc:
-            raise ValueError(f"{exc.code}: {exc.message}") from exc
+            raise _tool_error(exc) from exc
         if ini.status.value in {"waiting_hitl", "done", "failed", "stopped"}:
             payload = _shape(ini)
             payload["still_running"] = False
@@ -231,7 +243,7 @@ async def list_artifacts(
     try:
         refs = get_mission_service().artifacts(principal, mission_id)
     except ServiceError as exc:
-        raise ValueError(f"{exc.code}: {exc.message}") from exc
+        raise _tool_error(exc) from exc
     return [
         {"stage": r.stage, "kind": r.kind, "path": r.path, "created_at": r.created_at.isoformat()}
         for r in refs
@@ -250,7 +262,7 @@ async def read_artifact(
     try:
         content = get_mission_service().read_artifact(principal, mission_id, path)
     except ServiceError as exc:
-        raise ValueError(f"{exc.code}: {exc.message}") from exc
+        raise _tool_error(exc) from exc
     truncated = len(content) > MAX_ARTIFACT_CHARS
     return {
         "path": path,
@@ -270,7 +282,7 @@ async def get_events(
     try:
         rows = get_mission_service().events(principal, mission_id, since_seq)
     except ServiceError as exc:
-        raise ValueError(f"{exc.code}: {exc.message}") from exc
+        raise _tool_error(exc) from exc
     rows = rows[: max(1, min(limit, 300))]
     return {
         "events": [{"seq": seq, "event": event} for seq, event in rows],
@@ -315,7 +327,7 @@ def create_memory(
     try:
         request = CreateMemoryRequest(scope=scope, kind=kind, content=content)  # type: ignore[arg-type]
     except Exception as exc:  # noqa: BLE001 — 枚举校验失败要给出可读提示
-        raise ValueError(f"validation: kind/scope 取值非法（{exc}）") from exc
+        raise ToolError(f"validation: kind/scope 取值非法（{exc}）") from exc
     entry = _memory_store().create(
         request,
         author_id=principal.user.id,

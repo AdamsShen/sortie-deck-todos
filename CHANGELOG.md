@@ -83,6 +83,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Stage consult bypassed the LLM switch**: `stage_consult` / `manager` / `agent_forge` hard-coded `LlmClient(cli_fallback=True)`, so `TDT_LLM_CLI_FALLBACK=0` was ignored and every stage shelled out to `claude -p`; with no API key the CLI hung until its 60s timeout and the mission appeared stuck at `intake`. All call sites now respect the setting, the CLI fallback gets its own `TDT_LLM_CLI_TIMEOUT`, and the child process is killed when a mission is cancelled
 - **Orphaned CLI processes**: cancelling a stage left the `claude` subprocess running; it is now killed on `CancelledError`
+- **MCP tool errors were masked**: the SDK hides ordinary exception messages, so a bad mission id surfaced as `Error executing tool get_mission` with no detail — the model could not tell `not_found` from a server fault. Tools now raise `ToolError` carrying the stable `code: message` (`src/sortie_deck/mcp_server.py`)
 - **Embedded `sortie mission start` lost its own run**: without `--wait` the CLI exited immediately and dropped the in-process run task, and `shutdown()` closed the SQLite connection while the task was still writing, so the mission landed in `failed` with a `Connection closed` traceback. Embedded mode now always waits for the first gate/terminal state (the process *is* the executor), and `_drain_tasks()` cancels leftover tasks before shutdown
 
 ### Changed
