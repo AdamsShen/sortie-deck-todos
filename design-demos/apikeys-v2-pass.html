@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>API 密钥 · v2 通行证</title>
+<!-- huashu-design · 逻辑二（现实参照：机场自助值机 / 登机牌签发）
+     概念：每把密钥是一张「通行证」。主体 + 虚线撕口 + 右侧票根，票根上只有到期日、剩余天数与作废。
+     签发台是实时预览：选 1/3/6/12 个月，右侧证件上的日期立刻变。
+     示意数据 demo；四套客户端片段为真实格式（2026-10 核对）。 -->
+<style>
+  :root, [data-theme="paper"] {
+    --void: #eef1f6; --panel: #ffffff; --panel-2: #f7f9fc;
+    --line: #dfe5ee; --line-hot: #c3ccda;
+    --text: #14202e; --muted: #64748b; --faint: #8b97a8;
+    --navy: #14263b; --navy-2: #1d3a5c;
+    --signal: #0b7a57; --signal-soft: #e6f4ee; --signal-line: #b7dfcf;
+    --warn: #96650a; --warn-soft: #fdf4e0; --warn-line: #edd8a4;
+    --danger: #b3261e; --danger-soft: #fbebe9;
+    --serif: "Songti SC", "Noto Serif SC", Georgia, serif;
+    --font: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --card-shadow: 0 1px 2px rgba(20,32,46,.05), 0 8px 24px -16px rgba(20,32,46,.28);
+  }
+  [data-theme="ink"] {
+    --void: #14171d; --panel: #1e232b; --panel-2: #242a34;
+    --line: #333a46; --line-hot: #4a5361;
+    --text: #e9e6de; --muted: #9aa0a8; --faint: #7c838d;
+    --navy: #e9e6de; --navy-2: #cfd6df;
+    --signal: #4bd39a; --signal-soft: #1d3a2e; --signal-line: #2f6249;
+    --warn: #e2b455; --warn-soft: #332b1a; --warn-line: #5d4a24;
+    --danger: #e57760; --danger-soft: #3a2320;
+    --serif: "Songti SC", "Noto Serif SC", Georgia, serif;
+    --font: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --card-shadow: 0 1px 0 rgba(0,0,0,.3), 0 18px 40px -28px #000;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; }
+  body {
+    background: var(--void); color: var(--text); font-family: var(--font);
+    font-size: 14px; line-height: 1.55; -webkit-font-smoothing: antialiased; overflow: hidden;
+  }
+  button, input { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--navy-2); outline-offset: 2px; }
+
+  /* ---------- 外壳 ---------- */
+  .deck { height: 100%; display: flex; flex-direction: column; }
+  .deck-header {
+    display: flex; align-items: center; gap: 24px; padding: 13px 24px;
+    background: var(--panel); border-bottom: 1px solid var(--line);
+  }
+  .brand { display: flex; align-items: center; gap: 10px; flex: none; }
+  .brand .mark { width: 24px; height: 24px; background: var(--navy); border-radius: 3px; position: relative; }
+  .brand .mark::after {
+    content: ""; position: absolute; left: 6px; top: 5px; width: 12px; height: 12px;
+    border-left: 2px solid var(--panel); border-bottom: 2px solid var(--panel); transform: skewX(-16deg);
+  }
+  .brand b { font-size: 14.5px; }
+  .brand span { display: block; font-size: 10px; color: var(--muted); letter-spacing: .03em; }
+  .nav { display: flex; gap: 2px; flex: 1; flex-wrap: wrap; }
+  .nav a {
+    font-family: var(--mono); font-size: 11.5px; color: var(--muted); text-decoration: none;
+    padding: 6px 10px; border-radius: 5px;
+  }
+  .nav a:hover { color: var(--text); background: var(--panel-2); }
+  .nav a.on { color: var(--navy); background: var(--panel-2); font-weight: 600; box-shadow: inset 0 -2px 0 var(--navy); }
+  .meta { display: flex; align-items: center; gap: 8px; }
+  .who { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-right: 6px; }
+  .ghost {
+    background: transparent; border: 1px solid var(--line); border-radius: 5px;
+    font-family: var(--mono); font-size: 11px; color: var(--muted); padding: 5px 9px;
+  }
+  .ghost:hover { border-color: var(--line-hot); color: var(--text); }
+
+  .main { flex: 1; overflow: auto; }
+  .page { max-width: 900px; margin: 0 auto; padding: 40px 26px 80px; }
+
+  /* ---------- 页头 ---------- */
+  .head { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; flex-wrap: wrap; }
+  .kicker { font-family: var(--mono); font-size: 10px; letter-spacing: .16em; color: var(--faint); }
+  h1 { font-family: var(--serif); font-size: 32px; font-weight: 600; margin-top: 6px; }
+  .lede { color: var(--muted); font-size: 13px; margin-top: 7px; max-width: 44ch; }
+  .primary {
+    background: var(--navy); color: var(--panel); border: 0; border-radius: 6px;
+    padding: 10px 18px; font-size: 13.5px; font-weight: 600; letter-spacing: .01em;
+  }
+  .primary:hover { background: color-mix(in srgb, var(--navy) 88%, #2f6fb3); }
+  .readline {
+    margin-top: 26px; display: flex; gap: 18px; align-items: center; flex-wrap: wrap;
+    font-family: var(--mono); font-size: 11px; color: var(--muted);
+  }
+  .readline b { color: var(--text); font-weight: 600; }
+  .readline .dot { width: 3px; height: 3px; border-radius: 50%; background: var(--line-hot); }
+
+  /* ---------- 通行证 ---------- */
+  .passes { margin-top: 20px; display: flex; flex-direction: column; gap: 16px; }
+  .pass {
+    position: relative; display: flex; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 14px; box-shadow: var(--card-shadow); overflow: hidden;
+  }
+  /* 左侧撕口条：竖排微文字，替代普通的彩色边条 */
+  .pass .tear {
+    width: 30px; flex: none; display: flex; align-items: center; justify-content: center;
+    border-right: 1px dashed var(--line-hot); background: var(--panel-2);
+  }
+  .pass .tear span {
+    writing-mode: vertical-rl; transform: rotate(180deg);
+    font-family: var(--mono); font-size: 8px; letter-spacing: .32em; color: var(--faint);
+    white-space: nowrap;
+  }
+  .pass.dead .tear span { color: var(--line-hot); }
+  .pass .body { flex: 1; padding: 20px 24px 18px 22px; min-width: 0; position: relative; z-index: 1; }
+  .pass .toprow {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    font-family: var(--mono); font-size: 10px; letter-spacing: .12em; color: var(--faint);
+  }
+  .pass .toprow .chip {
+    border: 1px solid var(--line); border-radius: 99px; padding: 2px 8px; letter-spacing: .08em;
+  }
+  .pass.dead .toprow .chip { color: var(--faint); }
+  .pass h2 { font-family: var(--serif); font-size: 21px; font-weight: 600; margin-top: 9px; letter-spacing: .01em; }
+  .pass .serial { font-family: var(--mono); font-size: 11.5px; color: var(--muted); margin-top: 4px; }
+  .pass .facts { display: flex; gap: 30px; margin-top: 18px; flex-wrap: wrap; }
+  .fact .k { font-family: var(--mono); font-size: 9.5px; letter-spacing: .1em; color: var(--faint); }
+  .fact .v { font-size: 12.5px; margin-top: 2px; }
+  .fact .v.mono { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+
+  /* 撕口 */
+  .pass .perf { position: relative; width: 0; border-left: 1px dashed var(--line-hot); margin: 12px 0; }
+  .pass .perf::before, .pass .perf::after {
+    content: ""; position: absolute; left: -9px; width: 18px; height: 18px;
+    border-radius: 50%; background: var(--void);
+  }
+  .pass .perf::before { top: -21px; }
+  .pass .perf::after { bottom: -21px; }
+
+  .stub { width: 214px; flex: none; padding: 18px 22px; display: flex; flex-direction: column; }
+  .stub .k { font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em; color: var(--faint); }
+  .stub .date { font-family: var(--mono); font-size: 25px; letter-spacing: -.04em; margin-top: 4px; line-height: 1.1; }
+  .stub .date small { font-size: 12px; letter-spacing: 0; color: var(--muted); }
+  .stub .left { font-family: var(--mono); font-size: 11px; color: var(--signal); margin-top: 6px; }
+  .stub .left.warn { color: var(--warn); }
+  .stub .left.dead { color: var(--faint); }
+  .stub .sp { flex: 1; }
+  .stub .revoke {
+    align-self: flex-start; background: none; border: 1px solid var(--line);
+    border-radius: 5px; font-size: 11.5px; color: var(--muted); padding: 4px 10px;
+  }
+  .stub .revoke:hover { color: var(--danger); border-color: var(--danger); background: var(--danger-soft); }
+
+  .pass.dead { opacity: .92; }
+  .pass.dead .body h2 { color: var(--muted); }
+  .pass.dead .stub .date { color: var(--muted); }
+  /* 过期水印：压在正文底层，不与票根上的到期日抢位置 */
+  .pass .watermark {
+    position: absolute; left: 34%; top: 50%; transform: translateY(-50%) rotate(-9deg);
+    font-family: var(--serif); font-size: 62px; letter-spacing: .12em;
+    color: var(--faint); opacity: .10; pointer-events: none; z-index: 0; white-space: nowrap;
+  }
+
+  /* 删除确认覆盖 */
+  .pass .confirm {
+    position: absolute; inset: 0; background: color-mix(in srgb, var(--panel) 94%, transparent);
+    backdrop-filter: blur(2px); display: none; align-items: center; justify-content: center;
+    gap: 14px; padding: 20px; flex-wrap: wrap; z-index: 2;
+  }
+  .pass .confirm.on { display: flex; }
+  .pass .confirm p { font-size: 13px; color: var(--danger); max-width: 30rem; }
+  .pass .confirm .yes {
+    background: var(--danger); color: #fff; border: 0; border-radius: 6px;
+    padding: 7px 16px; font-size: 12.5px; font-weight: 600;
+  }
+  .pass .confirm .no {
+    background: transparent; border: 1px solid var(--line-hot); border-radius: 6px;
+    padding: 7px 14px; font-size: 12.5px; color: var(--muted);
+  }
+  .pass.removing { opacity: 0; transform: translateY(-8px); transition: all .25s ease; }
+
+  .empty {
+    margin-top: 20px; border: 1px dashed var(--line-hot); border-radius: 14px;
+    padding: 46px 24px; text-align: center; color: var(--muted); font-size: 13px;
+  }
+  .empty b { display: block; font-family: var(--serif); font-size: 19px; color: var(--text); margin-bottom: 6px; }
+
+  /* ---------- 签发台 ---------- */
+  .overlay {
+    position: fixed; inset: 0; background: rgba(12, 20, 30, .42); backdrop-filter: blur(3px);
+    display: none; align-items: flex-start; justify-content: center; padding: 40px 20px; z-index: 20;
+    overflow: auto;
+  }
+  .overlay.on { display: flex; }
+  .sheet {
+    width: min(860px, 100%); background: var(--panel); border: 1px solid var(--line);
+    border-radius: 16px; box-shadow: 0 30px 70px -30px rgba(10,20,35,.5); overflow: hidden;
+  }
+  .sheet .bar {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 16px 22px; border-bottom: 1px solid var(--line);
+  }
+  .sheet .bar h2 { font-family: var(--serif); font-size: 19px; font-weight: 600; }
+  .sheet .bar .x { background: none; border: 0; font-size: 18px; color: var(--muted); line-height: 1; padding: 4px 8px; }
+  .sheet .bar .x:hover { color: var(--text); }
+
+  .issue-grid { display: grid; grid-template-columns: minmax(0, 1fr) 320px; }
+  .issue-form { padding: 22px; }
+  .issue-preview { background: var(--panel-2); border-left: 1px solid var(--line); padding: 22px; }
+
+  .f { margin-bottom: 20px; }
+  .f label { display: block; font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em; color: var(--faint); margin-bottom: 6px; }
+  .f input {
+    width: 100%; border: 1px solid var(--line); border-radius: 7px; background: var(--panel);
+    padding: 9px 11px; font-size: 13.5px; outline: none; transition: border .12s, box-shadow .12s;
+  }
+  .f input:focus { border-color: var(--navy-2); box-shadow: 0 0 0 3px color-mix(in srgb, var(--navy-2) 14%, transparent); }
+  .f input::placeholder { color: var(--faint); }
+
+  .ttls { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .ttls button {
+    border: 1px solid var(--line); background: var(--panel); border-radius: 7px;
+    padding: 10px 6px; text-align: center;
+  }
+  .ttls button b { display: block; font-family: var(--mono); font-size: 13px; font-weight: 600; }
+  .ttls button span { display: block; font-family: var(--mono); font-size: 9px; color: var(--faint); margin-top: 3px; letter-spacing: .04em; }
+  .ttls button.on { border-color: var(--navy); background: var(--navy); color: var(--panel); }
+  .ttls button.on span { color: color-mix(in srgb, var(--panel) 70%, transparent); }
+
+  .preview-card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    overflow: hidden; box-shadow: var(--card-shadow);
+  }
+  .preview-card .band {
+    padding: 10px 14px; border-bottom: 1px dashed var(--line-hot);
+    display: flex; justify-content: space-between; font-family: var(--mono); font-size: 9px;
+    letter-spacing: .12em; color: var(--faint);
+  }
+  .preview-card .pc-body { padding: 16px 14px 14px; }
+  .preview-card .pc-name { font-family: var(--serif); font-size: 17px; font-weight: 600; }
+  .preview-card .pc-name.empty { color: var(--faint); font-style: italic; }
+  .preview-card .pc-serial { font-family: var(--mono); font-size: 10.5px; color: var(--faint); margin-top: 5px; }
+  .preview-card .pc-foot {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    margin-top: 18px; padding-top: 12px; border-top: 1px dashed var(--line-hot);
+  }
+  .preview-card .pc-foot .k { font-family: var(--mono); font-size: 8.5px; letter-spacing: .12em; color: var(--faint); }
+  .preview-card .pc-foot .d { font-family: var(--mono); font-size: 18px; letter-spacing: -.03em; }
+  .issue-preview .tip { font-size: 11px; color: var(--faint); margin-top: 14px; line-height: 1.55; }
+
+  .sheet-foot {
+    display: flex; align-items: center; gap: 12px; padding: 16px 22px; border-top: 1px solid var(--line);
+  }
+  .sheet-foot .sp { flex: 1; }
+  .sheet-foot .hint { font-size: 11px; color: var(--faint); }
+  .sheet-foot .cancel { background: none; border: 0; color: var(--muted); font-size: 13px; padding: 8px; }
+
+  /* ---------- 签发后：一次性明文 ---------- */
+  .reveal { display: none; }
+  .reveal.on { display: block; }
+  .keycard {
+    margin: 0 22px; margin-top: 20px; border: 1px solid var(--warn-line); background: var(--warn-soft);
+    border-radius: 10px; padding: 16px 18px;
+  }
+  .keycard .tag { font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em; color: var(--warn); }
+  .keycard .line { display: flex; align-items: center; gap: 12px; margin-top: 8px; flex-wrap: wrap; }
+  .keycard code { font-family: var(--mono); font-size: 14px; word-break: break-all; }
+  .copy {
+    background: transparent; border: 1px solid var(--line-hot); border-radius: 5px;
+    font-family: var(--mono); font-size: 10px; color: var(--muted); padding: 3px 8px; flex: none;
+  }
+  .copy:hover { border-color: var(--navy); color: var(--text); }
+  .copy.done { border-color: var(--signal); color: var(--signal); }
+
+  .tabs { display: flex; gap: 6px; padding: 18px 22px 0; flex-wrap: wrap; }
+  .tabs button {
+    background: transparent; border: 1px solid var(--line); border-radius: 99px;
+    padding: 5px 13px; font-family: var(--mono); font-size: 11px; color: var(--muted);
+  }
+  .tabs button.on { background: var(--navy); border-color: var(--navy); color: var(--panel); }
+  .snippet { padding: 14px 22px 8px; }
+  .snippet .target {
+    display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;
+    font-family: var(--mono); font-size: 10.5px; color: var(--faint);
+  }
+  .snippet .target b { color: var(--text); font-weight: 500; }
+  .code {
+    margin-top: 8px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+    padding: 14px 16px; max-height: 300px; overflow: auto;
+  }
+  .code pre { font-family: var(--mono); font-size: 11.5px; line-height: 1.7; white-space: pre; }
+  .cmdline {
+    margin-top: 8px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+    padding: 14px 16px; font-family: var(--mono); font-size: 11px; line-height: 1.7;
+    white-space: pre-wrap; word-break: break-all;
+  }
+  .subtoggle { display: flex; gap: 12px; margin-top: 8px; }
+  .subtoggle button {
+    background: none; border: 0; font-family: var(--mono); font-size: 10px; color: var(--faint);
+    border-bottom: 1px solid transparent; padding: 2px 0;
+  }
+  .subtoggle button.on { color: var(--text); border-bottom-color: var(--text); }
+
+  .done-row { display: flex; align-items: center; gap: 12px; padding: 18px 22px 22px; }
+  .done-row .hint { font-size: 11px; color: var(--faint); }
+
+  @media (max-width: 860px) {
+    body { overflow: auto; }
+    .page { padding: 26px 16px 60px; }
+    .pass { flex-direction: column; }
+    .pass .tear { width: auto; height: 24px; border-right: 0; border-bottom: 1px dashed var(--line-hot); }
+    .pass .tear span { writing-mode: horizontal-tb; transform: none; letter-spacing: .3em; font-size: 8px; }
+    .pass .perf { width: auto; height: 0; border-left: 0; border-top: 1px dashed var(--line-hot); margin: 0 20px; }
+    .pass .perf::before { left: -29px; top: -9px; }
+    .pass .perf::after { right: -29px; left: auto; top: -9px; bottom: auto; }
+    .stub { width: auto; flex-direction: row; align-items: center; gap: 18px; }
+    .stub .sp { display: none; }
+    .issue-grid { grid-template-columns: 1fr; }
+    .issue-preview { border-left: 0; border-top: 1px solid var(--line); }
+    .ttls { grid-template-columns: repeat(2, 1fr); }
+    .stamp-dead { right: 18px; top: 14px; }
+    .nav { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<div class="deck">
+  <header class="deck-header">
+    <div class="brand">
+      <div class="mark" aria-hidden="true"></div>
+      <div><b>Sortie Deck</b><span>前线小队 · 一支文件，无传话</span></div>
+    </div>
+    <nav class="nav">
+      <a href="#">作战图</a><a href="#">任务</a><a href="#">知识库</a><a href="#">记忆</a>
+      <a href="#">角色工坊</a><a href="#">工具箱</a><a href="#">角色锻造</a><a href="#">小群</a>
+      <a href="#">决策中心</a><a href="#" class="on" aria-current="page">API 密钥</a><a href="#">管理</a>
+    </nav>
+    <div class="meta">
+      <span class="who">沈思 · 管理员</span>
+      <button class="ghost" id="themeBtn" type="button">墨</button>
+      <button class="ghost" type="button">退出</button>
+    </div>
+  </header>
+
+  <main class="main">
+    <div class="page">
+      <div class="head">
+        <div>
+          <div class="kicker">AGENT PASS / 通行证</div>
+          <h1>API 密钥</h1>
+          <p class="lede">给本地 agent 一张有期限的通行证。到期自动失效，撕掉即刻作废。</p>
+        </div>
+        <button class="primary" type="button" onclick="openIssue()">签发通行证</button>
+      </div>
+
+      <div class="readline">
+        <span><b id="sActive">2</b> 张有效</span><span class="dot"></span>
+        <span><b id="sSoon">1</b> 张 7 天内到期</span><span class="dot"></span>
+        <span><b id="sDead">1</b> 张已过有效期</span>
+      </div>
+
+      <div class="passes" id="passes"></div>
+      <div class="empty" id="empty" hidden>
+        <b>还没有通行证</b>
+        本地 agent 现在进不来。签发第一张，30 秒接好。
+        <div style="margin-top:14px"><button class="primary" type="button" onclick="openIssue()">签发第一张</button></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- 签发台 -->
+<div class="overlay" id="overlay">
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+
+    <!-- 表单态 -->
+    <div id="issuePane">
+      <div class="bar">
+        <h2 id="sheetTitle">签发通行证</h2>
+        <button class="x" type="button" onclick="closeIssue()" aria-label="关闭">×</button>
+      </div>
+      <div class="issue-grid">
+        <div class="issue-form">
+          <div class="f">
+            <label for="keyName">持证人 / 用途</label>
+            <input id="keyName" placeholder="MacBook · Claude Code" maxlength="40" autocomplete="off">
+          </div>
+          <div class="f">
+            <label>有效期</label>
+            <div class="ttls" id="ttls">
+              <button type="button" data-months="1" class="on"><b>1 个月</b><span>默认</span></button>
+              <button type="button" data-months="3"><b>3 个月</b><span>一台设备</span></button>
+              <button type="button" data-months="6"><b>6 个月</b><span>长期项目</span></button>
+              <button type="button" data-months="12"><b>1 年</b><span>CI / 常驻</span></button>
+            </div>
+          </div>
+        </div>
+        <aside class="issue-preview">
+          <div class="kicker" style="margin-bottom:8px">PREVIEW</div>
+          <div class="preview-card">
+            <div class="band"><span>SORTIE DECK</span><span>AGENT PASS</span></div>
+            <div class="pc-body">
+              <div class="pc-name empty" id="pvName">未命名通行证</div>
+              <div class="pc-serial">sk_sortie_••••••••••••</div>
+              <div class="pc-foot">
+                <div><div class="k">有效期至</div><div class="d" id="pvDate">2026-11-30</div></div>
+                <div style="text-align:right"><div class="k">STATUS</div><div class="d" style="font-size:12px">待签发</div></div>
+              </div>
+            </div>
+          </div>
+          <p class="tip">签发后明文只显示一次。列表和数据库里都只有前缀与哈希。</p>
+        </aside>
+      </div>
+      <div class="sheet-foot">
+        <span class="hint">签署人：沈思 · 权限随账号走</span>
+        <span class="sp"></span>
+        <button class="cancel" type="button" onclick="closeIssue()">取消</button>
+        <button class="primary" type="button" id="issueBtn">签发</button>
+      </div>
+    </div>
+
+    <!-- 明文 + 接入态 -->
+    <div class="reveal" id="revealPane">
+      <div class="bar">
+        <h2>已签发 · <span id="rvName">MacBook · Claude Code</span></h2>
+        <button class="x" type="button" onclick="closeIssue(true)" aria-label="关闭">×</button>
+      </div>
+      <div class="keycard">
+        <div class="tag">仅显示一次 · 关闭后无法再次查看</div>
+        <div class="line">
+          <code id="plainKey">sk_sortie_</code>
+          <button class="copy" type="button" data-copy="plain">复制</button>
+        </div>
+      </div>
+      <div class="tabs" id="clientTabs">
+        <button type="button" data-client="claude-code" class="on">Claude Code</button>
+        <button type="button" data-client="codex">Codex CLI</button>
+        <button type="button" data-client="cursor">Cursor</button>
+        <button type="button" data-client="opencode">OpenCode</button>
+      </div>
+      <div class="snippet">
+        <div class="target"><span>写入 <b id="targetPath">项目根目录 .mcp.json</b></span>
+          <button class="copy" type="button" data-copy="code">复制配置</button>
+        </div>
+        <div class="subtoggle" id="claudeSubtoggle">
+          <button type="button" data-mode="file" class="on">配置文件</button>
+          <button type="button" data-mode="cmd">命令行</button>
+        </div>
+        <div class="code"><pre id="codeBlock"></pre></div>
+        <div class="cmdline" id="cmdBlock" hidden></div>
+      </div>
+      <div class="done-row">
+        <button class="primary" type="button" onclick="closeIssue(true)">我已保存，完成</button>
+        <span class="hint">建议写进 ~/.cursor/mcp.json 这类本机文件，别提交进仓库。</span>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  const NOW = new Date("2026-10-31T11:20:00");
+  const URL = "http://127.0.0.1:8787/mcp";
+  const DEMO_KEY = "sk_sortie_UsbbWYCttEDSyzA2q7HXbzxuhASsrrUzntZDu5752Zc";
+  const DAY = 86400000;
+
+  let passes = [
+    { id: "key_a1f9c2", name: "MacBook · Claude Code", prefix: "sk_sortie_UsbbWYCt",
+      created: "2026-10-02", expires: "2026-11-01", lastUsed: "2 分钟前" },
+    { id: "key_77b1e4", name: "CI Runner · Codex", prefix: "sk_sortie_gXiGdPyl",
+      created: "2026-09-18", expires: "2026-12-18", lastUsed: "3 小时前" },
+    { id: "key_5c0d88", name: "Old Cursor 配置", prefix: "sk_sortie_9kLmQ2vx",
+      created: "2026-04-11", expires: "2026-07-11", lastUsed: "从未使用" },
+  ];
+
+  const toDate = (s) => new Date(s + "T00:00:00");
+  const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const daysLeft = (s) => Math.ceil((toDate(s) - new Date(NOW.getFullYear(), NOW.getMonth(), NOW.getDate())) / DAY);
+  const addMonths = (d, m) => {
+    const t = new Date(d.getTime()); const day = t.getDate();
+    t.setMonth(t.getMonth() + m);
+    if (t.getDate() < day) t.setDate(0);
+    return t;
+  };
+
+  function render() {
+    const host = document.getElementById("passes");
+    host.innerHTML = "";
+    passes.forEach((p) => {
+      const left = daysLeft(p.expires);
+      const dead = left < 0, warn = !dead && left <= 7;
+      const el = document.createElement("article");
+      el.className = `pass ${dead ? "dead" : warn ? "warn" : ""}`;
+      el.dataset.id = p.id;
+      el.innerHTML = `
+        <div class="tear" aria-hidden="true"><span>SORTIE DECK · AGENT PASS</span></div>
+        <div class="body">
+          <div class="toprow">
+            <span>AGENT PASS</span><span class="chip">${p.id}</span>
+            <span class="chip">${dead ? "EXPIRED" : warn ? "EXPIRING" : "ACTIVE"}</span>
+          </div>
+          <h2>${p.name}</h2>
+          <div class="serial">${p.prefix}…</div>
+          <div class="facts">
+            <div class="fact"><div class="k">签发</div><div class="v mono">${p.created}</div></div>
+            <div class="fact"><div class="k">最近使用</div><div class="v">${p.lastUsed}</div></div>
+            <div class="fact"><div class="k">可访问</div><div class="v">本账号全部任务与决策</div></div>
+          </div>
+        </div>
+        <div class="perf" aria-hidden="true"></div>
+        <div class="stub">
+          <div class="k">有效期至</div>
+          <div class="date">${p.expires.slice(5).replace("-", ".")}<small> / ${p.expires.slice(0, 4)}</small></div>
+          <div class="left ${dead ? "dead" : warn ? "warn" : ""}">${dead ? "已过期 " + Math.abs(left) + " 天" : "剩 " + left + " 天"}</div>
+          <div class="sp"></div>
+          <button class="revoke" type="button" data-del="${p.id}">作废</button>
+        </div>
+        ${dead ? '<span class="watermark">已过期</span>' : ""}
+        <div class="confirm">
+          <p>作废后这张通行证立即失效，使用它的客户端会马上断开；记录从库中删除，无法恢复。</p>
+          <button class="no" type="button" data-cancel="${p.id}">保留</button>
+          <button class="yes" type="button" data-confirm="${p.id}">确认作废</button>
+        </div>`;
+      host.appendChild(el);
+    });
+
+    const alive = passes.filter((p) => daysLeft(p.expires) >= 0);
+    document.getElementById("sActive").textContent = alive.length;
+    document.getElementById("sSoon").textContent = alive.filter((p) => daysLeft(p.expires) <= 7).length;
+    document.getElementById("sDead").textContent = passes.filter((p) => daysLeft(p.expires) < 0).length;
+    document.getElementById("empty").hidden = passes.length > 0;
+  }
+  render();
+
+  document.getElementById("passes").addEventListener("click", (e) => {
+    const del = e.target.closest("[data-del]");
+    if (del) { del.closest(".pass").querySelector(".confirm").classList.add("on"); return; }
+    const no = e.target.closest("[data-cancel]");
+    if (no) { no.closest(".pass").querySelector(".confirm").classList.remove("on"); return; }
+    const yes = e.target.closest("[data-confirm]");
+    if (yes) {
+      const id = yes.dataset.confirm;
+      const el = document.querySelector(`.pass[data-id="${id}"]`);
+      el.classList.add("removing");
+      passes = passes.filter((p) => p.id !== id);
+      setTimeout(render, 260);
+    }
+  });
+
+  /* ---------- 签发台 ---------- */
+  let ttl = 1;
+  const overlay = document.getElementById("overlay");
+  const nameInput = document.getElementById("keyName");
+
+  function paintPreview() {
+    const v = nameInput.value.trim();
+    const n = document.getElementById("pvName");
+    n.textContent = v || "未命名通行证";
+    n.classList.toggle("empty", !v);
+    document.getElementById("pvDate").textContent = fmt(addMonths(NOW, ttl));
+  }
+  nameInput.addEventListener("input", paintPreview);
+
+  document.getElementById("ttls").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-months]");
+    if (!b) return;
+    ttl = Number(b.dataset.months);
+    [...document.querySelectorAll("#ttls button")].forEach((x) => x.classList.toggle("on", x === b));
+    paintPreview();
+  });
+
+  function openIssue() {
+    overlay.classList.add("on");
+    document.getElementById("issuePane").style.display = "block";
+    document.getElementById("revealPane").classList.remove("on");
+    ttl = 1;
+    [...document.querySelectorAll("#ttls button")].forEach((x, i) => x.classList.toggle("on", i === 0));
+    nameInput.value = "";
+    paintPreview();
+    setTimeout(() => nameInput.focus(), 60);
+  }
+  function closeIssue(refresh) {
+    overlay.classList.remove("on");
+    if (refresh) render();
+  }
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) closeIssue(true); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && overlay.classList.contains("on")) closeIssue(true); });
+
+  document.getElementById("issueBtn").addEventListener("click", () => {
+    const name = nameInput.value.trim() || "未命名通行证";
+    const expires = fmt(addMonths(NOW, ttl));
+    passes = [{ id: "key_" + Math.random().toString(16).slice(2, 8), name, prefix: DEMO_KEY.slice(0, 24),
+      created: fmt(NOW), expires, lastUsed: "从未使用" }, ...passes];
+    document.getElementById("rvName").textContent = name;
+    document.getElementById("plainKey").textContent = DEMO_KEY;
+    document.getElementById("issuePane").style.display = "none";
+    document.getElementById("revealPane").classList.add("on");
+    activeClient = "claude-code"; claudeMode = "file";
+    document.querySelectorAll("#clientTabs button").forEach((x, i) => x.classList.toggle("on", i === 0));
+    paintSnippet();
+    overlay.scrollTop = 0;
+  });
+  nameInput.addEventListener("keydown", (e) => { if (e.key === "Enter") document.getElementById("issueBtn").click(); });
+
+  /* ---------- 客户端片段 ---------- */
+  const CLIENTS = {
+    "claude-code": {
+      target: "项目根目录 .mcp.json",
+      code: () => JSON.stringify({ mcpServers: { "sortie-deck": {
+        type: "http", url: URL, headers: { Authorization: `Bearer ${DEMO_KEY}` } } } }, null, 2),
+      cmd: () => `claude mcp add --transport http sortie-deck ${URL} \\\n  --header "Authorization: Bearer ${DEMO_KEY}"`,
+    },
+    codex: {
+      target: "~/.codex/config.toml",
+      code: () => `[mcp_servers.sortie-deck]\nurl = "${URL}"\nhttp_headers = { Authorization = "Bearer ${DEMO_KEY}" }\n\n# 或用环境变量，避免明文进配置文件：\n# bearer_token_env_var = "SORTIE_DECK_TOKEN"`,
+    },
+    cursor: {
+      target: "~/.cursor/mcp.json",
+      code: () => JSON.stringify({ mcpServers: { "sortie-deck": {
+        url: URL, headers: { Authorization: `Bearer ${DEMO_KEY}` } } } }, null, 2),
+    },
+    opencode: {
+      target: "opencode.json",
+      code: () => JSON.stringify({ $schema: "https://opencode.ai/config.json", mcp: { "sortie-deck": {
+        type: "remote", url: URL, enabled: true, headers: { Authorization: `Bearer ${DEMO_KEY}` } } } }, null, 2),
+    },
+  };
+  let activeClient = "claude-code", claudeMode = "file";
+
+  function paintSnippet() {
+    const c = CLIENTS[activeClient];
+    document.getElementById("targetPath").textContent = c.target;
+    document.getElementById("claudeSubtoggle").style.display = activeClient === "claude-code" ? "flex" : "none";
+    const codeWrap = document.getElementById("codeBlock").parentElement;
+    const cmd = document.getElementById("cmdBlock");
+    if (activeClient === "claude-code" && claudeMode === "cmd") {
+      codeWrap.hidden = true; cmd.hidden = false; cmd.textContent = c.cmd();
+    } else {
+      codeWrap.hidden = false; cmd.hidden = true; document.getElementById("codeBlock").textContent = c.code();
+    }
+    document.querySelectorAll("#claudeSubtoggle button").forEach((b) =>
+      b.classList.toggle("on", b.dataset.mode === claudeMode));
+  }
+  document.getElementById("clientTabs").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-client]");
+    if (!b) return;
+    activeClient = b.dataset.client;
+    document.querySelectorAll("#clientTabs button").forEach((x) => x.classList.toggle("on", x === b));
+    paintSnippet();
+  });
+  document.getElementById("claudeSubtoggle").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-mode]");
+    if (!b) return;
+    claudeMode = b.dataset.mode;
+    paintSnippet();
+  });
+
+  /* ---------- 复制 ---------- */
+  document.addEventListener("click", async (e) => {
+    const b = e.target.closest("[data-copy]");
+    if (!b) return;
+    const isPlain = b.dataset.copy === "plain";
+    const cmd = document.getElementById("cmdBlock");
+    const text = isPlain ? DEMO_KEY
+      : (!cmd.hidden ? cmd.textContent : document.getElementById("codeBlock").textContent);
+    try { await navigator.clipboard.writeText(text); } catch (_) {}
+    const old = b.textContent;
+    b.textContent = "已复制"; b.classList.add("done");
+    setTimeout(() => { b.textContent = old; b.classList.remove("done"); }, 1400);
+  });
+
+  /* ---------- 主题 ---------- */
+  const root = document.documentElement;
+  document.getElementById("themeBtn").addEventListener("click", (e) => {
+    const next = root.dataset.theme === "paper" ? "ink" : "paper";
+    root.dataset.theme = next;
+    e.currentTarget.textContent = next === "paper" ? "墨" : "纸";
+  });
+
+  /* 直接查看「签发后」状态：在地址后加 #reveal */
+  if (location.hash === "#reveal") {
+    openIssue();
+    nameInput.value = "MacBook · Claude Code";
+    paintPreview();
+    document.getElementById("issueBtn").click();
+  }
+</script>
+</body>
+</html>

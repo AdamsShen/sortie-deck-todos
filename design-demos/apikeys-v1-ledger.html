@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>API 密钥 · v1 签发台账</title>
+<!-- huashu-design · 逻辑一（秒数轮盘 18%20+1=19 → 表格主义/瑞士排版）
+     概念：密钥是一本「签发台账」。左表格 + 右签发栏，无卡片、无阴影，靠细线与字级建立层级。
+     状态即语义：绿=有效、琥珀=临期、灰=已过期；「已过期」是一枚歪斜的戳记。
+     示意数据 demo；四套客户端片段为真实格式（2026-10 核对）。 -->
+<style>
+  :root, [data-theme="paper"] {
+    --void: #f6f9fc; --panel: #ffffff; --panel-2: #f8fafd;
+    --line: #e3e8ee; --line-hot: #cbd2dc;
+    --text: #1a1f36; --muted: #697386; --faint: #8792a2;
+    --signal: #0e9f6e; --signal-soft: #e7f5ef; --signal-line: #bfe5d5;
+    --ink: #1a1f36; --accent: #3b5bdb;
+    --warn: #9a6b00; --warn-soft: #fdf4e3; --warn-line: #efd9a8;
+    --danger: #b3261e; --danger-soft: #fbeae9;
+    --serif: "Songti SC", "Noto Serif SC", "Source Han Serif SC", Georgia, serif;
+    --font: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  [data-theme="ink"] {
+    --void: #171a21; --panel: #1e222b; --panel-2: #232833;
+    --line: #313640; --line-hot: #454b57;
+    --text: #ece9e1; --muted: #9a9a90; --faint: #7d8078;
+    --signal: #3fd68f; --signal-soft: #1f3a2c; --signal-line: #2c5c45;
+    --ink: #ece9e1; --accent: #8ba4f2;
+    --warn: #e0b34c; --warn-soft: #332b1b; --warn-line: #5b4a26;
+    --danger: #e57760; --danger-soft: #3a2320;
+    --serif: "Songti SC", "Noto Serif SC", "Source Han Serif SC", Georgia, serif;
+    --font: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; }
+  body {
+    background: var(--void); color: var(--text); font-family: var(--font);
+    font-size: 14px; line-height: 1.55; -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+  button, input { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ---------- 应用外壳 ---------- */
+  .deck { height: 100%; display: flex; flex-direction: column; }
+  .deck-header {
+    display: flex; align-items: center; gap: 26px;
+    padding: 14px 24px; background: var(--panel); border-bottom: 1px solid var(--line);
+  }
+  .brand { display: flex; align-items: center; gap: 10px; flex: none; }
+  .brand .mark {
+    width: 26px; height: 26px; border: 1px solid var(--ink); position: relative;
+  }
+  .brand .mark::after {
+    content: ""; position: absolute; inset: 5px; border-left: 1px solid var(--ink);
+    border-bottom: 1px solid var(--ink); transform: skewX(-18deg);
+  }
+  .brand b { font-family: var(--font); font-size: 14.5px; letter-spacing: -0.01em; }
+  .brand span { display: block; font-size: 10.5px; color: var(--muted); letter-spacing: 0.04em; }
+  .nav { display: flex; gap: 2px; flex: 1; flex-wrap: wrap; }
+  .nav a {
+    font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.06em;
+    color: var(--muted); text-decoration: none; padding: 6px 10px;
+    border: 1px solid transparent; border-radius: 4px;
+  }
+  .nav a:hover { color: var(--text); }
+  .nav a.on { color: var(--signal); border-color: var(--signal-line); background: var(--signal-soft); }
+  .meta { display: flex; align-items: center; gap: 8px; flex: none; }
+  .who { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-right: 6px; }
+  .ghost {
+    background: transparent; border: 1px solid var(--line); border-radius: 4px;
+    color: var(--muted); font-family: var(--mono); font-size: 11px; padding: 5px 8px;
+  }
+  .ghost:hover { border-color: var(--line-hot); color: var(--text); }
+
+  .main { flex: 1; overflow: auto; }
+  .page { max-width: 1180px; margin: 0 auto; padding: 38px 28px 72px; }
+
+  /* ---------- 页头 ---------- */
+  .lede-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 32px; flex-wrap: wrap; }
+  .kicker {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.14em; color: var(--faint);
+  }
+  h1 {
+    font-family: var(--serif); font-size: 34px; font-weight: 600; letter-spacing: 0.01em;
+    margin-top: 6px;
+  }
+  .lede { color: var(--muted); font-size: 13.5px; max-width: 46ch; margin-top: 8px; }
+  .counts { display: flex; gap: 26px; font-family: var(--mono); }
+  .counts div { text-align: right; }
+  .counts b { display: block; font-size: 20px; font-weight: 500; letter-spacing: -0.02em; }
+  .counts span { font-size: 10px; letter-spacing: 0.1em; color: var(--faint); }
+  .rule { height: 1px; background: var(--line); margin: 26px 0 0; }
+
+  /* ---------- 主体两栏 ---------- */
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 0; margin-top: 0; }
+  .ledger { border-right: 1px solid var(--line); padding-right: 30px; }
+  .issuer { padding-left: 30px; position: sticky; top: 18px; align-self: start; }
+
+  .col-head, .row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 132px 210px 78px 46px;
+    gap: 16px; align-items: center;
+  }
+  .col-head {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; color: var(--faint);
+    padding: 14px 0 10px; border-bottom: 1px solid var(--line);
+  }
+  .row { padding: 18px 0; border-bottom: 1px solid var(--line); position: relative; }
+  .row:hover { background: color-mix(in srgb, var(--panel) 55%, transparent); }
+  .row .name { font-size: 14.5px; font-weight: 600; letter-spacing: -0.005em; }
+  .row .serial { font-family: var(--mono); font-size: 11px; color: var(--faint); margin-top: 3px; }
+  .row .serial code { color: var(--muted); }
+  .created { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .created span { display: block; color: var(--faint); font-size: 10px; margin-top: 2px; }
+
+  /* 寿命细线：剩余比例 */
+  .life { display: flex; flex-direction: column; gap: 7px; }
+  .track { height: 3px; background: var(--line); position: relative; }
+  .track i { position: absolute; inset: 0 auto 0 0; background: var(--signal); }
+  .track.warn i { background: var(--warn); }
+  .track.dead i { background: var(--line-hot); }
+  .life .txt { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+  .life .txt b { font-weight: 500; color: var(--text); }
+  .life .txt b.warn { color: var(--warn); }
+  .life .txt b.dead { color: var(--faint); }
+
+  .stamp {
+    display: inline-block; font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em;
+    border: 1px solid var(--signal-line); color: var(--signal); padding: 2px 6px;
+    transform: rotate(-1.2deg);
+  }
+  .stamp.dead { border-color: var(--line-hot); color: var(--faint); transform: rotate(-3deg); }
+
+  .rowbtn {
+    background: none; border: 0; color: var(--faint); font-size: 11px;
+    font-family: var(--mono); padding: 4px 0; text-align: right;
+  }
+  .rowbtn:hover { color: var(--danger); }
+
+  /* 删除确认行 */
+  .confirm {
+    grid-column: 1 / -1; display: none; margin-top: 14px; padding: 12px 14px;
+    border: 1px solid var(--danger); background: var(--danger-soft);
+    align-items: center; gap: 14px; flex-wrap: wrap;
+  }
+  .confirm.on { display: flex; }
+  .confirm p { flex: 1; font-size: 12.5px; color: var(--danger); min-width: 220px; }
+  .confirm .btn-danger {
+    background: var(--danger); color: #fff; border: 0; border-radius: 4px;
+    font-size: 12.5px; font-weight: 600; padding: 6px 14px;
+  }
+  .confirm .btn-cancel {
+    background: transparent; border: 1px solid var(--danger); color: var(--danger);
+    border-radius: 4px; font-size: 12.5px; padding: 6px 12px;
+  }
+  .row.removing { opacity: 0; transform: translateX(10px); transition: all .28s ease; }
+
+  /* ---------- 签发栏 ---------- */
+  .issuer .hd { font-family: var(--serif); font-size: 17px; font-weight: 600; }
+  .issuer .sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .field { margin-top: 22px; }
+  .field label {
+    display: block; font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em;
+    color: var(--faint); margin-bottom: 7px;
+  }
+  .field input {
+    width: 100%; background: transparent; border: 0; border-bottom: 1px solid var(--line-hot);
+    padding: 6px 0; font-size: 14px; outline: none;
+  }
+  .field input::placeholder { color: var(--faint); }
+  .field input:focus { border-bottom-color: var(--ink); }
+  .opts { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); border: 1px solid var(--line); }
+  .opts button {
+    background: var(--panel); border: 0; padding: 11px 10px; text-align: left;
+    font-family: var(--mono); font-size: 12.5px; color: var(--muted);
+  }
+  .opts button span { display: block; font-family: var(--font); font-size: 10.5px; color: var(--faint); margin-top: 2px; }
+  .opts button:hover { background: var(--panel-2); }
+  .opts button.on { background: var(--ink); color: var(--void); }
+  .opts button.on span { color: color-mix(in srgb, var(--void) 68%, transparent); }
+  .expiry-line {
+    margin-top: 14px; font-family: var(--mono); font-size: 11px; color: var(--muted);
+    display: flex; justify-content: space-between; padding-bottom: 14px; border-bottom: 1px solid var(--line);
+  }
+  .expiry-line b { color: var(--text); font-weight: 500; }
+  .issue-btn {
+    width: 100%; margin-top: 18px; background: var(--ink); color: var(--void);
+    border: 0; border-radius: 4px; padding: 11px; font-size: 13.5px; font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .issue-btn:hover { background: color-mix(in srgb, var(--ink) 86%, var(--accent)); }
+  .issue-btn:disabled { opacity: .4; cursor: not-allowed; }
+  .note { margin-top: 12px; font-size: 11px; color: var(--faint); line-height: 1.5; }
+
+  .empty { padding: 40px 0; color: var(--muted); font-size: 13px; }
+  .empty button { margin-top: 10px; }
+
+  .ledger-foot {
+    display: flex; gap: 22px; flex-wrap: wrap; padding-top: 16px;
+    font-family: var(--mono); font-size: 10px; letter-spacing: .04em; color: var(--faint);
+  }
+  .ledger-foot span::before { content: "·"; margin-right: 6px; color: var(--line-hot); }
+
+  .scope { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
+  .scope .cap {
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: .1em; color: var(--faint);
+    margin-bottom: 8px;
+  }
+  .scope ul { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+  .scope li { font-size: 12px; color: var(--muted); padding-left: 14px; position: relative; }
+  .scope li::before {
+    content: ""; position: absolute; left: 0; top: 8px; width: 6px; height: 1px; background: var(--line-hot);
+  }
+
+  /* ---------- 一次性明文 ---------- */
+  .reveal { display: none; }
+  .reveal.on { display: block; }
+  .reveal .bar {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 20px;
+    padding-bottom: 14px; border-bottom: 1px solid var(--line);
+  }
+  .reveal h2 { font-family: var(--serif); font-size: 24px; font-weight: 600; }
+  .reveal .warnline {
+    margin-top: 22px; border: 1px solid var(--warn-line); background: var(--warn-soft);
+    padding: 16px 18px;
+  }
+  .reveal .warnline .tag {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; color: var(--warn);
+  }
+  .keyline {
+    display: flex; align-items: center; gap: 14px; margin-top: 8px; flex-wrap: wrap;
+  }
+  .keyline code {
+    font-family: var(--mono); font-size: 15px; letter-spacing: -0.01em;
+    word-break: break-all; color: var(--text);
+  }
+  .copy {
+    background: transparent; border: 1px solid var(--line-hot); border-radius: 4px;
+    font-family: var(--mono); font-size: 10.5px; color: var(--muted); padding: 4px 9px;
+    flex: none;
+  }
+  .copy:hover { border-color: var(--ink); color: var(--text); }
+  .copy.done { border-color: var(--signal); color: var(--signal); }
+
+  .tabs { display: flex; gap: 0; margin-top: 30px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .tabs button {
+    background: none; border: 0; border-bottom: 2px solid transparent;
+    padding: 10px 16px 9px 0; margin-right: 22px;
+    font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.05em; color: var(--muted);
+  }
+  .tabs button.on { color: var(--text); border-bottom-color: var(--ink); }
+  .tabs button:hover { color: var(--text); }
+  .reveal-grid { display: grid; grid-template-columns: minmax(0, 1fr) 250px; gap: 30px; align-items: start; }
+  .steps { padding-top: 16px; }
+  .steps .cap { font-family: var(--mono); font-size: 9.5px; letter-spacing: .1em; color: var(--faint); }
+  .steps ol { list-style: none; margin-top: 8px; counter-reset: s; }
+  .steps li { counter-increment: s; position: relative; padding-left: 30px; margin-bottom: 14px; }
+  .steps li::before {
+    content: counter(s); position: absolute; left: 0; top: 1px; width: 18px; height: 18px;
+    border: 1px solid var(--line-hot); border-radius: 50%; text-align: center;
+    font-family: var(--mono); font-size: 9.5px; line-height: 16px; color: var(--muted);
+  }
+  .steps li b { display: block; font-size: 12.5px; font-weight: 600; }
+  .steps li span { display: block; font-size: 11.5px; color: var(--muted); line-height: 1.5; margin-top: 2px; }
+  .steps .tip { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 11px; color: var(--faint); line-height: 1.55; }
+
+  .snippet { padding-top: 16px; }
+  .snippet .target {
+    font-family: var(--mono); font-size: 11px; color: var(--faint);
+    display: flex; justify-content: space-between; gap: 16px; align-items: center; flex-wrap: wrap;
+  }
+  .snippet .target b { color: var(--text); font-weight: 500; }
+  .code {
+    margin-top: 10px; background: var(--panel); border: 1px solid var(--line);
+    padding: 16px 18px; overflow: auto; max-height: 320px;
+  }
+  .code pre { font-family: var(--mono); font-size: 12px; line-height: 1.75; white-space: pre; color: var(--text); }
+  .command-line {
+    margin-top: 10px; background: var(--panel); border: 1px solid var(--line);
+    padding: 14px 18px; font-family: var(--mono); font-size: 11.5px; line-height: 1.7;
+    overflow-x: auto; white-space: pre-wrap; word-break: break-all;
+  }
+  .subtoggle { display: flex; gap: 14px; margin-top: 10px; }
+  .subtoggle button {
+    background: none; border: 0; font-family: var(--mono); font-size: 10.5px;
+    letter-spacing: 0.06em; color: var(--faint); padding: 2px 0; border-bottom: 1px solid transparent;
+  }
+  .subtoggle button.on { color: var(--text); border-bottom-color: var(--ink); }
+  .reveal-foot { margin-top: 28px; display: flex; gap: 12px; align-items: center; }
+  .reveal-foot .primary {
+    background: var(--ink); color: var(--void); border: 0; border-radius: 4px;
+    padding: 9px 22px; font-size: 13px; font-weight: 600;
+  }
+  .reveal-foot .hint { font-size: 11.5px; color: var(--faint); }
+
+  [data-theme="ink"] .snippet .code, [data-theme="ink"] .command-line { background: #14171e; }
+
+  @media (max-width: 980px) {
+    body { overflow: auto; }
+    .deck-header { flex-wrap: wrap; gap: 12px; }
+    .nav { display: none; }
+    .page { padding: 26px 18px 60px; }
+    .grid { grid-template-columns: 1fr; }
+    .reveal-grid { grid-template-columns: 1fr; gap: 8px; }
+    .ledger { border-right: 0; padding-right: 0; }
+    .issuer { padding-left: 0; padding-top: 26px; position: static; }
+    .col-head, .row { grid-template-columns: minmax(0,1fr) 96px 64px; }
+    .col-head .c-life, .row .life, .col-head .c-created, .row .created { display: none; }
+    .counts { display: none; }
+    h1 { font-size: 27px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="deck">
+  <header class="deck-header">
+    <div class="brand">
+      <div class="mark" aria-hidden="true"></div>
+      <div><b>Sortie Deck</b><span>前线小队 · 一支文件，无传话</span></div>
+    </div>
+    <nav class="nav">
+      <a href="#">作战图</a><a href="#">任务</a><a href="#">知识库</a><a href="#">记忆</a>
+      <a href="#">角色工坊</a><a href="#">工具箱</a><a href="#">角色锻造</a><a href="#">小群</a>
+      <a href="#">决策中心</a><a href="#" class="on" aria-current="page">API 密钥</a><a href="#">管理</a>
+    </nav>
+    <div class="meta">
+      <span class="who">沈思 · 管理员</span>
+      <button class="ghost" id="themeBtn" type="button">墨</button>
+      <button class="ghost" type="button">退出</button>
+    </div>
+  </header>
+
+  <main class="main">
+    <div class="page">
+      <!-- 列表态 -->
+      <section id="listView">
+        <div class="lede-row">
+          <div>
+            <div class="kicker">CREDENTIALS / 签发台账</div>
+            <h1>API 密钥</h1>
+            <p class="lede">每把钥匙都是你本人的一张通行证。本地 agent 拿它进来，权限与你在网页上完全一致。</p>
+          </div>
+          <div class="counts">
+            <div><b id="cAll">3</b><span>已签发</span></div>
+            <div><b id="cActive">2</b><span>有效</span></div>
+            <div><b id="cExpired">1</b><span>已过期</span></div>
+          </div>
+        </div>
+        <div class="rule"></div>
+
+        <div class="grid">
+          <div class="ledger">
+            <div class="col-head">
+              <div>名称 / 序号</div>
+              <div class="c-created">签发</div>
+              <div class="c-life">有效期</div>
+              <div>状态</div>
+              <div></div>
+            </div>
+            <div id="rows"></div>
+            <div class="empty" id="empty" hidden>
+              还没有签发过钥匙。
+              <div><button class="ghost" type="button" onclick="focusName()">签发第一把</button></div>
+            </div>
+            <div class="ledger-foot">
+              <span>密钥继承账号权限</span><span>删除后立即断开</span><span>明文只出现一次</span>
+            </div>
+          </div>
+
+          <aside class="issuer">
+            <div class="hd">签发新通行证</div>
+            <div class="sub">有效期越短越好。到期自动失效，不需要你手动处理。</div>
+
+            <div class="field">
+              <label for="keyName">名称 · 这把钥匙给谁用</label>
+              <input id="keyName" placeholder="例如：MacBook · Claude Code" maxlength="40" autocomplete="off">
+            </div>
+
+            <div class="field">
+              <label>有效期</label>
+              <div class="opts" id="ttlOpts">
+                <button type="button" data-months="1" class="on">1 个月<span>默认 · 短期试用</span></button>
+                <button type="button" data-months="3">3 个月<span>一台设备</span></button>
+                <button type="button" data-months="6">6 个月<span>长期项目</span></button>
+                <button type="button" data-months="12">1 年<span>CI / 常驻</span></button>
+              </div>
+            </div>
+
+            <div class="expiry-line"><span>到期日</span><b id="expiryPreview">2026-11-30</b></div>
+            <button class="issue-btn" id="issueBtn" type="button">签发密钥</button>
+            <p class="note">明文只显示一次。列表里永远只有前缀，库里只有 SHA-256。</p>
+
+            <div class="scope">
+              <div class="cap">这把钥匙能做什么</div>
+              <ul>
+                <li>调用 /mcp 上的全部任务工具</li>
+                <li>读写你名下的任务、门禁与产物</li>
+                <li>无法访问其他账号的任何数据</li>
+              </ul>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- 一次性明文 + 接入 -->
+      <section class="reveal" id="revealView">
+        <div class="bar">
+          <div>
+            <div class="kicker">ISSUED / 已签发</div>
+            <h2 id="revealTitle">MacBook · Claude Code</h2>
+          </div>
+          <div class="counts"><div><b id="revealExpiry">2026-11-30</b><span>到期</span></div></div>
+        </div>
+
+        <div class="warnline">
+          <div class="tag">仅显示一次 · 离开此页后无法再次查看</div>
+          <div class="keyline">
+            <code id="plainKey">sk_sortie_</code>
+            <button class="copy" type="button" data-copy="plain">复制</button>
+          </div>
+        </div>
+
+        <div class="tabs" id="clientTabs">
+          <button type="button" data-client="claude-code" class="on">Claude Code</button>
+          <button type="button" data-client="codex">Codex CLI</button>
+          <button type="button" data-client="cursor">Cursor</button>
+          <button type="button" data-client="opencode">OpenCode</button>
+        </div>
+
+        <div class="reveal-grid">
+          <div class="snippet">
+            <div class="target"><span>写入 <b id="targetPath">项目根目录 .mcp.json</b></span>
+              <button class="copy" type="button" data-copy="code">复制配置</button>
+            </div>
+            <div class="subtoggle" id="claudeSubtoggle">
+              <button type="button" data-mode="file" class="on">配置文件</button>
+              <button type="button" data-mode="cmd">命令行</button>
+            </div>
+            <div class="code"><pre id="codeBlock"></pre></div>
+            <div class="command-line" id="cmdBlock" hidden></div>
+          </div>
+          <aside class="steps">
+            <div class="cap">接入步骤</div>
+            <ol>
+              <li><b>写入配置</b><span>把左侧片段存进目标文件；Claude Code 也可以直接执行命令。</span></li>
+              <li><b>重启客户端</b><span>让客户端重新读取 MCP 列表，通常会提示发现新工具。</span></li>
+              <li><b>验证接通</b><span>在会话里说「列一下我的任务」，能看到你名下任务即成功。</span></li>
+            </ol>
+            <p class="tip">到期自动失效；不想等了就在台账里删除，使用它的客户端会立刻断开。</p>
+          </aside>
+        </div>
+
+        <div class="reveal-foot">
+          <button class="primary" type="button" onclick="finishReveal()">我已保存，完成</button>
+          <span class="hint">建议把配置写进本机全局文件，而不是提交进仓库。</span>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<script>
+  /* ---------------- 数据（示意） ---------------- */
+  const NOW = new Date("2026-10-31T11:20:00");
+  const URL = "http://127.0.0.1:8787/mcp";
+  const DEMO_KEY = "sk_sortie_UsbbWYCttEDSyzA2q7HXbzxuhASsrrUzntZDu5752Zc";
+
+  let keys = [
+    { id: "key_a1f9c2", name: "MacBook · Claude Code", prefix: "sk_sortie_UsbbWYCt",
+      created: "2026-10-02", expires: "2026-11-01", lastUsed: "2 分钟前", calls: 37 },
+    { id: "key_77b1e4", name: "CI Runner · Codex", prefix: "sk_sortie_gXiGdPyl",
+      created: "2026-09-18", expires: "2026-12-18", lastUsed: "3 小时前", calls: 12 },
+    { id: "key_5c0d88", name: "Old Cursor 配置", prefix: "sk_sortie_9kLmQ2vx",
+      created: "2026-04-11", expires: "2026-07-11", lastUsed: "从未使用", calls: 0 },
+  ];
+
+  const DAY = 86400000;
+  const toDate = (s) => new Date(s + "T00:00:00");
+  const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const daysLeft = (s) => Math.ceil((toDate(s) - new Date(NOW.getFullYear(), NOW.getMonth(), NOW.getDate())) / DAY);
+
+  /* ---------------- 列表渲染 ---------------- */
+  function render() {
+    const host = document.getElementById("rows");
+    host.innerHTML = "";
+    keys.forEach((k) => {
+      const left = daysLeft(k.expires);
+      const expired = left < 0;
+      const warn = !expired && left <= 7;
+      const total = Math.max(1, Math.round((toDate(k.expires) - toDate(k.created)) / DAY));
+      const pct = expired ? 0 : Math.max(6, Math.min(100, Math.round((left / total) * 100)));
+
+      const row = document.createElement("div");
+      row.className = "row";
+      row.dataset.id = k.id;
+      row.innerHTML = `
+        <div>
+          <div class="name">${k.name}</div>
+          <div class="serial"><code>${k.prefix}…</code> · ${k.id}</div>
+        </div>
+        <div class="created">${k.created}<span>${k.lastUsed === "从未使用" ? "从未使用" : "最近 " + k.lastUsed}</span></div>
+        <div class="life">
+          <div class="track ${expired ? "dead" : warn ? "warn" : ""}"><i style="width:${pct}%"></i></div>
+          <div class="txt"><span>${k.expires}</span><b class="${expired ? "dead" : warn ? "warn" : ""}">${expired ? "过期 " + Math.abs(left) + " 天" : "剩 " + left + " 天"}</b></div>
+        </div>
+        <div><span class="stamp ${expired ? "dead" : ""}">${expired ? "已过期" : "有效"}</span></div>
+        <div style="text-align:right"><button class="rowbtn" type="button" data-del="${k.id}">删除</button></div>
+        <div class="confirm">
+          <p>删除后，使用这把钥匙的 Claude Code / Codex / Cursor 会立即断开，记录从库中移除且不可恢复。</p>
+          <button class="btn-cancel" type="button" data-cancel="${k.id}">取消</button>
+          <button class="btn-danger" type="button" data-confirm="${k.id}">确认删除</button>
+        </div>`;
+      host.appendChild(row);
+    });
+
+    document.getElementById("cAll").textContent = keys.length;
+    document.getElementById("cActive").textContent = keys.filter((k) => daysLeft(k.expires) >= 0).length;
+    document.getElementById("cExpired").textContent = keys.filter((k) => daysLeft(k.expires) < 0).length;
+    document.getElementById("empty").hidden = keys.length > 0;
+  }
+  render();
+
+  /* ---------------- 删除 ---------------- */
+  document.getElementById("rows").addEventListener("click", (e) => {
+    const del = e.target.closest("[data-del]");
+    if (del) {
+      const row = del.closest(".row");
+      row.querySelector(".confirm").classList.add("on");
+      return;
+    }
+    const cancel = e.target.closest("[data-cancel]");
+    if (cancel) {
+      cancel.closest(".row").querySelector(".confirm").classList.remove("on");
+      return;
+    }
+    const ok = e.target.closest("[data-confirm]");
+    if (ok) {
+      const id = ok.dataset.confirm;
+      const row = document.querySelector(`.row[data-id="${id}"]`);
+      row.classList.add("removing");
+      keys = keys.filter((k) => k.id !== id);
+      setTimeout(render, 300);
+    }
+  });
+
+  document.getElementById("empty").addEventListener("click", focusName);
+
+  /* ---------------- 有效期选择 ---------------- */
+  let ttl = 1;
+  const addMonths = (d, m) => {
+    const t = new Date(d.getTime());
+    const day = t.getDate();
+    t.setMonth(t.getMonth() + m);
+    if (t.getDate() < day) t.setDate(0);
+    return t;
+  };
+  function paintExpiry() {
+    document.getElementById("expiryPreview").textContent = fmt(addMonths(NOW, ttl));
+  }
+  document.getElementById("ttlOpts").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-months]");
+    if (!b) return;
+    ttl = Number(b.dataset.months);
+    [...document.querySelectorAll("#ttlOpts button")].forEach((x) => x.classList.toggle("on", x === b));
+    paintExpiry();
+  });
+  paintExpiry();
+
+  function focusName() {
+    const el = document.getElementById("keyName");
+    el.scrollIntoView({ block: "center" });
+    el.focus();
+  }
+
+  /* ---------------- 签发 ---------------- */
+  const nameInput = document.getElementById("keyName");
+  document.getElementById("issueBtn").addEventListener("click", () => {
+    const name = nameInput.value.trim() || "未命名密钥";
+    const expires = fmt(addMonths(NOW, ttl));
+    keys = [{ id: "key_" + Math.random().toString(16).slice(2, 8), name, prefix: DEMO_KEY.slice(0, 24),
+      created: fmt(NOW), expires, lastUsed: "从未使用", calls: 0 }, ...keys];
+    nameInput.value = "";
+    showReveal(name, expires);
+  });
+  nameInput.addEventListener("keydown", (e) => { if (e.key === "Enter") document.getElementById("issueBtn").click(); });
+
+  /* ---------------- 一次性明文 ---------------- */
+  const CLIENTS = {
+    "claude-code": {
+      label: "Claude Code", target: "项目根目录 .mcp.json", lang: "json",
+      code: () => JSON.stringify({ mcpServers: { "sortie-deck": {
+        type: "http", url: URL, headers: { Authorization: `Bearer ${DEMO_KEY}` } } } }, null, 2),
+      cmd: () => `claude mcp add --transport http sortie-deck ${URL} \\\n  --header "Authorization: Bearer ${DEMO_KEY}"`,
+    },
+    codex: {
+      label: "Codex CLI", target: "~/.codex/config.toml", lang: "toml",
+      code: () => `[mcp_servers.sortie-deck]\nurl = "${URL}"\nhttp_headers = { Authorization = "Bearer ${DEMO_KEY}" }\n\n# 也可以用环境变量，避免明文进配置文件：\n# bearer_token_env_var = "SORTIE_DECK_TOKEN"`,
+    },
+    cursor: {
+      label: "Cursor", target: "~/.cursor/mcp.json", lang: "json",
+      code: () => JSON.stringify({ mcpServers: { "sortie-deck": {
+        url: URL, headers: { Authorization: `Bearer ${DEMO_KEY}` } } } }, null, 2),
+    },
+    opencode: {
+      label: "OpenCode", target: "opencode.json", lang: "json",
+      code: () => JSON.stringify({ $schema: "https://opencode.ai/config.json", mcp: { "sortie-deck": {
+        type: "remote", url: URL, enabled: true, headers: { Authorization: `Bearer ${DEMO_KEY}` } } } }, null, 2),
+    },
+  };
+  let activeClient = "claude-code";
+  let claudeMode = "file";
+
+  function paintSnippet() {
+    const c = CLIENTS[activeClient];
+    document.getElementById("targetPath").textContent = c.target;
+    document.getElementById("claudeSubtoggle").style.display = activeClient === "claude-code" ? "flex" : "none";
+    const cmd = document.getElementById("cmdBlock");
+    const code = document.getElementById("codeBlock");
+    if (activeClient === "claude-code" && claudeMode === "cmd") {
+      code.parentElement.hidden = true;
+      cmd.hidden = false;
+      cmd.textContent = c.cmd();
+    } else {
+      code.parentElement.hidden = false;
+      cmd.hidden = true;
+      code.textContent = c.code();
+    }
+    document.querySelectorAll("#claudeSubtoggle button").forEach((b) =>
+      b.classList.toggle("on", b.dataset.mode === claudeMode));
+  }
+
+  document.getElementById("clientTabs").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-client]");
+    if (!b) return;
+    activeClient = b.dataset.client;
+    document.querySelectorAll("#clientTabs button").forEach((x) => x.classList.toggle("on", x === b));
+    paintSnippet();
+  });
+  document.getElementById("claudeSubtoggle").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-mode]");
+    if (!b) return;
+    claudeMode = b.dataset.mode;
+    paintSnippet();
+  });
+
+  function showReveal(name, expires) {
+    document.getElementById("listView").hidden = true;
+    document.getElementById("revealView").classList.add("on");
+    document.getElementById("revealTitle").textContent = name;
+    document.getElementById("revealExpiry").textContent = expires;
+    document.getElementById("plainKey").textContent = DEMO_KEY;
+    activeClient = "claude-code";
+    claudeMode = "file";
+    document.querySelectorAll("#clientTabs button").forEach((x, i) => x.classList.toggle("on", i === 0));
+    paintSnippet();
+    window.scrollTo({ top: 0, behavior: "instant" });
+  }
+  function finishReveal() {
+    document.getElementById("revealView").classList.remove("on");
+    document.getElementById("listView").hidden = false;
+    render();
+  }
+
+  /* ---------------- 复制 ---------------- */
+  let lastKeyText = DEMO_KEY;
+  document.addEventListener("click", async (e) => {
+    const b = e.target.closest("[data-copy]");
+    if (!b) return;
+    const which = b.dataset.copy;
+    const text = which === "plain" ? lastKeyText
+      : (document.getElementById("cmdBlock").hidden === false
+          ? document.getElementById("cmdBlock").textContent
+          : document.getElementById("codeBlock").textContent);
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (_) { /* file:// 下剪贴板可能不可用，静默降级 */ }
+    const old = b.textContent;
+    b.textContent = "已复制";
+    b.classList.add("done");
+    setTimeout(() => { b.textContent = old; b.classList.remove("done"); }, 1400);
+  });
+
+  /* ---------------- 主题 ---------------- */
+  const root = document.documentElement;
+  document.getElementById("themeBtn").addEventListener("click", (e) => {
+    const next = root.dataset.theme === "paper" ? "ink" : "paper";
+    root.dataset.theme = next;
+    e.currentTarget.textContent = next === "paper" ? "墨" : "纸";
+  });
+
+  /* 直接查看「签发后」状态：在地址后加 #reveal */
+  if (location.hash === "#reveal") showReveal("MacBook · Claude Code", "2026-11-30");
+</script>
+</body>
+</html>

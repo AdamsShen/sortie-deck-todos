@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="ink">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>API 密钥 · v3 连接台</title>
+<!-- huashu-design · 逻辑三（最佳设计师：Linear / Vercel 工程控制台思维）
+     概念：密钥是「连接终端」。左轨凭证列表 + 右侧接入检查器，高密度、等宽为主、零装饰。
+     签名细节：每把钥匙的近 24 小时调用柱状图——把「这把钥匙还活着吗」变成可读的形状。
+     示意数据 demo；四套客户端片段为真实格式（2026-10 核对）。 -->
+<style>
+  :root, [data-theme="ink"] {
+    --void: #16181d; --panel: #1c1f26; --panel-2: #22262e; --panel-3: #272c35;
+    --line: #2f343d; --line-hot: #454c58;
+    --text: #e8e5dd; --muted: #969ba5; --faint: #6f757f;
+    --signal: #45d192; --signal-soft: #1b3329; --signal-line: #2d5b45;
+    --copper: #8aa2f0; --copper-soft: #232b3f;
+    --warn: #e0b451; --warn-soft: #322b1b; --warn-line: #574725;
+    --danger: #e5785f; --danger-soft: #352220;
+    --font: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  [data-theme="paper"] {
+    --void: #f4f6fa; --panel: #ffffff; --panel-2: #f8fafc; --panel-3: #eef1f6;
+    --line: #e2e7ee; --line-hot: #c8d0db;
+    --text: #1a1f36; --muted: #67707f; --faint: #8e97a5;
+    --signal: #0b8a60; --signal-soft: #e5f5ee; --signal-line: #b9e0cf;
+    --copper: #3b5bdb; --copper-soft: #eef2fd;
+    --warn: #8f6300; --warn-soft: #fdf4e0; --warn-line: #ecd8a6;
+    --danger: #b3261e; --danger-soft: #fbeae8;
+    --font: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; }
+  body {
+    background: var(--void); color: var(--text); font-family: var(--font);
+    font-size: 13px; line-height: 1.55; -webkit-font-smoothing: antialiased; overflow: hidden;
+  }
+  button, input { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--copper); outline-offset: 2px; }
+  code, pre { font-family: var(--mono); }
+
+  /* ---------- 外壳 ---------- */
+  .deck { height: 100%; display: flex; flex-direction: column; }
+  .deck-header {
+    display: flex; align-items: center; gap: 22px; padding: 11px 20px;
+    background: var(--panel); border-bottom: 1px solid var(--line); flex: none;
+  }
+  .brand { display: flex; align-items: center; gap: 9px; flex: none; }
+  .brand .mark { width: 22px; height: 22px; border: 1px solid var(--signal); position: relative; }
+  .brand .mark::after {
+    content: ""; position: absolute; inset: 4px; border-left: 1px solid var(--signal);
+    border-bottom: 1px solid var(--signal); transform: skewX(-18deg);
+  }
+  .brand b { font-size: 14px; letter-spacing: -.01em; }
+  .brand span { display: block; font-family: var(--mono); font-size: 9px; color: var(--faint); letter-spacing: .08em; }
+  .nav { display: flex; gap: 1px; flex: 1; flex-wrap: wrap; }
+  .nav a {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .04em; color: var(--muted);
+    text-decoration: none; padding: 5px 9px; border-radius: 4px;
+  }
+  .nav a:hover { color: var(--text); background: var(--panel-2); }
+  .nav a.on { color: var(--signal); background: var(--signal-soft); box-shadow: inset 0 0 0 1px var(--signal-line); }
+  .meta { display: flex; align-items: center; gap: 8px; }
+  .who { font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-right: 4px; }
+  .ghost {
+    background: transparent; border: 1px solid var(--line); border-radius: 4px;
+    font-family: var(--mono); font-size: 10.5px; color: var(--muted); padding: 4px 8px;
+  }
+  .ghost:hover { border-color: var(--line-hot); color: var(--text); }
+
+  /* ---------- 双栏 ---------- */
+  .console { flex: 1; min-height: 0; display: grid; grid-template-columns: 336px minmax(0, 1fr); }
+  .rail {
+    border-right: 1px solid var(--line); background: var(--panel); display: flex;
+    flex-direction: column; min-height: 0;
+  }
+  .rail-head {
+    display: flex; align-items: center; gap: 8px; padding: 14px 16px 10px;
+    font-family: var(--mono); font-size: 10px; letter-spacing: .12em; color: var(--faint);
+  }
+  .rail-head b { color: var(--text); font-weight: 500; letter-spacing: 0; font-size: 11px; }
+  .rail-head .sp { flex: 1; }
+  .newbtn {
+    background: var(--signal-soft); border: 1px solid var(--signal-line); color: var(--signal);
+    border-radius: 4px; font-family: var(--mono); font-size: 10.5px; padding: 3px 8px;
+  }
+  .newbtn:hover { background: color-mix(in srgb, var(--signal) 18%, var(--panel)); }
+
+  .create { display: none; padding: 0 14px 14px; border-bottom: 1px solid var(--line); }
+  .create.on { display: block; }
+  .create label { display: block; font-family: var(--mono); font-size: 9px; letter-spacing: .1em; color: var(--faint); margin: 10px 0 5px; }
+  .create input {
+    width: 100%; background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px;
+    padding: 7px 9px; font-size: 12.5px; outline: none;
+  }
+  .create input:focus { border-color: var(--copper); box-shadow: 0 0 0 3px color-mix(in srgb, var(--copper) 16%, transparent); }
+  .chips { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+  .chips button {
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px;
+    font-family: var(--mono); font-size: 11px; color: var(--muted); padding: 5px 2px;
+  }
+  .chips button.on { border-color: var(--signal); color: var(--signal); background: var(--signal-soft); }
+  .create .foot { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+  .create .due { flex: 1; font-family: var(--mono); font-size: 9.5px; color: var(--faint); }
+  .create .go {
+    background: var(--signal); border: 0; color: #08251a; border-radius: 4px;
+    font-size: 11.5px; font-weight: 700; padding: 5px 14px;
+  }
+  [data-theme="paper"] .create .go { color: #fff; }
+
+  .rail-list { flex: 1; overflow: auto; padding: 8px 8px 20px; }
+  .rrow {
+    position: relative; width: 100%; text-align: left; background: transparent; border: 0;
+    border-radius: 5px; padding: 9px 10px 9px 12px; display: block; margin-bottom: 1px;
+  }
+  .rrow:hover { background: var(--panel-2); }
+  .rrow.on { background: var(--panel-3); }
+  .rrow.on::before { content: ""; position: absolute; left: 0; top: 7px; bottom: 7px; width: 2px; background: var(--signal); }
+  .rrow .l1 { display: flex; align-items: center; gap: 7px; }
+  .rrow .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--signal); flex: none; }
+  .rrow.warn .dot { background: var(--warn); }
+  .rrow.dead .dot { background: var(--faint); }
+  .rrow .nm { font-size: 12.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rrow .l2 {
+    display: flex; justify-content: space-between; gap: 8px; margin-top: 3px;
+    font-family: var(--mono); font-size: 9.5px; color: var(--faint);
+  }
+  .rrow .l2 .d.warn { color: var(--warn); }
+  .rrow .l2 .d.dead { color: var(--faint); }
+  .rail-foot {
+    border-top: 1px solid var(--line); padding: 10px 16px;
+    font-family: var(--mono); font-size: 9.5px; color: var(--faint); line-height: 1.6;
+  }
+
+  /* ---------- 检查器 ---------- */
+  .inspector { min-width: 0; overflow: auto; padding: 26px 30px 60px; }
+  .inst { max-width: 860px; }
+  .modebar {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 18px;
+    font-family: var(--mono); font-size: 10px; letter-spacing: .1em; color: var(--faint);
+  }
+  .modebar .pill {
+    border: 1px solid var(--signal-line); color: var(--signal); background: var(--signal-soft);
+    border-radius: 99px; padding: 2px 9px; letter-spacing: .06em;
+  }
+  .modebar .pill.dead { border-color: var(--line); color: var(--faint); background: var(--panel-2); }
+
+  .det-name { font-size: 23px; font-weight: 600; letter-spacing: -.015em; }
+  .det-id { font-family: var(--mono); font-size: 11px; color: var(--faint); margin-top: 3px; }
+
+  .metagrid {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px;
+    background: var(--line); border: 1px solid var(--line); border-radius: 6px;
+    overflow: hidden; margin-top: 20px;
+  }
+  .metagrid div { background: var(--panel); padding: 10px 12px; }
+  .metagrid .k { font-family: var(--mono); font-size: 9px; letter-spacing: .1em; color: var(--faint); }
+  .metagrid .v { font-size: 12.5px; margin-top: 3px; }
+  .metagrid .v.mono { font-family: var(--mono); font-size: 11.5px; }
+  .metagrid .v.warn { color: var(--warn); }
+  .metagrid .v.dead { color: var(--faint); }
+
+  /* 使用柱状图 */
+  .usage { margin-top: 18px; display: flex; align-items: flex-end; gap: 16px; }
+  .bars { display: flex; align-items: flex-end; gap: 2px; height: 44px; flex: 1; }
+  .bars i { flex: 1; background: color-mix(in srgb, var(--text) 16%, transparent); border-radius: 1px 1px 0 0; }
+  .bars i.hot { background: var(--signal); }
+  .usage .cap { font-family: var(--mono); font-size: 9.5px; color: var(--faint); text-align: right; line-height: 1.6; flex: none; }
+  .usage .cap b { display: block; color: var(--text); font-size: 13px; font-weight: 500; }
+
+  .sec {
+    margin-top: 30px; padding-top: 16px; border-top: 1px solid var(--line);
+    display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+  }
+  .sec h2 { font-size: 13px; font-weight: 600; }
+  .sec span { font-family: var(--mono); font-size: 10px; color: var(--faint); }
+
+  .tabs { display: flex; gap: 2px; margin-top: 12px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 5px; padding: 3px; width: fit-content; flex-wrap: wrap; }
+  .tabs button {
+    background: transparent; border: 0; border-radius: 3px; padding: 4px 12px;
+    font-family: var(--mono); font-size: 10.5px; color: var(--muted);
+  }
+  .tabs button:hover { color: var(--text); }
+  .tabs button.on { background: var(--panel); color: var(--text); box-shadow: inset 0 0 0 1px var(--line); }
+
+  .target {
+    display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;
+    margin-top: 12px; font-family: var(--mono); font-size: 10px; color: var(--faint);
+  }
+  .target b { color: var(--muted); font-weight: 500; }
+  .code {
+    margin-top: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 5px;
+    padding: 14px 16px; overflow: auto; max-height: 320px; position: relative;
+  }
+  [data-theme="ink"] .code { background: #14171c; }
+  .code pre { font-size: 11.5px; line-height: 1.75; white-space: pre; color: var(--text); }
+  .cmdline {
+    margin-top: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 5px;
+    padding: 14px 16px; font-family: var(--mono); font-size: 11px; line-height: 1.7;
+    white-space: pre-wrap; word-break: break-all;
+  }
+  [data-theme="ink"] .cmdline { background: #14171c; }
+  .copy {
+    background: transparent; border: 1px solid var(--line-hot); border-radius: 3px;
+    font-family: var(--mono); font-size: 9.5px; color: var(--muted); padding: 2px 7px; flex: none;
+  }
+  .copy:hover { border-color: var(--text); color: var(--text); }
+  .copy.done { border-color: var(--signal); color: var(--signal); }
+  .subtoggle { display: flex; gap: 10px; margin-top: 8px; }
+  .subtoggle button {
+    background: none; border: 0; padding: 1px 0; font-family: var(--mono); font-size: 9.5px;
+    color: var(--faint); border-bottom: 1px solid transparent;
+  }
+  .subtoggle button.on { color: var(--text); border-bottom-color: var(--text); }
+
+  /* 明文 */
+  .reveal { display: none; }
+  .reveal.on { display: block; }
+  .warnband {
+    border: 1px solid var(--warn-line); background: var(--warn-soft); border-radius: 6px;
+    padding: 14px 16px; margin-top: 18px;
+  }
+  .warnband .tag { font-family: var(--mono); font-size: 9.5px; letter-spacing: .1em; color: var(--warn); }
+  .warnband .line { display: flex; align-items: center; gap: 12px; margin-top: 8px; flex-wrap: wrap; }
+  .warnband code { font-size: 13.5px; word-break: break-all; }
+  .donebar { display: flex; align-items: center; gap: 12px; margin-top: 22px; }
+  .donebar .primary {
+    background: var(--signal); border: 0; color: #08251a; border-radius: 4px;
+    font-size: 12.5px; font-weight: 700; padding: 7px 18px;
+  }
+  [data-theme="paper"] .donebar .primary { color: #fff; }
+  .donebar span { font-size: 11px; color: var(--faint); }
+
+  /* 危险区 */
+  .danger {
+    margin-top: 34px; padding-top: 16px; border-top: 1px solid var(--line);
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  }
+  .danger .txt { flex: 1; min-width: 240px; }
+  .danger .txt b { font-size: 12.5px; }
+  .danger .txt p { font-size: 11px; color: var(--faint); margin-top: 2px; }
+  .danger .del {
+    background: transparent; border: 1px solid var(--danger); color: var(--danger);
+    border-radius: 4px; font-size: 11.5px; padding: 5px 13px;
+  }
+  .danger .del:hover { background: var(--danger-soft); }
+  .danger .confirm { display: none; align-items: center; gap: 10px; }
+  .danger .confirm.on { display: flex; }
+  .danger .confirm span { font-size: 11.5px; color: var(--danger); }
+  .danger .confirm .yes {
+    background: var(--danger); border: 0; color: #fff; border-radius: 4px;
+    font-size: 11.5px; font-weight: 600; padding: 5px 12px;
+  }
+  .danger .confirm .no {
+    background: transparent; border: 1px solid var(--line-hot); color: var(--muted);
+    border-radius: 4px; font-size: 11.5px; padding: 5px 10px;
+  }
+
+  .blank { padding: 60px 0; color: var(--faint); font-family: var(--mono); font-size: 11.5px; }
+
+  @media (max-width: 900px) {
+    body { overflow: auto; }
+    .console { grid-template-columns: 1fr; }
+    .rail { border-right: 0; border-bottom: 1px solid var(--line); }
+    .rail-list { max-height: 240px; }
+    .inspector { padding: 20px 16px 48px; }
+    .metagrid { grid-template-columns: repeat(2, minmax(0,1fr)); }
+    .nav { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<div class="deck">
+  <header class="deck-header">
+    <div class="brand">
+      <div class="mark" aria-hidden="true"></div>
+      <div><b>Sortie Deck</b><span>SORTIE / CONTROL PLANE</span></div>
+    </div>
+    <nav class="nav">
+      <a href="#">作战图</a><a href="#">任务</a><a href="#">知识库</a><a href="#">记忆</a>
+      <a href="#">角色工坊</a><a href="#">工具箱</a><a href="#">角色锻造</a><a href="#">小群</a>
+      <a href="#">决策中心</a><a href="#" class="on" aria-current="page">API 密钥</a><a href="#">管理</a>
+    </nav>
+    <div class="meta">
+      <span class="who">沈思 · 管理员</span>
+      <button class="ghost" id="themeBtn" type="button">纸</button>
+      <button class="ghost" type="button">退出</button>
+    </div>
+  </header>
+
+  <div class="console">
+    <aside class="rail">
+      <div class="rail-head">
+        <b>凭证</b><span id="railCount">3</span>
+        <span class="sp"></span>
+        <button class="newbtn" type="button" id="newBtn">新建</button>
+      </div>
+
+      <form class="create" id="createForm" onsubmit="return false">
+        <label for="keyName">名称</label>
+        <input id="keyName" placeholder="MacBook · Claude Code" maxlength="40" autocomplete="off">
+        <label>有效期</label>
+        <div class="chips" id="ttls">
+          <button type="button" data-months="1" class="on">1 月</button>
+          <button type="button" data-months="3">3 月</button>
+          <button type="button" data-months="6">6 月</button>
+          <button type="button" data-months="12">1 年</button>
+        </div>
+        <div class="foot">
+          <span class="due" id="dueText">到期 2026-11-30</span>
+          <button class="go" type="button" id="issueBtn">签发</button>
+        </div>
+      </form>
+
+      <div class="rail-list" id="railList"></div>
+      <div class="rail-foot">按账号隔离 · 明文只出现一次<br>删库即断开，无回收站</div>
+    </aside>
+
+    <section class="inspector">
+      <div class="inst">
+        <div class="modebar">
+          <span id="modeLabel">CREDENTIAL</span>
+          <span class="pill" id="statusPill">有效</span>
+          <span id="modeHint">右侧是按客户端给出的接入配置</span>
+        </div>
+
+        <!-- 详情头 -->
+        <div id="detailHead">
+          <div class="det-name" id="detName">MacBook · Claude Code</div>
+          <div class="det-id" id="detId">key_a1f9c2 · sk_sortie_UsbbWYCt…</div>
+
+          <div class="metagrid">
+            <div><div class="k">签发</div><div class="v mono" id="mCreated">2026-10-02</div></div>
+            <div><div class="k">到期</div><div class="v mono" id="mExpires">2026-11-01</div></div>
+            <div><div class="k">剩余</div><div class="v" id="mLeft">1 天</div></div>
+            <div><div class="k">最近使用</div><div class="v" id="mLast">2 分钟前</div></div>
+          </div>
+
+          <div class="usage">
+            <div class="bars" id="bars" aria-hidden="true"></div>
+            <div class="cap"><b id="calls24">37</b>次调用 / 24h</div>
+          </div>
+        </div>
+
+        <!-- 一次性明文 -->
+        <div class="reveal" id="revealPane">
+          <div class="warnband">
+            <div class="tag">仅显示一次 · 关闭后无法再次查看</div>
+            <div class="line">
+              <code id="plainKey">sk_sortie_</code>
+              <button class="copy" type="button" data-copy="plain">复制</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="sec">
+          <h2>接入配置</h2>
+          <span id="secHint">写进客户端配置文件，重启客户端生效</span>
+        </div>
+
+        <div class="tabs" id="clientTabs">
+          <button type="button" data-client="claude-code" class="on">Claude Code</button>
+          <button type="button" data-client="codex">Codex CLI</button>
+          <button type="button" data-client="cursor">Cursor</button>
+          <button type="button" data-client="opencode">OpenCode</button>
+        </div>
+
+        <div class="target">
+          <span>写入 <b id="targetPath">项目根目录 .mcp.json</b></span>
+          <button class="copy" type="button" data-copy="code">复制</button>
+        </div>
+        <div class="subtoggle" id="claudeSubtoggle">
+          <button type="button" data-mode="file" class="on">配置文件</button>
+          <button type="button" data-mode="cmd">命令行</button>
+        </div>
+        <div class="code"><pre id="codeBlock"></pre></div>
+        <div class="cmdline" id="cmdBlock" hidden></div>
+
+        <div class="danger" id="dangerZone">
+          <div class="txt">
+            <b>删除这把密钥</b>
+            <p>从 SQLite 物理删除，立即断开正在使用它的客户端，不可恢复。</p>
+          </div>
+          <button class="del" type="button" id="delBtn">删除</button>
+          <div class="confirm" id="delConfirm">
+            <span>确认删除？</span>
+            <button class="no" type="button" id="delNo">取消</button>
+            <button class="yes" type="button" id="delYes">确认删除</button>
+          </div>
+        </div>
+
+        <div class="donebar" id="doneBar" hidden>
+          <button class="primary" type="button" id="doneBtn">我已保存，完成</button>
+          <span>关闭后无法再次查看这串密钥。</span>
+        </div>
+
+        <div class="blank" id="blank" hidden>选择左侧一把密钥，或新建一把。</div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+  const NOW = new Date("2026-10-31T11:20:00");
+  const URL = "http://127.0.0.1:8787/mcp";
+  const DEMO_KEY = "sk_sortie_UsbbWYCttEDSyzA2q7HXbzxuhASsrrUzntZDu5752Zc";
+  const DAY = 86400000;
+
+  let keys = [
+    { id: "key_a1f9c2", name: "MacBook · Claude Code", prefix: "sk_sortie_UsbbWYCt",
+      created: "2026-10-02", expires: "2026-11-01", lastUsed: "2 分钟前", calls: 37 },
+    { id: "key_77b1e4", name: "CI Runner · Codex", prefix: "sk_sortie_gXiGdPyl",
+      created: "2026-09-18", expires: "2026-12-18", lastUsed: "3 小时前", calls: 12 },
+    { id: "key_5c0d88", name: "Old Cursor 配置", prefix: "sk_sortie_9kLmQ2vx",
+      created: "2026-04-11", expires: "2026-07-11", lastUsed: "从未使用", calls: 0 },
+  ];
+  let selected = "key_a1f9c2";
+  let mode = "detail";           // detail | reveal
+  let revealId = null;
+
+  const toDate = (s) => new Date(s + "T00:00:00");
+  const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const daysLeft = (s) => Math.ceil((toDate(s) - new Date(NOW.getFullYear(), NOW.getMonth(), NOW.getDate())) / DAY);
+  const addMonths = (d, m) => {
+    const t = new Date(d.getTime()); const day = t.getDate();
+    t.setMonth(t.getMonth() + m);
+    if (t.getDate() < day) t.setDate(0);
+    return t;
+  };
+
+  /* ---------- 左轨 ---------- */
+  function renderRail() {
+    const host = document.getElementById("railList");
+    host.innerHTML = "";
+    keys.forEach((k) => {
+      const left = daysLeft(k.expires);
+      const dead = left < 0, warn = !dead && left <= 7;
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = `rrow ${dead ? "dead" : warn ? "warn" : ""} ${k.id === selected && mode === "detail" ? "on" : ""}`;
+      b.dataset.id = k.id;
+      b.innerHTML = `
+        <div class="l1"><span class="dot"></span><span class="nm">${k.name}</span></div>
+        <div class="l2"><span>${k.prefix}…</span><span class="d ${dead ? "dead" : warn ? "warn" : ""}">${dead ? "已过期" : "剩 " + left + " 天"}</span></div>`;
+      host.appendChild(b);
+    });
+    document.getElementById("railCount").textContent = keys.length;
+    if (!keys.length) {
+      document.getElementById("detailHead").hidden = true;
+      document.getElementById("sec").hidden = true;
+      document.getElementById("blank").hidden = false;
+    }
+  }
+
+  document.getElementById("railList").addEventListener("click", (e) => {
+    const b = e.target.closest(".rrow");
+    if (!b) return;
+    selected = b.dataset.id;
+    mode = "detail";
+    revealId = null;
+    renderAll();
+  });
+
+  /* ---------- 详情 ---------- */
+  function current() { return keys.find((k) => k.id === selected) || null; }
+
+  function paintDetail() {
+    const k = current();
+    if (!k) return;
+    const left = daysLeft(k.expires);
+    const dead = left < 0, warn = !dead && left <= 7;
+
+    document.getElementById("modeLabel").textContent = "CREDENTIAL";
+    document.getElementById("statusPill").textContent = dead ? "已过期" : warn ? "临期" : "有效";
+    document.getElementById("statusPill").className = "pill" + (dead ? " dead" : "");
+    document.getElementById("modeHint").textContent = "右侧是按客户端给出的接入配置";
+
+    document.getElementById("detName").textContent = k.name;
+    document.getElementById("detId").textContent = `${k.id} · ${k.prefix}…`;
+    document.getElementById("mCreated").textContent = k.created;
+    document.getElementById("mExpires").textContent = k.expires;
+    document.getElementById("mLeft").textContent = dead ? "已过期 " + Math.abs(left) + " 天" : "剩 " + left + " 天";
+    document.getElementById("mLeft").className = "v" + (dead ? " dead" : warn ? " warn" : "");
+    document.getElementById("mLast").textContent = k.lastUsed;
+    document.getElementById("calls24").textContent = k.calls;
+
+    const bars = document.getElementById("bars");
+    bars.innerHTML = "";
+    let seed = k.id.split("").reduce((a, c) => a + c.charCodeAt(0), 0);
+    for (let i = 0; i < 24; i++) {
+      seed = (seed * 9301 + 49297) % 233280;
+      const v = k.calls === 0 ? 2 : 8 + Math.round((seed / 233280) * (i > 19 ? 88 : 60));
+      const el = document.createElement("i");
+      el.style.height = v + "%";
+      if (k.calls > 0 && i === 22) el.className = "hot";
+      bars.appendChild(el);
+    }
+
+    document.getElementById("dangerZone").hidden = false;
+    document.getElementById("doneBar").hidden = true;
+    document.getElementById("revealPane").classList.remove("on");
+    document.getElementById("detailHead").hidden = false;
+    document.getElementById("blank").hidden = true;
+  }
+
+  /* ---------- 明文态 ---------- */
+  function paintReveal() {
+    const k = keys.find((x) => x.id === revealId);
+    document.getElementById("modeLabel").textContent = "NEW CREDENTIAL";
+    document.getElementById("statusPill").textContent = "未接入";
+    document.getElementById("statusPill").className = "pill";
+    document.getElementById("modeHint").textContent = "复制下面的密钥或配置；关闭后不再显示";
+
+    document.getElementById("detailHead").hidden = true;
+    document.getElementById("revealPane").classList.add("on");
+    document.getElementById("plainKey").textContent = DEMO_KEY;
+    document.getElementById("dangerZone").hidden = true;
+    document.getElementById("doneBar").hidden = false;
+    document.getElementById("blank").hidden = true;
+    if (k) document.getElementById("detName").textContent = k.name;
+  }
+
+  function renderAll() {
+    renderRail();
+    if (mode === "reveal") paintReveal(); else paintDetail();
+    paintSnippet();
+  }
+
+  /* ---------- 新建 ---------- */
+  let ttl = 1;
+  const form = document.getElementById("createForm");
+  const nameInput = document.getElementById("keyName");
+
+  document.getElementById("newBtn").addEventListener("click", () => {
+    const on = form.classList.toggle("on");
+    if (on) setTimeout(() => nameInput.focus(), 30);
+  });
+  document.getElementById("ttls").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-months]");
+    if (!b) return;
+    ttl = Number(b.dataset.months);
+    [...document.querySelectorAll("#ttls button")].forEach((x) => x.classList.toggle("on", x === b));
+    document.getElementById("dueText").textContent = "到期 " + fmt(addMonths(NOW, ttl));
+  });
+  document.getElementById("issueBtn").addEventListener("click", issue);
+  nameInput.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); issue(); } });
+
+  function issue() {
+    const name = nameInput.value.trim() || "未命名密钥";
+    const id = "key_" + Math.random().toString(16).slice(2, 8);
+    keys = [{ id, name, prefix: DEMO_KEY.slice(0, 24), created: fmt(NOW),
+      expires: fmt(addMonths(NOW, ttl)), lastUsed: "从未使用", calls: 0 }, ...keys];
+    selected = id;
+    revealId = id;
+    mode = "reveal";
+    nameInput.value = "";
+    form.classList.remove("on");
+    activeClient = "claude-code"; claudeMode = "file";
+    renderAll();
+  }
+
+  document.getElementById("doneBtn").addEventListener("click", () => {
+    mode = "detail"; revealId = null;
+    document.getElementById("plainKey").textContent = "";
+    renderAll();
+  });
+
+  /* ---------- 删除 ---------- */
+  const delBtn = document.getElementById("delBtn");
+  const delConfirm = document.getElementById("delConfirm");
+  delBtn.addEventListener("click", () => { delBtn.hidden = true; delConfirm.classList.add("on"); });
+  document.getElementById("delNo").addEventListener("click", () => {
+    delConfirm.classList.remove("on"); delBtn.hidden = false;
+  });
+  document.getElementById("delYes").addEventListener("click", () => {
+    keys = keys.filter((k) => k.id !== selected);
+    delConfirm.classList.remove("on"); delBtn.hidden = false;
+    selected = keys[0]?.id || null;
+    mode = "detail";
+    renderAll();
+    if (!keys.length) {
+      document.getElementById("detailHead").hidden = true;
+      document.getElementById("dangerZone").hidden = true;
+      document.getElementById("blank").hidden = false;
+    }
+  });
+
+  /* ---------- 客户端片段 ---------- */
+  const CLIENTS = {
+    "claude-code": {
+      target: "项目根目录 .mcp.json",
+      code: () => JSON.stringify({ mcpServers: { "sortie-deck": {
+        type: "http", url: URL, headers: { Authorization: `Bearer ${DEMO_KEY}` } } } }, null, 2),
+      cmd: () => `claude mcp add --transport http sortie-deck ${URL} \\\n  --header "Authorization: Bearer ${DEMO_KEY}"`,
+    },
+    codex: {
+      target: "~/.codex/config.toml",
+      code: () => `[mcp_servers.sortie-deck]\nurl = "${URL}"\nhttp_headers = { Authorization = "Bearer ${DEMO_KEY}" }\n\n# 或用环境变量，避免明文进配置文件：\n# bearer_token_env_var = "SORTIE_DECK_TOKEN"`,
+    },
+    cursor: {
+      target: "~/.cursor/mcp.json",
+      code: () => JSON.stringify({ mcpServers: { "sortie-deck": {
+        url: URL, headers: { Authorization: `Bearer ${DEMO_KEY}` } } } }, null, 2),
+    },
+    opencode: {
+      target: "opencode.json",
+      code: () => JSON.stringify({ $schema: "https://opencode.ai/config.json", mcp: { "sortie-deck": {
+        type: "remote", url: URL, enabled: true, headers: { Authorization: `Bearer ${DEMO_KEY}` } } } }, null, 2),
+    },
+  };
+  let activeClient = "claude-code", claudeMode = "file";
+
+  function paintSnippet() {
+    const c = CLIENTS[activeClient];
+    document.getElementById("targetPath").textContent = c.target;
+    document.getElementById("claudeSubtoggle").style.display = activeClient === "claude-code" ? "flex" : "none";
+    const wrap = document.getElementById("codeBlock").parentElement;
+    const cmd = document.getElementById("cmdBlock");
+    if (activeClient === "claude-code" && claudeMode === "cmd") {
+      wrap.hidden = true; cmd.hidden = false; cmd.textContent = c.cmd();
+    } else {
+      wrap.hidden = false; cmd.hidden = true; document.getElementById("codeBlock").textContent = c.code();
+    }
+    document.querySelectorAll("#claudeSubtoggle button").forEach((b) =>
+      b.classList.toggle("on", b.dataset.mode === claudeMode));
+  }
+  document.getElementById("clientTabs").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-client]");
+    if (!b) return;
+    activeClient = b.dataset.client;
+    document.querySelectorAll("#clientTabs button").forEach((x) => x.classList.toggle("on", x === b));
+    paintSnippet();
+  });
+  document.getElementById("claudeSubtoggle").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-mode]");
+    if (!b) return;
+    claudeMode = b.dataset.mode;
+    paintSnippet();
+  });
+
+  /* ---------- 复制 ---------- */
+  document.addEventListener("click", async (e) => {
+    const b = e.target.closest("[data-copy]");
+    if (!b) return;
+    const cmd = document.getElementById("cmdBlock");
+    const text = b.dataset.copy === "plain" ? (document.getElementById("plainKey").textContent || DEMO_KEY)
+      : (!cmd.hidden ? cmd.textContent : document.getElementById("codeBlock").textContent);
+    try { await navigator.clipboard.writeText(text); } catch (_) {}
+    const old = b.textContent;
+    b.textContent = "已复制"; b.classList.add("done");
+    setTimeout(() => { b.textContent = old; b.classList.remove("done"); }, 1300);
+  });
+
+  /* ---------- 主题 ---------- */
+  const root = document.documentElement;
+  document.getElementById("themeBtn").addEventListener("click", (e) => {
+    const next = root.dataset.theme === "ink" ? "paper" : "ink";
+    root.dataset.theme = next;
+    e.currentTarget.textContent = next === "ink" ? "纸" : "墨";
+  });
+
+  renderAll();
+
+  /* 直接查看「签发后」状态：在地址后加 #reveal */
+  if (location.hash === "#reveal") {
+    nameInput.value = "MacBook · Claude Code";
+    issue();
+  }
+</script>
+</body>
+</html>
