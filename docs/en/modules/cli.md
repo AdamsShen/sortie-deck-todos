@@ -15,6 +15,8 @@ CLI is the **developer entry** without the browser: smoke a full mission loop an
 
 - `sortie smoke` — create/start mission with auto pipeline confirm, drive HITL
 - `sortie api` / `tdt-api` — uvicorn entry
+- `sortie worker` — run-queue consumer only, no HTTP (scales horizontally)
+- `sortie doctor` — runtime checks (including the storage/queue combination)
 
 **Out of scope**
 
@@ -26,6 +28,8 @@ CLI is the **developer entry** without the browser: smoke a full mission loop an
 ```bash
 sortie smoke [--brief "..."]   # auto_confirm_pipeline + HITL approvals
 sortie api                     # binds TDT_HOST:TDT_PORT
+# Multi-worker: API replicas set TDT_RUN_WORKER=false, execution runs as workers
+TDT_RUN_BACKEND=sqlite TDT_STORAGE=sqlite sortie worker --id w1
 ```
 
 Implementation sketch: instantiate `Orchestrator`, `create_and_start` / confirm path, poll HITL, `submit_hitl(APPROVE)` until done.

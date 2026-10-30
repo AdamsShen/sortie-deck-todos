@@ -15,6 +15,8 @@ CLI 是**无浏览器的开发入口**：冒烟跑通任务环、拉起 API 进�
 
 - `sortie smoke` — 自动确认航线并推 HITL
 - `sortie api` / `tdt-api` — uvicorn 入口
+- `sortie worker` — 只消费运行队列的执行进程（不监听 HTTP，可水平扩副本）
+- `sortie doctor` — 运行时体检（含存储/队列组合校验）
 
 **非目标**
 
@@ -26,6 +28,8 @@ CLI 是**无浏览器的开发入口**：冒烟跑通任务环、拉起 API 进�
 ```bash
 sortie smoke [--brief "..."]
 sortie api
+# 多 worker：API 端 TDT_RUN_WORKER=false，执行端按副本数起 worker
+TDT_RUN_BACKEND=sqlite TDT_STORAGE=sqlite sortie worker --id w1
 ```
 
 实现要点：构造 `Orchestrator`，走创建/确认/出击，轮询 HITL 并 `APPROVE` 直到完成。

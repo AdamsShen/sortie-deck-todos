@@ -30,6 +30,10 @@ sortie doctor                    # 运行时体检（secret / data_dir / 端口 
 # 启动 API（默认 http://127.0.0.1:8787）
 sortie api
 
+# 执行端独立扩容（需 TDT_RUN_BACKEND=sqlite + TDT_STORAGE=sqlite；
+# API 端配 TDT_RUN_WORKER=false，否则它会抢同一个 job）
+sortie worker --id w1
+
 # 启动前端工作台（默认 http://127.0.0.1:5173，需 API 已运行）
 cd apps/web && npm install && npm run dev
 npm run typecheck                # tsc -b，CI 校验项
@@ -77,7 +81,7 @@ Orchestrator (orchestrator.py) ──► LangGraph 图 (graph.py)
 - `src/sortie_deck/store.py` + `src/sortie_deck/repositories/` — Initiative 持久化（JSON 默认 / SQLite）。
 
 **重要**
-- `run_queue.py`（SQLite 租约式运行队列，多 worker）、`parallel.py`（并行波次/依赖边纯函数）、`stage_consult.py`（阶段上下游咨询）、`pipeline_llm.py`（LLM 规划 + 规则回退）。
+- `run_queue.py`（SQLite 租约式运行队列，多 worker）、`event_log.py`（mission 事件表，SSE 的唯一数据源，跨进程续读）、`parallel.py`（并行波次/依赖边纯函数）、`stage_consult.py`（阶段上下游咨询）、`pipeline_llm.py`（LLM 规划 + 规则回退）。
 - `auth.py`（PBKDF2 密码 + HMAC 令牌）、`artifacts.py` / `artifacts_s3.py`、`memory.py`、`runtime.py`（doctor/日志/目录）、`org_policy.py`（组织策略）、`contracts.py`（阶段产物契约校验）。
 - `harness/__init__.py`（通用 agent 循环，独立于阶段执行器）、`cli.py`（`sortie` 子命令）。
 
@@ -120,8 +124,11 @@ Orchestrator (orchestrator.py) ──► LangGraph 图 (graph.py)
 | `TDT_CORS_ORIGINS` | 含 5173 | 工作台来源，逗号分隔 |
 | `TDT_ENV` | `development` | 设 `production` 时拒绝默认 token secret |
 | `TDT_TOKEN_SECRET` | `tdt-dev-secret` | HMAC 令牌密钥 |
-| `TDT_STORAGE` | `json` | `json` / `sqlite` 任务持久化 |
+| `TDT_STORAGE` | `sqlite` | **仅 sqlite**；JSON 后端已移除，旧 `initiatives.json` 首次启动自动导入并备份 |
 | `TDT_RUN_BACKEND` | `inline` | `inline` / `sqlite` 多 worker 队列 |
+| `TDT_RUN_WORKER` | `true` | 本进程是否消费队列；API 多副本时置 false，另起 `sortie worker` |
+| `TDT_WORKER_ID` | 空（= `{hostname}-{pid}`） | worker 身份，多副本必须唯一 |
+| `TDT_EVENT_RETENTION_DAYS` | `7` | mission 事件表保留天数（SSE 补播窗口） |
 | `TDT_ARTIFACT_BACKEND` | `local` | `local` / `s3`（需 `pip install '.[s3]'`） |
 | `TDT_DEPLOY_EXECUTOR` | `mock` | `mock` / `deploy_shell`（配 `TDT_DEPLOY_CMD`） |
 | `TDT_DEFAULT_CODING_EXECUTOR` | `auto` | 编码阶段执行器 |

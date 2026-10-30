@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
+from pathlib import Path
 from typing import Any
 
 from langgraph.types import Command
@@ -11,6 +13,7 @@ from pydantic import ValidationError
 from sortie_deck import observability as obs
 from sortie_deck.agents import AgentCatalog
 from sortie_deck.artifacts_s3 import build_artifact_store
+from sortie_deck.event_log import EventLog
 from sortie_deck.graph import build_graph_from_template, compile_pipelines
 from sortie_deck.manager import plan_digest, plan_digest_matches
 from sortie_deck.materials import compose_brief
@@ -62,6 +65,7 @@ from sortie_deck.repositories import build_initiative_store
 from sortie_deck.rooms import RoomStore
 from sortie_deck.run_queue import SqliteRunQueue
 from sortie_deck.settings import Settings, settings
+from sortie_deck.store import InitiativeStore
 from sortie_deck.templates import load_persona, load_pipeline_template
 from sortie_deck.toolkit import ToolkitStore
 from sortie_deck.webhooks import notify_webhook
@@ -172,7 +176,12 @@ class Orchestrator:
         self.graph = None
         self.graphs: dict[str, Any] = {}
         self._resources: dict = {}
-        self._lock = asyncio.Lock()
+        # 并发粒度是「mission」而不是「进程」：同一任务必须互斥（否则 start/resume
+        # 会双写同一 thread 的 checkpoint），不同任务必须能并行。
+        self._run_locks: dict[str, asyncio.Lock] = {}
+        self._run_locks_guard = asyncio.Lock()
+        # 事件表：SSE 的唯一数据源，worker 进程写、API 进程读，跨进程可见
+        self.events = EventLog(self.cfg.events_sqlite)
         self._subscribers: dict[str, list[asyncio.Queue]] = {}
         self._worker_task: asyncio.Task | None = None
         self._sweep_task: asyncio.Task | None = None
@@ -185,6 +194,7 @@ class Orchestrator:
         ENG_QUEUE.configure(self.cfg.eng_concurrency)
 
     async def startup(self) -> None:
+        self._migrate_storage_once()
         self.graphs, self._resources = await compile_pipelines(
             self.registry,
             self.artifacts,
@@ -198,11 +208,97 @@ class Orchestrator:
                 self._compile_custom_graph(ini)
         self._wire_subrooms()
         self._wire_decisions()
-        if self.run_queue is not None:
+        # run_worker=False 的进程只做 API/前端；执行交给独立的 `sortie worker` 副本。
+        # 否则多副本 API 会各自起一个 worker，抢同一个 job。
+        if self.run_queue is not None and self.cfg.run_worker:
             self._worker_task = asyncio.create_task(self._worker_loop())
         self._sweep_task = asyncio.create_task(self._sweep_loop())
         # 启动时先做一次 TTL 兜底扫描（回收上次进程崩溃残留的 workspace）
         self._sweep_worktrees_once()
+        self._prune_events_once()
+
+    def _migrate_storage_once(self) -> None:
+        """把旧的 initiatives.json 一次性导入 sqlite（幂等）。
+
+        默认后端已是 sqlite；没有这一步，老部署升级后旧任务会从工作台消失。
+        迁移前备份 JSON、迁移后写 marker：既保证可回滚（老版本代码仍读 JSON），
+        也能在启动时发现「迁移后 JSON 又被写过」——那意味着旧版本进程还在跑。
+        """
+        json_path = self.cfg.initiatives_db
+        marker = self.cfg.data_dir / ".storage-migration.json"
+        try:
+            if self.store.list():
+                self._warn_if_legacy_json_newer(json_path, marker)
+                return
+        except Exception as exc:  # noqa: BLE001 — 迁移失败不应阻断启动
+            logger.warning("检查 sqlite 任务表失败（跳过迁移）: %s", exc)
+            return
+        if not json_path.exists():
+            return
+        try:
+            legacy = InitiativeStore(json_path).list()
+        except Exception as exc:  # noqa: BLE001 — 旧文件损坏不能拖垮启动
+            logger.warning("旧 JSON 任务读取失败（跳过迁移）: %s", exc)
+            return
+        if not legacy:
+            return
+
+        import json as _json
+        import shutil as _shutil
+
+        backup = json_path.with_name(f"{json_path.name}.bak-{utc_now():%Y%m%d%H%M%S}")
+        try:
+            _shutil.copy2(json_path, backup)
+        except OSError as exc:
+            logger.warning("迁移前备份 JSON 失败（继续迁移）: %s", exc)
+        for ini in legacy:
+            self.store.upsert(ini)
+        try:
+            marker.write_text(
+                _json.dumps(
+                    {
+                        "migrated_at": utc_now().isoformat(),
+                        "source": str(json_path),
+                        "count": len(legacy),
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            logger.warning("写迁移标记失败（不影响数据）: %s", exc)
+        logger.info("旧 JSON 任务已迁移到 sqlite: %s 条（备份 %s）", len(legacy), backup.name)
+
+    def _warn_if_legacy_json_newer(self, json_path: Path, marker: Path) -> None:
+        """sqlite 已有数据时，检测 JSON 是否在迁移之后又被写入（新旧版本混跑）。
+
+        混跑会导致两边各写各的：工作台只看到 sqlite 的那一份，JSON 那份永远不出现。
+        这里只告警不自动合并，自动合并等于替用户猜谁是权威数据源。
+        """
+        if not (json_path.exists() and marker.exists()):
+            return
+        try:
+            import json as _json
+            from datetime import datetime
+
+            migrated_at = datetime.fromisoformat(
+                str(_json.loads(marker.read_text(encoding="utf-8")).get("migrated_at") or "")
+            ).timestamp()
+        except Exception:  # noqa: BLE001 — marker 损坏只是少一条告警
+            return
+        if json_path.stat().st_mtime > migrated_at + 1:
+            logger.warning(
+                "检测到 %s 在迁移到 sqlite 之后仍被写入：可能有旧版本进程同时运行。"
+                "请确认只保留一套部署，否则任务数据会分裂在两边。",
+                json_path.name,
+            )
+
+    def _prune_events_once(self) -> int:
+        """按保留期清理事件表（启动与每小时各一次）。"""
+        removed = self.events.prune(int(self.cfg.event_retention_days))
+        if removed:
+            logger.info("事件表清理: %s 条（保留 %s 天）", removed, self.cfg.event_retention_days)
+        return removed
 
     def _wire_decisions(self) -> None:
         """Expose the human decision centre (escalation ladder's last resort)."""
@@ -314,6 +410,8 @@ class Orchestrator:
             except Exception:
                 pass
         self._resources = {}
+        self._run_locks.clear()
+        self.events.close()
 
     def _graph_for(self, ini: Initiative) -> Any:
         custom_key = f"custom:{ini.id}"
@@ -443,9 +541,33 @@ class Orchestrator:
         if q in subs:
             subs.remove(q)
 
+    async def _run_lock_for(self, initiative_id: str) -> asyncio.Lock:
+        """取（或创建）某个 mission 的运行锁。
+
+        锁按 mission 划分：同一任务的 start/resume 必须串行，不同任务互不阻塞。
+        guard 只保护字典的创建过程，不参与运行期等待。
+
+        这里刻意不做「空闲锁回收」：判断无人使用与有人正要获取之间存在竞态，
+        回收会让同一 mission 出现两把锁，互斥直接失效。代价是每个任务常驻一个
+        Lock（几百字节），任务被解散时随 delete_initiative 释放。
+        """
+        async with self._run_locks_guard:
+            lock = self._run_locks.get(initiative_id)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._run_locks[initiative_id] = lock
+            return lock
+
     async def _emit(self, initiative_id: str, event: dict[str, Any]) -> None:
+        """落事件表 + 扇出到进程内订阅者。
+
+        seq 由事件表分配，是跨进程续读（SSE 重连、worker/API 分进程）的唯一凭据。
+        写入失败时 seq<=0，事件退化为仅进程内可见。
+        """
+        seq = self.events.append(initiative_id, event)
+        payload = event if seq <= 0 else {**event, "seq": seq}
         for q in list(self._subscribers.get(initiative_id, [])):
-            await q.put(event)
+            await q.put(payload)
 
     async def _post_room(
         self,
@@ -1397,10 +1519,11 @@ class Orchestrator:
         return cleaned
 
     async def _sweep_loop(self) -> None:
-        """定时 TTL 兜底扫描（每小时一次），回收非活跃任务的 workspace。"""
+        """定时维护（每小时一次）：回收非活跃 workspace + 清理过期事件。"""
         while True:
             await asyncio.sleep(3600.0)
             await asyncio.to_thread(self._sweep_worktrees_once)
+            await asyncio.to_thread(self._prune_events_once)
 
     def _cleanup_mission_workspace(self, initiative_id: str) -> None:
         """任务终态/删除时回收 workspace 沙盒（含 repos clone）。
@@ -1417,12 +1540,16 @@ class Orchestrator:
 
     async def _worker_loop(self) -> None:
         assert self.run_queue is not None
+        worker_id = self.cfg.resolved_worker_id
         while True:
             try:
-                job = self.run_queue.claim(self.cfg.worker_id)
+                job = self.run_queue.claim(worker_id)
                 if not job:
                     await asyncio.sleep(0.4)
                     continue
+                # 长任务必须续租：否则超过 run_lease_seconds 后另一个 worker 会
+                # 把同一个 job 当成「上一个 worker 崩了」重新领取，导致重复执行。
+                heartbeat = asyncio.create_task(self._lease_heartbeat(job.id, worker_id))
                 try:
                     # 续接入队时写入的 traceparent，让 worker 里的 span 挂回同一条 trace
                     raw_traceparent = str((job.payload or {}).get("_traceparent") or "")
@@ -1437,10 +1564,30 @@ class Orchestrator:
                     self.run_queue.complete(job.id)
                 except Exception as exc:  # noqa: BLE001
                     self.run_queue.fail(job.id, str(exc))
+                finally:
+                    heartbeat.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await heartbeat
             except asyncio.CancelledError:
                 raise
             except Exception:
                 await asyncio.sleep(1.0)
+
+    async def _lease_heartbeat(
+        self, job_id: str, worker_id: str, *, interval: float | None = None
+    ) -> None:
+        """运行期间周期续租（间隔默认 lease 的 1/3，最小 5s，留两次重试余量）。"""
+        if self.run_queue is None:
+            return
+        if interval is None:
+            interval = max(5.0, float(self.cfg.run_lease_seconds) / 3.0)
+        step = float(interval)
+        while True:
+            await asyncio.sleep(step)
+            try:
+                self.run_queue.heartbeat(job_id, worker_id)
+            except Exception as exc:  # noqa: BLE001 — 续租失败只降级告警，不打断执行
+                logger.warning("运行租约续期失败 job=%s worker=%s: %s", job_id, worker_id, exc)
 
     def list_initiatives(self) -> list[Initiative]:
         return self.store.list()
@@ -1477,6 +1624,13 @@ class Orchestrator:
         self.store.delete(initiative_id)
         self.rooms.clear(initiative_id)
         self.graphs.pop(f"custom:{initiative_id}", None)
+        # 事件与运行锁随任务一起回收，否则重建同名任务会读到上一轮的事件
+        self.events.delete_mission(initiative_id)
+        async with self._run_locks_guard:
+            lock = self._run_locks.get(initiative_id)
+            # 运行中的锁不能拔：拔掉后下一次 resume 会新建一把，出现两把锁并存
+            if lock is None or not lock.locked():
+                self._run_locks.pop(initiative_id, None)
         # 任务目录整体回收（memory/artifacts/workspace/chat）——元数据已删，档案不再保留
         import shutil as _shutil
 
@@ -1864,7 +2018,8 @@ class Orchestrator:
     async def _run_until_interrupt_inner(
         self, initiative_id: str, resume: Command | None = None
     ) -> Initiative:
-        async with self._lock:
+        # 同一 mission 的 start/resume 互斥；不同 mission 并行（见 _run_lock_for）
+        async with await self._run_lock_for(initiative_id):
             ini = self.store.get(initiative_id)
             if not ini:
                 raise KeyError(initiative_id)
@@ -2001,10 +2156,12 @@ class Orchestrator:
             raise RuntimeError("Initiative is not waiting for HITL")
 
         # 升级真人时状态会先于图的 interrupt 落库（escalate_to_human 立即置
-        # WAITING_HITL），此时用户/钉钉可能已经回复。若上一段运行仍持有运行锁，
-        # 必须等它真正停在门禁后再投递 resume，否则 resume 会打到一个尚未挂起的图。
-        if self._lock.locked():
-            async with self._lock:
+        # WAITING_HITL），此时用户/钉钉可能已经回复。若该任务的上一段运行仍持有
+        # 运行锁，必须等它真正停在门禁后再投递 resume，否则 resume 会打到一个
+        # 尚未挂起的图。注意只等这一个 mission 的锁——别的任务在跑与本次提交无关。
+        run_lock = await self._run_lock_for(initiative_id)
+        if run_lock.locked():
+            async with run_lock:
                 pass
             ini = self.store.get(initiative_id)
             if ini is None:

@@ -77,6 +77,14 @@ def validate_settings(cfg: Settings | None = None) -> None:
     backend = (cfg.artifact_backend or "local").lower()
     if backend in {"s3", "minio"} and not (cfg.s3_bucket or "").strip():
         raise RuntimeError("TDT_S3_BUCKET required when TDT_ARTIFACT_BACKEND=s3")
+    # 任务存储只支持 sqlite：JSON 是整文件读-改-写，并发（多任务/多 worker）
+    # 会静默丢失任务状态。这里在启动期拦死，而不是等线上发现状态跳变。
+    if (cfg.storage or "").strip().lower() not in {"sqlite", "sql"}:
+        raise RuntimeError(
+            "TDT_STORAGE 只支持 sqlite：JSON 存储已废弃（整文件读-改-写，"
+            "多任务并发会互相覆盖）。请删除该项或设为 TDT_STORAGE=sqlite；"
+            "首次启动会把 data/initiatives.json 自动导入（原文件保留备份）。"
+        )
     if (cfg.run_backend or "").lower() == "sqlite":
         cfg.runs_sqlite.parent.mkdir(parents=True, exist_ok=True)
 
@@ -143,18 +151,26 @@ def run_doctor(cfg: Settings | None = None) -> DoctorReport:
     else:
         report.checks.append(DoctorCheck("artifacts", True, f"local → {cfg.missions_dir}"))
 
-    report.checks.append(
-        DoctorCheck(
-            "run_backend",
-            True,
-            f"{cfg.run_backend} (worker={cfg.worker_id})",
+    run_backend = (cfg.run_backend or "inline").strip().lower()
+    if run_backend == "sqlite":
+        queue_detail = (
+            f"sqlite (worker={cfg.resolved_worker_id})"
+            if cfg.run_worker
+            else "sqlite（本进程不消费队列，需另起 sortie worker）"
         )
-    )
+    else:
+        queue_detail = "inline（任务在 API 进程内直接执行）"
+    report.checks.append(DoctorCheck("run_backend", True, queue_detail))
+
+    storage = (cfg.storage or "").strip().lower()
+    storage_ok = storage in {"sqlite", "sql"}
     report.checks.append(
         DoctorCheck(
             "storage",
-            True,
-            cfg.storage,
+            storage_ok,
+            f"{storage} → {cfg.initiatives_sqlite}"
+            if storage_ok
+            else f"{storage} — 已废弃，需改 TDT_STORAGE=sqlite（旧 JSON 会自动导入）",
         )
     )
     return report

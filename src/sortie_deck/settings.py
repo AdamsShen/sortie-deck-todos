@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import socket
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -21,8 +23,9 @@ class Settings(BaseSettings):
     # development | production — production refuses empty / default token secrets
     env: str = "development"
     token_secret: str = "tdt-dev-secret"
-    # json (default) | sqlite — initiative persistence backend
-    storage: str = "json"
+    # 仅 sqlite：JSON 存储已废弃（整文件读改写，多任务并发会互相覆盖）。
+    # 保留该字段只为在配置写错时给出明确报错，以及兼容旧的 .env。
+    storage: str = "sqlite"
     # Optional LLM features (require TDT_LLM_API_KEY / OPENAI_API_KEY, or Claude CLI fallback)
     # Defaults on: plan_pipeline_smart / room replies fall back to heuristic/templates when unavailable
     pipeline_llm: bool = True
@@ -206,8 +209,17 @@ class Settings(BaseSettings):
     guardrail_max_handoffs: int = 40
     # Run queue: inline (default create_task) | sqlite (lease + worker loop)
     run_backend: str = "inline"
-    worker_id: str = "worker-1"
+    # Worker 身份：留空则派生 "{hostname}-{pid}"。
+    # 写死同一名字会让 run_queue.claim() 里 `lock[0] != worker_id` 的
+    # initiative 互斥判断失效，多副本部署会把同一个任务重复执行。
+    worker_id: str = ""
     run_lease_seconds: int = 120
+    # 本进程是否消费运行队列。false = 只做 API/MCP 前端，执行交给 `sortie worker`。
+    # 多副本部署时必须只有一个角色跑 worker，否则同一 job 会被抢两次。
+    run_worker: bool = True
+    # mission 事件表保留天数（0 = 永久保留）。事件是 SSE 的唯一数据源，
+    # 需要覆盖「关掉工作台几天后再打开」的补播窗口。
+    event_retention_days: int = 7
     # Artifacts: local | s3
     artifact_backend: str = "local"
     s3_bucket: str | None = None
@@ -308,6 +320,19 @@ class Settings(BaseSettings):
     @property
     def runs_sqlite(self) -> Path:
         return self.data_dir / "runs.sqlite"
+
+    @property
+    def events_sqlite(self) -> Path:
+        """mission 事件日志（SSE 的唯一数据源，多进程共享）。"""
+        return self.data_dir / "events.sqlite"
+
+    @property
+    def resolved_worker_id(self) -> str:
+        """实际 worker 标识：显式配置优先，否则 hostname+pid 保证多副本唯一。"""
+        configured = (self.worker_id or "").strip()
+        if configured:
+            return configured
+        return f"{socket.gethostname()}-{os.getpid()}"
 
     @property
     def worktrees_dir(self) -> Path:

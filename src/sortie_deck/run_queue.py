@@ -100,7 +100,11 @@ class SqliteRunQueue:
                 "SELECT worker_id, lease_until FROM initiative_locks WHERE initiative_id = ?",
                 (initiative_id,),
             ).fetchone()
-            if lock and lock[1] >= now and lock[0] != worker_id:
+            # 同一个 mission 同时只允许一个 job 在跑。这里**不再按 worker_id 放行**：
+            # 两个副本若配了同名 worker（历史上默认就叫 worker-1），旧判断会让
+            # 后来者直接覆盖租约，等于互斥形同虚设。租约过期由上面的 DELETE 处理，
+            # 所以「锁存在且未过期」必然代表有人在跑，与是谁无关。
+            if lock and lock[1] >= now:
                 self._conn.commit()
                 return None
             lease_until = now + self.lease_seconds

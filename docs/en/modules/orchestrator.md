@@ -7,7 +7,7 @@ The orchestrator is the **control-plane core** after login: mission lifecycle, p
 | Item | Value |
 |------|-------|
 | Code | `orchestrator.py`, `store.py` |
-| Store | `data/initiatives.json` |
+| Store | `data/initiatives.sqlite` (only backend; a legacy `initiatives.json` is imported and backed up on first start) |
 | Runtime graphs | `default` / `express` / `standard` + `custom:{initiative_id}` |
 
 ## 2. Scope & non-goals
@@ -21,8 +21,16 @@ The orchestrator is the **control-plane core** after login: mission lifecycle, p
 
 **Out of scope**
 
-- Horizontal multi-worker scheduler (P2)
 - Replacing LangGraph
+
+**Concurrency model**
+
+- Run locks are per initiative (`_run_lock_for`): different missions run in parallel, while start/resume of the same mission stays mutually exclusive so two runs never write the same `thread_id` checkpoint
+- `inline` mode runs multiple missions in parallel inside one process (`asyncio.create_task`), bounded only by executor resources
+- Multi-process execution: `TDT_RUN_BACKEND=sqlite`, API replicas set `TDT_RUN_WORKER=false` and execution is consumed by `sortie worker` instances; **each worker runs one mission at a time, so concurrency = worker replicas** (a mission drives a whole agent chain, so stacking them in one process is not desirable)
+- `_lease_heartbeat` renews the lease every `run_lease_seconds/3` so long missions are not judged stale and re-run
+- SSE reads a durable event table (`data/events.sqlite`, `event_log.py`): the worker process writes, API processes tail by `seq`, so the split and reconnects never lose events
+- SQLite is the only mission store (row-level upsert + WAL + busy_timeout), safe for multiple processes on one host; cross-host sharing still needs an external database
 
 ## 3. Code map
 

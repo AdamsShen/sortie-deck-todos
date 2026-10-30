@@ -111,6 +111,48 @@ async def _smoke(brief: str, auto_approve: bool, owner_username: str | None = No
         obs.shutdown_tracing()
 
 
+async def _worker(worker_id: str | None) -> int:
+    """只消费运行队列的 worker 进程（不监听 HTTP，可水平扩副本）。
+
+    与 `sortie api` 分离的意义：API 可以多副本对外服务，执行副本按 CLI/CPU
+    额度单独扩；API 端用 TDT_RUN_WORKER=false 关掉进程内 worker，
+    避免同一个 job 被多个进程同时领取。
+    """
+    from sortie_deck import observability as obs
+    from sortie_deck.runtime import (
+        configure_logging,
+        ensure_runtime_dirs,
+        validate_settings,
+    )
+    from sortie_deck.settings import settings
+
+    if (settings.run_backend or "").strip().lower() != "sqlite":
+        _fail(
+            "sortie worker 需要 TDT_RUN_BACKEND=sqlite；"
+            "inline 模式下任务由 API 进程内联执行，没有可消费的队列"
+        )
+    if worker_id:
+        settings.worker_id = worker_id
+    settings.run_worker = True
+    configure_logging(settings.log_level)
+    ensure_runtime_dirs(settings)
+    validate_settings(settings)
+    obs.init_tracing(settings)
+    orch = Orchestrator()
+    await orch.startup()
+    print(f"worker {settings.resolved_worker_id} 已启动，队列: {settings.runs_sqlite}", flush=True)
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    except (asyncio.CancelledError, KeyboardInterrupt):  # pragma: no cover — 进程信号
+        pass
+    finally:
+        await orch.shutdown()
+        await asyncio.sleep(0.05)
+        obs.shutdown_tracing()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="sortie",
@@ -169,6 +211,16 @@ def main(argv: list[str] | None = None) -> None:
     api = sub.add_parser("api", help="Start the FastAPI workbench backend (uvicorn)")
     api.add_argument("--host", default=None, help="Bind host (default: TDT_HOST)")
     api.add_argument("--port", type=int, default=None, help="Bind port (default: TDT_PORT)")
+
+    worker = sub.add_parser(
+        "worker",
+        help="Run the mission worker only, without HTTP (requires TDT_RUN_BACKEND=sqlite).",
+    )
+    worker.add_argument(
+        "--id",
+        default=None,
+        help="Worker id (default: hostname-pid; 多副本必须彼此不同)",
+    )
 
     args = parser.parse_args(argv)
     try:
@@ -230,6 +282,8 @@ def main(argv: list[str] | None = None) -> None:
                 _smoke(args.brief, auto_approve=not args.no_auto_approve, owner_username=args.owner)
             )
             raise SystemExit(code)
+        if args.cmd == "worker":
+            raise SystemExit(asyncio.run(_worker(args.id)))
         if args.cmd == "api":
             import uvicorn
 

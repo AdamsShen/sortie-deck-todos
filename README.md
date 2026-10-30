@@ -143,8 +143,11 @@ Environment variables use prefix `TDT_` (see `sortie_deck.settings.Settings`).
 | `TDT_CORS_ORIGINS` | Comma-separated origins for the workbench |
 | `TDT_ENV` | `development` (default) or `production` |
 | `TDT_TOKEN_SECRET` | HMAC secret for auth tokens (required non-default when `TDT_ENV=production`) |
-| `TDT_STORAGE` | `json` (default) or `sqlite` for initiative persistence |
+| `TDT_STORAGE` | `sqlite` only — the JSON backend is gone (`initiatives.json` is imported automatically on first start) |
 | `TDT_RUN_BACKEND` | `inline` (default) or `sqlite` multi-worker run queue |
+| `TDT_RUN_WORKER` | `true` (default) — set `false` on API replicas and run `sortie worker` instead |
+| `TDT_WORKER_ID` | Worker identity; defaults to `{hostname}-{pid}` (must be unique per process) |
+| `TDT_EVENT_RETENTION_DAYS` | Mission event-log retention behind SSE (default `7`, `0` = keep forever) |
 | `TDT_ARTIFACT_BACKEND` | `local` (default) or `s3` (needs `pip install '.[s3]'`) |
 | `TDT_ORG_POLICY_PATH` | Optional JSON org policy (tracks / toolkit allowlist) |
 | `TDT_PIPELINE_LLM` / `TDT_ROOM_LLM` | Optional LLM planner / squad discussion (`true` + API key) |

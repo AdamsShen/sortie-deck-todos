@@ -2334,6 +2334,57 @@ async def reveal_path(body: RevealPathBody, _user: PublicUser = Depends(require_
     return {"ok": True, "path": str(target.resolve())}
 
 
+async def _mission_event_stream(o: Any, initiative_id: str, *, is_owner: bool):
+    """任务事件流（SSE 的生成器，独立出来便于单测）。
+
+    事件源是持久化事件表（mission 可能跑在 worker 进程，进程内队列跨不过去）：
+    先发快照建立基线，随后按 seq 续读，断线重连不丢事件，也不要求 API 与执行
+    在同一进程。单条事件超体积时只存结构，这里回读 store 补齐快照。
+    """
+    seen_room_ids: set[str] = set()
+    # 基线必须在读快照之前取：宁可重放（前端幂等）也不漏事件。
+    # 重放的聊天消息按 id 去重，避免气泡重复。
+    last_seq = await asyncio.to_thread(o.events.latest_seq, initiative_id)
+    first = o.get(initiative_id)
+    if first is not None:
+        msgs = o.list_room_messages(initiative_id)
+        seen_room_ids = {m.id for m in msgs}
+        yield {"event": "snapshot", "data": json.dumps(first.model_dump(mode="json"))}
+        yield {
+            "event": "room_snapshot",
+            "data": json.dumps([m.model_dump(mode="json") for m in msgs]),
+        }
+    idle = 0.0
+    while True:
+        rows = await asyncio.to_thread(o.events.since, initiative_id, last_seq)
+        if rows:
+            idle = 0.0
+            for seq, event in rows:
+                last_seq = seq
+                if not is_owner and event.get("type") in {"subroom", "subroom_message"}:
+                    continue
+                if event.get("type") == "room_message":
+                    msg_id = str((event.get("message") or {}).get("id") or "")
+                    if msg_id and msg_id in seen_room_ids:
+                        continue
+                    if msg_id:
+                        seen_room_ids.add(msg_id)
+                if event.get("snapshot_omitted"):
+                    fresh = o.get(initiative_id)
+                    if fresh is not None:
+                        event = {**event, "initiative": fresh.model_dump(mode="json")}
+                yield {
+                    "event": event.get("type", "message"),
+                    "data": json.dumps(event, default=str),
+                }
+            continue
+        await asyncio.sleep(0.3)
+        idle += 0.3
+        if idle >= 15.0:
+            idle = 0.0
+            yield {"event": "ping", "data": "{}"}
+
+
 @app.get("/api/initiatives/{initiative_id}/events")
 async def initiative_events(
     initiative_id: str,
@@ -2351,30 +2402,7 @@ async def initiative_events(
 
     # 小群事件只推给任务所有权人：共享用户与 admin 能看任务过程，但不该看到小群
     is_owner = getattr(ini, "created_by", None) == user.id
-    queue = o.subscribe(initiative_id)
-
-    async def gen():
-        try:
-            ini = o.get(initiative_id)
-            if ini:
-                yield {"event": "snapshot", "data": json.dumps(ini.model_dump(mode="json"))}
-                msgs = o.list_room_messages(initiative_id)
-                yield {
-                    "event": "room_snapshot",
-                    "data": json.dumps([m.model_dump(mode="json") for m in msgs]),
-                }
-            while True:
-                try:
-                    event = await asyncio.wait_for(queue.get(), timeout=15.0)
-                    if not is_owner and event.get("type") in {"subroom", "subroom_message"}:
-                        continue
-                    yield {"event": event.get("type", "message"), "data": json.dumps(event, default=str)}
-                except TimeoutError:
-                    yield {"event": "ping", "data": "{}"}
-        finally:
-            o.unsubscribe(initiative_id, queue)
-
-    return EventSourceResponse(gen())
+    return EventSourceResponse(_mission_event_stream(o, initiative_id, is_owner=is_owner))
 
 
 def _bridges() -> Any:
