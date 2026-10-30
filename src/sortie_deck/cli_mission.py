@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import sys
 from pathlib import Path
@@ -213,7 +214,11 @@ class RemoteClient:
         if resp.status_code == 401:
             raise PermissionError(resp.text)
         if resp.status_code == 404:
-            raise LookupError(resp.text)
+            # 服务端错误体是 {"detail": "..."}，直接抛原文会让 CLI 打出嵌套 JSON
+            detail = resp.text
+            with contextlib.suppress(Exception):
+                detail = str(resp.json().get("detail") or resp.text)
+            raise LookupError(detail)
         if resp.status_code >= 400:
             raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:300]}")
         return resp.json()
@@ -517,6 +522,29 @@ def cmd_mission_hitl(args: Any) -> int:
     return asyncio.run(_with_orchestrator(run))
 
 
+def _artifact_candidates(mission_id: str, raw: str) -> list[str]:
+    """把 ``--cat`` 的参数展开成 artifact store 里的候选相对路径。
+
+    与 REST / MCP 共用同一套解析，避免"照着列表抄也 404"。
+    """
+    from sortie_deck.service import artifact_candidates
+
+    return artifact_candidates(mission_id, raw)
+
+
+def _match_by_name(refs: list[dict[str, Any]], raw: str) -> list[str]:
+    """按文件名匹配产物（仅当用户只给了文件名时使用）。"""
+    name = raw.strip().lstrip("/")
+    if "/" in name or not name:
+        return []
+    hits = [
+        str(ref.get("path", ""))
+        for ref in refs
+        if str(ref.get("path", "")).endswith("/" + name) or str(ref.get("kind", "")) == name
+    ]
+    return list(dict.fromkeys(hits))
+
+
 def cmd_mission_artifacts(args: Any) -> int:
     printer = Printer(args.json)
     cfg = load_config()
@@ -526,12 +554,25 @@ def cmd_mission_artifacts(args: Any) -> int:
                 target = _resolve_target(args, remote, None, printer)
                 ini = remote.get(target)
                 if args.cat:
-
-                    content = remote.request(
-                        "GET", f"/api/initiatives/{target}/artifacts/{args.cat}"
-                    )
-                    printer.data(content, human=content.get("content", ""))
-                    return EXIT_OK
+                    refs = ini.get("artifacts") or []
+                    candidates = _artifact_candidates(target, args.cat)
+                    candidates += _match_by_name(refs, args.cat)
+                    last: Exception | None = None
+                    for cand in dict.fromkeys(candidates):
+                        try:
+                            content = remote.request(
+                                "GET", f"/api/initiatives/{target}/artifacts/{cand}"
+                            )
+                            printer.data(content, human=content.get("content", ""))
+                            return EXIT_OK
+                        except LookupError as exc:
+                            last = exc
+                    if len(_match_by_name(refs, args.cat)) > 1:
+                        names = ", ".join(_match_by_name(refs, args.cat))
+                        return _fail(
+                            "conflict", f"同名产物有多个，请写完整路径：{names}"
+                        )
+                    return _fail("not_found", f"产物不存在: {args.cat}（{last or ''}）")
                 if not args.json:
                     for ref in ini.get("artifacts") or []:
                         print(f"{ref['stage']:<20} {ref['kind']:<28} {ref['path']}")
@@ -552,11 +593,19 @@ def cmd_mission_artifacts(args: Any) -> int:
         svc = MissionService(orch)
         try:
             target = _resolve_target(args, None, principal, printer)
-            if args.cat:
-                content = svc.read_artifact(principal, target, args.cat)
-                printer.data({"path": args.cat, "content": content}, human=content)
-                return EXIT_OK
             refs = svc.artifacts(principal, target)
+            if args.cat:
+                flattened = [r.model_dump(mode="json") for r in refs]
+                candidates = _artifact_candidates(target, args.cat)
+                candidates += _match_by_name(flattened, args.cat)
+                for cand in dict.fromkeys(candidates):
+                    try:
+                        content = svc.read_artifact(principal, target, cand)
+                    except (LookupError, ServiceError):
+                        continue
+                    printer.data({"path": cand, "content": content}, human=content)
+                    return EXIT_OK
+                return _fail("not_found", f"产物不存在: {args.cat}")
         except (LookupError, ServiceError) as exc:
             code = getattr(exc, "code", "not_found")
             return _fail(code, getattr(exc, "message", str(exc)))

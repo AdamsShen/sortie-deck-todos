@@ -63,6 +63,7 @@ class ServiceError(Exception):
         self.code = code
         self.message = message
 
+
     @property
     def http_status(self) -> int:
         return _ERROR_MAP.get(self.code, (400, 6))[0]
@@ -73,6 +74,23 @@ class ServiceError(Exception):
 
     def as_dict(self) -> dict[str, Any]:
         return {"code": self.code, "message": self.message}
+
+
+def artifact_candidates(mission_id: str, path: str) -> list[str]:
+    """把调用方给的产物路径展开成 artifact store 里的候选 key。
+
+    列表接口返回的是完整存储路径 ``<id>/artifacts/<stage>/<file>``，但用户和模型
+    通常只写 ``<stage>/<file>`` 甚至 ``<file>``。REST / MCP / CLI 三个入口必须对
+    同一份输入得出同样的结果，所以解析放在这里，不在各自入口里重复一套。
+    """
+    p = (path or "").strip().lstrip("/")
+    if not p:
+        return []
+    if p.startswith(f"{mission_id}/"):
+        return [p]
+    if p.startswith("artifacts/"):
+        return [f"{mission_id}/{p}"]
+    return [f"{mission_id}/artifacts/{p}", f"{mission_id}/{p}"]
 
 
 # ---------------------------------------------------------------------------
@@ -296,12 +314,31 @@ class MissionService:
         return list(self.get(principal, mission_id).artifacts)
 
     def read_artifact(self, principal: Principal, mission_id: str, path: str) -> str:
-        self.get(principal, mission_id)  # 权限校验
-        rel = path if path.startswith(mission_id) else f"{mission_id}/{path}"
-        try:
-            return self.orch.artifacts.read_text(rel)
-        except FileNotFoundError as exc:
-            raise ServiceError("not_found", f"产物不存在: {path}") from exc
+        ini = self.get(principal, mission_id)  # 权限校验
+        for rel in artifact_candidates(mission_id, path):
+            try:
+                return self.orch.artifacts.read_text(rel)
+            except FileNotFoundError:
+                continue
+        # 只给文件名时按产物列表唯一匹配（列表里显示的是完整存储路径，用户/模型常只写文件名）
+        name = (path or "").strip().lstrip("/")
+        if name and "/" not in name:
+            hits = [
+                a.path
+                for a in ini.artifacts
+                if str(a.path).endswith("/" + name) or a.kind == name
+            ]
+            hits = list(dict.fromkeys(hits))
+            if len(hits) == 1:
+                try:
+                    return self.orch.artifacts.read_text(hits[0])
+                except FileNotFoundError:
+                    pass
+            if len(hits) > 1:
+                raise ServiceError(
+                    "conflict", f"同名产物有多个，请写完整路径: {', '.join(hits)}"
+                )
+        raise ServiceError("not_found", f"产物不存在: {path}")
 
     def events(self, principal: Principal, mission_id: str, since_seq: int = 0) -> list[Any]:
         self.get(principal, mission_id)  # 权限校验

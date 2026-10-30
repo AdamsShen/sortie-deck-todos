@@ -2556,19 +2556,40 @@ async def read_artifact(
     initiative_id: str, artifact_path: str, _user: PublicUser = Depends(_mission_access_guard)
 ) -> dict[str, Any]:
     from sortie_deck.artifacts import ArtifactPathError
+    from sortie_deck.service import artifact_candidates
 
     ini = orch().get(initiative_id)
     if not ini:
         raise HTTPException(404, "Initiative not found")
+    # 与 MCP / CLI 共用同一套路径解析：完整存储路径、stage/file、文件名都接受
+    content: str | None = None
     rel = artifact_path
-    if not rel.startswith(initiative_id):
-        rel = f"{initiative_id}/{artifact_path}"
-    try:
-        content = orch().artifacts.read_text(rel)
-    except ArtifactPathError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    except FileNotFoundError:
-        raise HTTPException(404, "Artifact not found") from None
+    for candidate in artifact_candidates(initiative_id, artifact_path):
+        try:
+            content = orch().artifacts.read_text(candidate)
+            rel = candidate
+            break
+        except ArtifactPathError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except FileNotFoundError:
+            continue
+    if content is None:
+        # 只给文件名时按产物列表唯一匹配（与 MissionService 的行为保持一致）
+        name = (artifact_path or "").strip().lstrip("/")
+        unique = list(
+            dict.fromkeys(
+                str(a.path)
+                for a in ini.artifacts
+                if name and "/" not in name and (str(a.path).endswith("/" + name) or a.kind == name)
+            )
+        )
+        if len(unique) == 1:
+            rel = unique[0]
+            content = orch().artifacts.read_text(rel)
+        elif len(unique) > 1:
+            raise HTTPException(409, f"同名产物有多个，请写完整路径: {', '.join(unique)}")
+    if content is None:
+        raise HTTPException(404, "Artifact not found")
     return {"path": rel, "content": content}
 
 
