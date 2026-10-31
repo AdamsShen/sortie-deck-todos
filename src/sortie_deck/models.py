@@ -480,6 +480,8 @@ class HitlSubmitRequest(BaseModel):
     author_name: str | None = None
     # Target harness for `switch_harness` decisions
     harness: str | None = None
+    # 审批通道：web / cli / mcp。调用方必须如实上报，否则审计会把 CLI 记成网页
+    source: str = "web"
 
 
 class RoomMessage(BaseModel):

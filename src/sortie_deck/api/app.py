@@ -2438,7 +2438,9 @@ async def submit_hitl(
         # 「撤退」常误打到 /hitl；stop 在任意状态下都走专用路径
         if req.action == HitlAction.STOP:
             ini = await orch().stop(
-                initiative_id, author_name=req.author_name or user.display_name
+                initiative_id,
+                author_name=req.author_name or user.display_name,
+                source=req.source,
             )
             return ini.model_dump(mode="json")
         decision = HitlDecision(
@@ -2447,6 +2449,7 @@ async def submit_hitl(
             next_stage=req.next_stage,
             note=req.note,
             harness=req.harness,
+            source=req.source,
         )
         ini = await orch().submit_hitl(
             initiative_id, decision, author_name=req.author_name or user.display_name

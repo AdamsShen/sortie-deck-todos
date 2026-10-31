@@ -255,7 +255,8 @@ class RemoteClient:
         return self.request(
             "POST",
             f"/api/initiatives/{mission_id}/hitl",
-            json={"action": action, "instruction": instruction},
+            # source 必须如实上报，否则服务端审计会把 CLI 审批记成"网页"
+            json={"action": action, "instruction": instruction, "source": "cli"},
         )
 
 

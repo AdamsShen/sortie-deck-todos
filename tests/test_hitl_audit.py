@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 
 import pytest
 
@@ -100,6 +101,39 @@ async def test_hitl_source_is_recorded_on_all_channels(tmp_path, stores):
         assert "（命令行）" in str((updated.meta or {}).get("last_hitl_by"))
     finally:
         await orch.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_rest_hitl_route_passes_channel_source(monkeypatch):
+    """REST 入口必须把 source 透传给 HitlDecision。
+
+    回归：CLI 通过 REST 提交门禁时，路由构造 HitlDecision 漏了 source，
+    审计一律记成"网页"——三端来源统计直接失真。
+    """
+    from types import SimpleNamespace
+
+    # 注意：`from sortie_deck.api import app` 拿到的是 FastAPI 实例（包内已起别名），
+    # 要打的是模块上的 orch 工厂，所以按模块名导入
+    app_mod = importlib.import_module("sortie_deck.api.app")
+    from sortie_deck.auth import PublicUser
+    from sortie_deck.models import HitlSubmitRequest
+
+    captured: dict[str, str] = {}
+
+    class _Orch:
+        async def submit_hitl(self, mission_id, decision, author_name=None):
+            captured["source"] = decision.source
+            return SimpleNamespace(model_dump=lambda mode=None: {"id": mission_id})
+
+    monkeypatch.setattr(app_mod, "orch", lambda: _Orch())
+    user = PublicUser(
+        id="usr_1", username="ada", display_name="Ada", role="member", status="active"
+    )
+
+    await app_mod.submit_hitl(
+        "ini_x", HitlSubmitRequest(action=HitlAction.APPROVE, source="cli"), user
+    )
+    assert captured["source"] == "cli"
 
 
 @pytest.mark.asyncio
