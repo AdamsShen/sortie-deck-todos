@@ -18,6 +18,7 @@
 | 云上起来了，本地配好能不能直接用 | §6 |
 | 确认用的是不是 Streamable HTTP | §6.1 |
 | 怀疑反代/网关把 MCP 弄坏了 | §6.3、§5 |
+| 想搞清 CLI 到底发不发 HTTP | §2.5、§2.6 |
 | 出问题了 | §5 |
 
 先记住一句话：**MCP 只解决"模型怎么调工具"，不解决"任务在哪台机器上跑"。**
@@ -165,18 +166,57 @@ key = os.environ.get("SORTIE_API_KEY") or cfg.get("key") or ""
 
 嵌入式必须等的原因：进程本身就是执行者。早期版本不等，退出时任务被取消、状态落成 `failed` 并打印 `Connection closed`，现已修正。
 
-### 2.6 remote 模式下每条命令发什么请求
+### 2.6 具体做了什么：请求映射与退出码
 
-| 命令 | 请求 |
-|---|---|
-| `start` | `POST /api/initiatives` → `POST .../pipeline/confirm` → `POST .../start` |
-| `status` | `GET /api/initiatives/{id}` |
-| `list` | `GET /api/initiatives?mine=1&limit=N` |
-| `hitl --approve` | `POST /api/initiatives/{id}/hitl` |
-| `artifacts` / `--cat x.md` | `GET .../artifacts` / `GET .../artifacts/x.md` |
-| `watch` | `GET .../events`（SSE，按 `seq` 续读） |
+**远程模式**：一个 httpx 客户端全程复用——
 
-对比：MCP 的 `start_mission` 是**一次调用**完成这三步。两条路径代码不同，但都落到同一个 `MissionService`，所以状态永远一致。
+```python
+httpx.Client(
+    base_url="http://127.0.0.1:8787",
+    headers={"Authorization": f"Bearer {sk_sortie_...}"},
+    timeout=httpx.Timeout(60.0, connect=10.0),
+)
+```
+
+身份和 MCP 用同一把 API Key。**每条命令 = 一到两次 HTTP 请求**，任务在服务端跑，CLI 退出不影响。
+
+**嵌入式模式**：`Orchestrator().startup()` 之后直接调 `MissionService` 的方法，不发 HTTP，也不需要 `sortie api` 正在运行。
+
+一句话：**远程模式里 CLI 是客户端，嵌入式模式里 CLI 就是服务端本身。**
+
+| 命令 | 远程（REST） | 嵌入式（Python） |
+|---|---|---|
+| `create` | `POST /api/initiatives`（`auto_start=false`） | `MissionService.create_mission()` |
+| `bind-repos` | `PATCH .../repos` | `bind_repos()` |
+| `attach` | `GET` 现有材料 → `PATCH /materials`（整体替换） | `attach_materials()`（服务端合并） |
+| `start --brief` | `POST /initiatives` → `POST /confirm` → `POST /start` | `start_mission()` 一步 |
+| `start <id>` | `POST .../start`（400 时补一次 confirm 再试） | `start()` |
+| `status` / `list` | `GET /initiatives/{id}` / `?mine=1&limit=N` | `get()` / `list_mine()` |
+| `hitl` | `POST .../hitl`，body 带 `source="cli"` | `hitl()`，`Principal.source="cli"` |
+| `artifacts` / `--cat` | `GET .../artifacts` / `GET .../artifacts/{path}` | `artifacts()` / `read_artifact()` |
+| `watch` | `GET .../events`（SSE，按 `seq` 续读） | 按 `seq` 轮询进程内事件表 |
+| `forge list` | `GET /forge/drafts?status=pending-review` + `GET` 任务过滤 | `forge_drafts()` |
+| `forge approve` | `POST /forge/drafts/{id}/approve` | `approve_forge_draft()` |
+
+> `attach` 的差异值得记住：REST 的 `PATCH /materials` 是**整体替换**，所以远程模式先把现有材料 `GET` 回来合并再提交；嵌入式直接调 `attach_materials()`，合并在服务层完成。两边的合并规则（同名覆盖、其余保留）由同一个 `_merge_materials` 决定，不允许漂移。
+
+**错误 → 退出码**：远程把 HTTP 状态翻成异常，再和服务层的 `ServiceError.code` 走同一张映射表。
+
+| 情况 | 远程来源 | 嵌入式来源 | 退出码 |
+|---|---|---|---|
+| 参数/用法错误（`--repo` 格式不对等） | 本地校验 | 本地校验 | 2 |
+| 认证失败 / 无权限 | 401 / 403 | `auth_required` / `forbidden` | 3 |
+| 任务不存在 | 404 | `not_found` | 4 |
+| 状态冲突（启动后绑仓库、门禁已被处理） | 409 | `conflict` / `forge_review_required` | 5 |
+| 参数不合法 | 400 / 422 | `validation` | 6 |
+| 网络 / 超时 / 5xx | 连接异常 | `transient` | 7 |
+
+两条实用推论：
+
+- **想确认自己在哪个模式**：看 `sortie mission status` 打到 stderr 的「指定任务 / 本地记录的最新任务 / 服务端最新任务」，再看有没有 `SORTIE_URL`。两种模式的数据完全不同——嵌入式写本机 `data/`，云上看不到。
+- **CI 必须用远程**：嵌入式进程退出即杀任务，`--wait` 也只能等到第一个门禁，跑不完流水线。
+
+对比 MCP：`start_mission` **一次调用**完成建 + 确认 + 启动，CLI 远程要三次 HTTP。路径不同，但都落到同一个 `MissionService`，所以状态与权限语义一致。CLI 不走 MCP 协议，MCP 也不经过 CLI。
 
 ### 2.7 "不带 id = 最近一个"怎么找
 
