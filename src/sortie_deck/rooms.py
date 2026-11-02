@@ -77,6 +77,22 @@ class RoomStore:
             msgs.append(RoomMessage.model_validate(json.loads(line)))
         return msgs
 
+    def count(self, initiative_id: str, *, room_key: str = MAIN_ROOM) -> int:
+        """消息条数：按行流式计数，不解析 JSON、不构造消息对象。
+
+        导出等只关心数量的场景用这个：``list`` 会把每条消息反序列化成对象，
+        大房间下内存与耗时都随行数放大（PRD rooms.message_count）。
+        """
+        path = self._path(initiative_id, room_key)
+        if not path.exists():
+            return 0
+        total = 0
+        with path.open(encoding="utf-8") as fh:
+            for line in fh:
+                if line.strip():
+                    total += 1
+        return total
+
     def list_rooms(self, initiative_id: str) -> list[str]:
         """Room keys that hold at least one message (``main`` first)."""
         keys: list[str] = []

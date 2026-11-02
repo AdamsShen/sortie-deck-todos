@@ -503,6 +503,27 @@ html.has-art-bg pre.preview {
   background: color-mix(in srgb, #ff6b6b 12%, var(--panel));
 }
 
+/* 键盘焦点可见（PRD F-3）：仅键盘导航时出现描边，不干扰鼠标点击 */
+.op-chip:focus-visible {
+  outline: 2px solid var(--signal, #9ec9ff);
+  outline-offset: 2px;
+}
+
+/* 导出进行中：禁用点击并给出可感知的忙碌光标（PRD A-4/C-4） */
+.op-chip:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+
+/* 导出结果提示：按钮旁的瞬时状态文案 */
+.op-note {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 .op-chip-ico {
   font-size: 0.72rem;
   line-height: 1;

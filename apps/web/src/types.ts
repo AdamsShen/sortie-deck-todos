@@ -209,6 +209,22 @@ export interface LoginResponse {
   user: PublicUser;
 }
 
+/** 用户数据导出载荷（GET /api/export/user）；schema_version=1 起字段只增不改 */
+export interface UserDataExport {
+  meta: {
+    schema_version: number;
+    exported_at: string;
+    owner: string;
+    app: string;
+  };
+  profile: Record<string, unknown>;
+  api_keys: Record<string, unknown>[];
+  missions: Record<string, unknown>[];
+  knowledge: Record<string, unknown>[];
+  memory: Record<string, unknown>[];
+  rooms: Record<string, unknown>[];
+}
+
 export interface RepoConfig {
   url: string;
   branch?: string;

@@ -18,6 +18,7 @@ from fastapi import (
     HTTPException,
     Query,
     Request,
+    Response,
     UploadFile,
 )
 from fastapi.middleware.cors import CORSMiddleware
@@ -473,6 +474,54 @@ async def delete_own_account(user: PublicUser = Depends(require_user)) -> dict[s
 @app.get("/api/auth/me")
 async def me(user: PublicUser = Depends(require_user)) -> dict[str, Any]:
     return user.model_dump()
+
+
+@app.get("/api/export/user")
+async def export_user_data(user: PublicUser = Depends(require_user)) -> Response:
+    """导出当前登录用户自己的数据为单个 JSON 文件（设置区「导出数据」按钮调用）。
+
+    组装规则见 ``export_data.build_user_export``：只含本人数据，服务端组装时
+    即剔除 ``password_hash`` / API Key 明文 / 登录令牌。载荷超过 20 MB 时返回
+    413（PRD D-4），不静默截断。
+
+    输入输出示例：
+    - 请求：``GET /api/export/user`` + ``Authorization: Bearer <token>``
+    - 响应头：``Content-Disposition: attachment; filename="sortie-data-ada-20261102-101500.json"``
+    - 响应体：``{"meta": {...}, "profile": {...}, "api_keys": [...], ...}``
+    """
+    from sortie_deck.export_data import (
+        ExportTooLargeError,
+        build_user_export,
+        export_filename,
+        serialize_export_limited,
+    )
+    from sortie_deck.service import get_api_key_store
+
+    payload = build_user_export(
+        user,
+        auth_store=get_auth(),
+        api_key_store=get_api_key_store(),
+        initiatives=orch().list_initiatives(),
+        knowledge_base_store=get_knowledge_bases(),
+        knowledge_store=get_knowledge(),
+        memory_store=get_memory(),
+        room_store=orch().rooms,
+    )
+    # 按分区增量序列化，超限在分区边界提前中止，避免整串拷贝放大内存（FIND-02）
+    try:
+        body = serialize_export_limited(payload)
+    except ExportTooLargeError:
+        raise HTTPException(413, "导出数据过大，请减少数据后重试") from None
+    filename = export_filename(user)
+    return Response(
+        content=body,
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            # 导出含用户隐私数据，禁止浏览器/代理缓存
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 # ---------------------------------------------------------------------------

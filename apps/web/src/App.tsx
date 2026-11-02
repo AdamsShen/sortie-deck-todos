@@ -5,6 +5,7 @@ import {
   createKnowledgeBase,
   deleteKnowledgeBase,
   deleteOwnAccount,
+  exportUserData,
   importKnowledgeFile,
   listHarnesses,
   listKnowledgeBases,
@@ -125,6 +126,16 @@ function errMsg(err: unknown): string {
   return String(err);
 }
 
+// 导出文件名兜底：与后端 Content-Disposition 同规则
+// （sortie-data-{username}-{YYYYMMDD-HHmmss}.json），仅在响应头缺失时使用
+function exportFallbackName(username: string): string {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const date = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
+  const time = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  return `sortie-data-${username || "user"}-${date}-${time}.json`;
+}
+
 // 用户管理页头像底色：按用户名哈希从固定色板取色，同一用户颜色稳定
 const AVATAR_PALETTE = ["#3b5bdb", "#0e9f6e", "#8a5a2b", "#7a3b8a", "#b3542e", "#133a5e", "#2b6a8a", "#5a6b3a"];
 function avatarColor(name: string): string {
@@ -182,6 +193,10 @@ export default function App() {
   const [subroomMissionId, setSubroomMissionId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  // 设置区「导出数据」：请求中禁点 + 结果提示（提示 3 秒后自动消失）
+  const [exporting, setExporting] = useState(false);
+  const [exportNote, setExportNote] = useState("");
+  const exportNoteTimer = useRef<number | null>(null);
   const [booted, setBooted] = useState(false);
   const [loginForm, setLoginForm] = useState({ username: "admin", password: "admin123" });
   // 登录页登录/注册模式切换；注册成功后展示「等待审核」提示
@@ -1052,6 +1067,54 @@ export default function App() {
     setToken("");
     setUser(null);
     setView("home");
+  }
+
+  // 卸载时清掉导出提示定时器，避免对已卸载组件 setState
+  useEffect(
+    () => () => {
+      if (exportNoteTimer.current !== null) window.clearTimeout(exportNoteTimer.current);
+    },
+    [],
+  );
+
+  // 导出结果提示：3 秒后自动消失（PRD C-5）
+  function flashExportNote(note: string) {
+    setExportNote(note);
+    if (exportNoteTimer.current !== null) window.clearTimeout(exportNoteTimer.current);
+    exportNoteTimer.current = window.setTimeout(() => {
+      setExportNote("");
+      exportNoteTimer.current = null;
+    }, 3000);
+  }
+
+  // 导出本人数据：接口返回 Blob → 临时 <a download> 触发下载 → 释放 object URL。
+  // 失败只提示不清空页面状态；401 也走同一提示，用户可重新登录后重试（PRD C-5/D-2）。
+  async function doExportData() {
+    if (exporting) return;
+    setExporting(true);
+    setExportNote("");
+    try {
+      const { blob, filename } = await exportUserData(
+        token,
+        exportFallbackName(user?.username || "user"),
+      );
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      flashExportNote(tr("exportDone"));
+    } catch (err) {
+      // 透出后端原因（如 413「导出数据过大」），401 的 "unauthorized" 不展示（FIND-01）
+      const detail = err instanceof Error ? err.message : "";
+      const suffix = detail && detail !== "unauthorized" ? `：${detail}` : "";
+      flashExportNote(`${tr("exportFailed")}${suffix}`);
+    } finally {
+      setExporting(false);
+    }
   }
 
   async function doDeleteAccount() {
@@ -2793,6 +2856,25 @@ export default function App() {
               </span>
               <span className="op-chip-txt">{tr("lang")}</span>
             </button>
+            <button
+              type="button"
+              className="op-chip"
+              onClick={doExportData}
+              disabled={exporting}
+              aria-busy={exporting}
+              aria-label={exporting ? tr("exportRunning") : tr("exportData")}
+              title={exporting ? tr("exportRunning") : tr("exportData")}
+            >
+              <span className="op-chip-ico" aria-hidden>
+                ⇩
+              </span>
+              <span className="op-chip-txt">{exporting ? tr("exportRunning") : tr("exportData")}</span>
+            </button>
+            {exportNote && (
+              <span className="op-note" role="status">
+                {exportNote}
+              </span>
+            )}
             <button type="button" className="op-chip danger" onClick={doDeleteAccount} aria-label={tr("deleteAccount")} title={tr("deleteAccount")}>
               <span className="op-chip-ico" aria-hidden>
                 ✕

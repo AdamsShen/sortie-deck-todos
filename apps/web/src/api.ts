@@ -95,6 +95,54 @@ export async function deleteOwnAccount(token: string): Promise<void> {
   await api("/api/auth/account", { token, method: "DELETE" });
 }
 
+/** 解析 Content-Disposition 中的文件名（优先 RFC 5987 的 filename*，兼容普通 filename） */
+function filenameFromDisposition(header: string | null): string | null {
+  if (!header) return null;
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(header);
+  if (encoded?.[1]) {
+    try {
+      return decodeURIComponent(encoded[1]);
+    } catch {
+      /* 非法编码时退回普通 filename */
+    }
+  }
+  return /filename="?([^";]+)"?/i.exec(header)?.[1] ?? null;
+}
+
+/**
+ * 导出当前账号数据：返回二进制 Blob 与后端建议的文件名。
+ *
+ * 不走 `api<T>()`——它固定按 JSON 解析响应体；这里需要完整字节与
+ * Content-Disposition 头，下载内容才能与接口响应字节一致（PRD C-2）。
+ */
+export async function exportUserData(
+  token: string,
+  fallbackName = "sortie-data.json",
+): Promise<{ blob: Blob; filename: string }> {
+  const res = await fetch(`${API}/api/export/user`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (res.status === 401) {
+    throw new ApiError("unauthorized", 401);
+  }
+  if (!res.ok) {
+    const raw = await res.text();
+    let msg = raw || res.statusText;
+    try {
+      const parsed = JSON.parse(raw) as { detail?: unknown };
+      if (typeof parsed?.detail === "string") msg = parsed.detail;
+    } catch {
+      /* 非 JSON 响应保留原文 */
+    }
+    throw new ApiError(msg, res.status);
+  }
+  const blob = await res.blob();
+  return {
+    blob,
+    filename: filenameFromDisposition(res.headers.get("Content-Disposition")) || fallbackName,
+  };
+}
+
 // --- api keys -------------------------------------------------------------
 
 /** 列出当前账号的 API Key（不含明文与哈希） */
