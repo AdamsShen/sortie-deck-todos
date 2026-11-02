@@ -11,6 +11,8 @@ build/
 data/
 *.db
 .env
+# 云端专用配置（含真实密钥，勿提交）
+.env.cloud
 .DS_Store
 node_modules/
 apps/web/dist/

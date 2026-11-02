@@ -26,7 +26,8 @@ services:
     image: sortie-deck:local
     init: true
     env_file:
-      - .env
+      # 本地默认 .env（模型走内网 newapi）；云端用 SORTIE_ENV_FILE=.env.cloud
+      - ${SORTIE_ENV_FILE:-.env}
     environment:
       <<: *common-env
       TDT_HOST: 0.0.0.0
@@ -48,7 +49,7 @@ services:
     init: true
     command: ["worker"]
     env_file:
-      - .env
+      - ${SORTIE_ENV_FILE:-.env}
     environment:
       <<: *common-env
       TDT_RUN_WORKER: "true"
