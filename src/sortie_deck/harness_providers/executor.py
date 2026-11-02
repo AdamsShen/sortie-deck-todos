@@ -226,6 +226,79 @@ def _is_doc_stage(stage: str) -> bool:
     return stage in _DOC_STAGE_NAMES or stage.endswith("_tech_design")
 
 
+_CHECKLIST_PLAN_SECTION = """Implementation plan artifact (write `checklist.md`):
+Alongside `tech_design.md`, produce `checklist.md` — an ordered, executable checklist the build
+stage will tick off one item at a time:
+- [ ] C1 <one concrete change> — files: `<path>` — verify: `<command>` (expect exit=0)
+- [ ] C2 ...
+Rules: one change per item; every item carries a runnable verification command; no vague items
+("implement the feature" is invalid). Keep it to 5-15 items."""
+
+_BUILD_CHECKLIST_RULES = """Implementation checklist (execute it, do not re-plan):
+{items}
+
+Rules:
+- Work through the checklist ONE item at a time. After an item passes its verification command,
+  write `checklist.md` back with that line changed from `- [ ]` to `- [x]`.
+- Run each item's verification command for real, then append one record per item to
+  `selftest_log.json`: [{{"item": "C1", "command": "...", "exit_code": 0, "tail": "<last lines>"}}].
+- Never run `git commit` / `git push` — the orchestrator commits and opens the MR.
+- If a command still fails after your fix attempt, leave the item unchecked and state it under
+  `## Result`; do not silently mark it done."""
+
+_SELFTEST_CHECKLIST_RULES = """Verification checklist (re-run, do not extend):
+{items}
+
+Rules:
+- Re-run every verification command from the checklist exactly as written; do not add new cases here.
+- Record each run in `selftest_log.json`: [{{"item": "C1", "command": "...", "exit_code": 0,
+  "tail": "<last lines>"}}], and summarise pass/fail in `selftest.md` (contract artifact).
+- A failing command must be reported as failing — never rewrite the command to make it pass."""
+
+# 没有上游清单（如 express 轨没有技术方案阶段）时的兜底：先立清单再执行，
+# 否则「逐项 + 可执行验证」只对有 tech_design 的航线生效。
+_BUILD_CHECKLIST_FALLBACK = """Implementation checklist (no upstream checklist — create one first):
+Write `checklist.md` in the workspace with 3-8 items before coding:
+- [ ] C1 <one concrete change> — files: `<path>` — verify: `<command>` (expect exit=0)
+Then execute it ONE item at a time: tick `[x]` when its command passes, append
+{{"item","command","exit_code","tail"}} to `selftest_log.json`, and never run `git commit` / `git push`."""
+
+
+def _is_tech_design(stage: str) -> bool:
+    return stage.endswith("_tech_design")
+
+
+def _checklist_plan_section(stage: str) -> str:
+    """技术方案阶段：要求同时产出可执行实现清单（计划锚点）。"""
+    return _CHECKLIST_PLAN_SECTION if _is_tech_design(stage) else ""
+
+
+def _checklist_exec_section(ctx: StageContext, cwd: Path) -> str:
+    """编码/自测阶段：把实现清单变成「逐项执行 + 真跑验证命令」的指令。
+
+    清单来源优先级：cwd 下的 checklist.md（上一轮写回的进度）→ 上游产物。
+    找不到清单时不注入——空清单比没有清单更容易让模型编造条目。
+    """
+    is_build = ctx.stage in ENG_BUILD_STAGES
+    is_selftest = ctx.stage.endswith("_selftest")
+    if not (is_build or is_selftest):
+        return ""
+    items = ""
+    local = cwd / "checklist.md"
+    try:
+        if local.is_file():
+            items = local.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        logger.warning("实现清单读取失败: %s", local)
+    if not items:
+        items = str(ctx.upstream_artifacts.get("checklist.md") or "").strip()
+    if not items:
+        # 自测阶段没有清单就只按 selftest.md 契约走；编码阶段仍要求先立清单再干活
+        return _BUILD_CHECKLIST_FALLBACK if is_build else ""
+    template = _SELFTEST_CHECKLIST_RULES if is_selftest else _BUILD_CHECKLIST_RULES
+    return template.format(items=items[:6000])
+
+
 def _contract_names(stage: str) -> list[str]:
     """本阶段契约文件名（不含 diff.patch：它由 git 生成，不能由 agent 直写）。"""
     from sortie_deck.contracts import REQUIRED
@@ -708,6 +781,40 @@ class HarnessStageExecutor:
                 update={"text": _strip_control_block(getattr(reply, "text", "") or "")}
             )
 
+        # 多镜头自审：编码/自测阶段收尾时在同一会话续跑 N 轮。
+        # diff 同时供自审范围与 diff.patch 产物复用，只跑一次 git。
+        from sortie_deck.contracts import REQUIRED as _REQUIRED
+        from sortie_deck.plugins.coding import _git_diff
+        from sortie_deck.review_lens import load_review_config, stage_in_review_scope
+
+        review_cfg = load_review_config()
+        wants_review = bool(review_cfg.enabled) and stage_in_review_scope(ctx.stage, review_cfg)
+        needs_diff = "diff.patch" in _REQUIRED.get(ctx.stage, [])
+        repo_root = (Path(ctx.data_dir) if ctx.data_dir else settings.data_dir).parent
+        stage_diff = ""
+        if wants_review or needs_diff:
+            stage_diff = await _git_diff(workspace, repo_root, ctx.repos)
+        review_log = None
+        if wants_review:
+            review_log = await self._run_review(
+                ctx,
+                reply,
+                provider,
+                session,
+                pack,
+                cwd=cwd,
+                extra_dirs=extra_dirs,
+                harness=harness,
+                diff=stage_diff,
+                data_dir=data_dir,
+                workspace=workspace,
+                cfg=review_cfg,
+            )
+            # 自审轮次可能就地修过文件：diff.patch 必须反映最终状态，
+            # 不能沿用自审开始前的快照（否则 QA 看到的是旧改动）
+            if review_log.executed and needs_diff:
+                stage_diff = await _git_diff(workspace, repo_root, ctx.repos)
+
         # QA 结论：图的门禁靠它决定放行还是打回；块本身不进产物
         qa_passed = _parse_qa_verdict(getattr(reply, "text", "") or "")
         if qa_passed is not None:
@@ -759,6 +866,7 @@ class HarnessStageExecutor:
             harness=harness,
             artifact_dir=artifact_dir,
             snapshot=snapshot,
+            diff=stage_diff or None,
         )
         meta = {
             "harness": harness,
@@ -771,6 +879,14 @@ class HarnessStageExecutor:
             "context_tokens": int(pack.get("token_estimate") or 0),
             **artifact_meta,
         }
+        # 自审报告：真正跑过轮次才进产物（skipped/prompted 只留日志，避免假报告），
+        # 精简结论进 meta 供工作台/门禁展示（完整记录在 logs/<stage>/review.json）
+        if review_log is not None:
+            if review_log.executed:
+                from sortie_deck.review_lens import render_review_markdown
+
+                artifacts["review.md"] = render_review_markdown(review_log)
+            meta["review"] = review_log.summary()
         # provider 侧的会话观测（轮次 / 压缩边界 / 成本）：工作台据此判断
         # 「这一阶段是否被压缩过、跑了多少轮」，不必翻 SDK 日志
         reply_meta = getattr(reply, "meta", None)
@@ -795,6 +911,22 @@ class HarnessStageExecutor:
                 proposed_next=ctx.stage,
                 meta={**meta, "permission_block": True, "auth_block": reply.status == "needs_auth"},
             )
+        # 自审仍有 blocking：按策略转人工门禁或直接判失败。
+        # 默认 hitl——能改的 agent 在轮内已经改过了，剩下的就是人该拍板的。
+        if review_log is not None and review_log.verdict == "blocking":
+            policy = review_cfg.blocking_policy
+            if policy in {"hitl", "fail"}:
+                message = (
+                    f"多镜头自审发现 {review_log.blocking_count} 个 blocking 问题"
+                    f"（见 review.md / {review_log.log_path or 'logs'}）。"
+                )
+                return StageResult(
+                    status="needs_hitl" if policy == "hitl" else "fail",
+                    message=message + ("请在门禁裁决后重试。" if policy == "hitl" else ""),
+                    artifacts=artifacts,
+                    proposed_next=ctx.stage,
+                    meta={**meta, "review_blocking": True},
+                )
         # 模型没声明交接时保留编码角色的既有默认落点（qa_verify）
         fallback_next = (
             "qa_verify"
@@ -810,6 +942,81 @@ class HarnessStageExecutor:
             proposed_next=proposed_next or fallback_next,
             qa_passed=qa_passed,
             meta={**meta, **({"control_intent": control_meta} if control_meta else {})},
+        )
+
+    async def _run_review(
+        self,
+        ctx: StageContext,
+        reply: Any,
+        provider: Any,
+        session: Any,
+        pack: dict[str, Any],
+        *,
+        cwd: Path,
+        extra_dirs: list[str] | None,
+        harness: str,
+        diff: str,
+        data_dir: Path,
+        workspace: Path,
+        cfg: Any,
+    ) -> Any:
+        """编码/自测阶段的收尾自审：同一会话跑 N 轮，返回 ReviewLog。
+
+        跳过条件是「审了也没意义」的场景（mock harness / 首轮就失败），
+        跳过也会留一条 ``skipped`` 记录，避免日志里出现「这一阶段没有 review」
+        却不知道是没开还是被跳过。
+        """
+        from sortie_deck.review_lens import (
+            build_scope,
+            build_skipped_log,
+            run_review_lenses,
+        )
+
+        checklist = ""
+        local_checklist = workspace / "checklist.md"
+        if local_checklist.is_file():
+            try:
+                checklist = local_checklist.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                logger.warning("实现清单读取失败: %s", local_checklist)
+        elif ctx.upstream_artifacts.get("checklist.md"):
+            checklist = ctx.upstream_artifacts["checklist.md"]
+        scope = build_scope(ctx, diff, checklist)
+
+        if harness == "mock":
+            return build_skipped_log(
+                ctx,
+                scope,
+                reason="mock harness 不产生真实改动，跳过自审",
+                harness=harness,
+                data_dir=data_dir,
+            )
+        if str(getattr(reply, "status", "")) != "ok" or not str(
+            getattr(reply, "text", "") or ""
+        ).strip():
+            return build_skipped_log(
+                ctx,
+                scope,
+                reason="首轮未成功产出，跳过自审",
+                harness=harness,
+                data_dir=data_dir,
+            )
+
+        async def send(prompt: str) -> Any:
+            # 续接同一 provider 会话：第 2..N 轮必须看到首轮实现上下文
+            return await _send_turn(
+                provider, session, prompt, cwd=cwd, pack=pack, extra_dirs=extra_dirs
+            )
+
+        return await run_review_lenses(
+            ctx,
+            scope,
+            send,
+            rounds=cfg.rounds,
+            timeout=cfg.timeout,
+            harness=harness,
+            session_id=session.native_id or session.id,
+            data_dir=data_dir,
         )
 
     async def _maybe_consult_subroom(
@@ -1192,6 +1399,13 @@ class HarnessStageExecutor:
         # 小群讨论协议只在编排层确实提供了 host 时注入（否则模型声明了也兑现不了）
         if with_subroom:
             sections.append(_SUBROOM_PROTOCOL)
+        # 计划 → 清单 → 逐项验证：技术方案阶段产清单，编码/自测阶段执行清单
+        plan_section = _checklist_plan_section(ctx.stage)
+        if plan_section:
+            sections.append(plan_section)
+        exec_section = _checklist_exec_section(ctx, workspace)
+        if exec_section:
+            sections.append(exec_section)
         # 控制平面协议始终注入：即使没有可交接目标，升级真人仍是 agent 的兜底能力
         sections.append(_control_protocol(ctx))
         # QA 阶段额外要求结论块：否则图无法区分"测试通过"与"需要打回"
@@ -1224,6 +1438,7 @@ class HarnessStageExecutor:
         harness: str,
         artifact_dir: Path | None = None,
         snapshot: dict[str, tuple[float, int]] | None = None,
+        diff: str | None = None,
     ) -> tuple[dict[str, str], str, dict[str, Any]]:
         """组装阶段产物：优先取磁盘真文件，读不到才回退回复包装。
 
@@ -1234,16 +1449,18 @@ class HarnessStageExecutor:
 
         ``snapshot`` 是阶段开始时的 (mtime, size) 快照：旧文件（快照里存在且未变化）
         不算本阶段产物，避免失败阶段拿上一轮结果通过校验。
+        ``diff`` 由调用方预先算好（自审范围复用同一次 git 结果），缺省时按契约现算。
         """
-        from sortie_deck.contracts import REQUIRED
+        from sortie_deck.contracts import REQUIRED, optional_artifacts
         from sortie_deck.plugins.coding import _count_impl_files, _git_diff
         from sortie_deck.settings import settings
 
         needs_diff = "diff.patch" in REQUIRED.get(ctx.stage, [])
-        diff = ""
-        if needs_diff:
-            repo_root = (Path(ctx.data_dir) if ctx.data_dir else settings.data_dir).parent
-            diff = await _git_diff(workspace, repo_root, ctx.repos)
+        if diff is None:
+            diff = ""
+            if needs_diff:
+                repo_root = (Path(ctx.data_dir) if ctx.data_dir else settings.data_dir).parent
+                diff = await _git_diff(workspace, repo_root, ctx.repos)
         log = "\n".join(log_lines)
         reply_md = (
             f"# Harness stage reply — `{ctx.stage}`\n\n{reply.text}\n\n"
@@ -1314,4 +1531,24 @@ class HarnessStageExecutor:
                 ctx.stage,
                 ",".join(degraded),
             )
+        # 可选产物（实现清单 / 验证命令日志）：存在就归档，缺失不算失败，
+        # 因此不参与 validate_stage_artifacts，也不进 degraded 列表。
+        optional_sources: dict[str, str] = {}
+        for name in optional_artifacts(ctx.stage):
+            if name in artifacts:
+                continue
+            for source, root in (("artifact_dir", artifact_dir), ("workspace", workspace)):
+                if root is None:
+                    continue
+                path = root / name
+                if not _is_fresh(path, snap):
+                    continue
+                text = _read_contract_text(path)
+                if text is None:
+                    continue
+                artifacts[name] = text
+                optional_sources[name] = source
+                break
+        if optional_sources:
+            artifact_meta["optional_artifacts"] = optional_sources
         return artifacts, diff, artifact_meta

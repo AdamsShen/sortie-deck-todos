@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 from pathlib import Path
+from typing import Any
 
 from sortie_deck import observability as obs
 from sortie_deck.models import RepoConfig, StageContext, StageResult
@@ -64,6 +65,61 @@ async def _mcp_prompt_and_log(ctx: StageContext) -> tuple[str, str]:
         return extra, log
     finally:
         await mgr.close_all()
+
+
+def _review_sections(ctx: StageContext, workspace: Path) -> tuple[str, str]:
+    """CLI 单发模式的「实现清单 + 静态自审」段落。
+
+    多轮续跑只在支持会话续接的 provider 上做（见 review_lens.run_review_lenses）；
+    CLI 执行器一次进程就结束，因此这里只把 lens 清单写进提示词，并在结束时
+    记一条 mode=static 的 review 日志，状态是 prompted 而不是 passed。
+    """
+    from sortie_deck.harness_providers.executor import _checklist_exec_section
+    from sortie_deck.review_lens import build_static_review_section, load_review_config
+
+    checklist = _checklist_exec_section(ctx, workspace)
+    cfg = load_review_config()
+    review = build_static_review_section(cfg.rounds) if cfg.enabled else ""
+    return checklist, review
+
+
+async def _extra_artifacts(
+    ctx: StageContext, workspace: Path, diff: str, *, harness: str
+) -> tuple[dict[str, str], dict[str, Any]]:
+    """CLI 执行器的可选产物 + 静态自审日志。
+
+    可选产物（checklist.md / selftest_log.json）存在就归档，缺失不报错；
+    自审日志写 ``logs/<stage>/review.json``，review.md 进阶段产物。
+    """
+    from sortie_deck.contracts import optional_artifacts
+    from sortie_deck.review_lens import (
+        build_scope,
+        load_review_config,
+        record_static_review,
+        stage_in_review_scope,
+    )
+
+    extra: dict[str, str] = {}
+    for name in optional_artifacts(ctx.stage):
+        path = workspace / name
+        if not path.is_file():
+            continue
+        try:
+            extra[name] = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            logger.warning("可选产物读取失败: %s", path, exc_info=True)
+
+    cfg = load_review_config()
+    if not (cfg.enabled and stage_in_review_scope(ctx.stage, cfg)):
+        return extra, {}
+    checklist = extra.get("checklist.md") or str(ctx.upstream_artifacts.get("checklist.md") or "")
+    scope = build_scope(ctx, diff, checklist)
+    data_dir = Path(ctx.data_dir) if ctx.data_dir else None
+    log = record_static_review(
+        ctx, scope, harness=harness, rounds=cfg.rounds, data_dir=data_dir
+    )
+    # 静态模式没有可验证的结论：只留 review.json 日志，不产出 review.md 假报告
+    return extra, {"review": log.summary()}
 
 
 def _which(cmd: str) -> str | None:
@@ -493,6 +549,7 @@ class ClaudeCodeExecutor:
         artifact_section, brief_log = await _artifact_brief_section(ctx)
         mcp_extra, mcp_log = await _mcp_prompt_and_log(ctx)
         repo_section, repo_log = await clone_repos(ctx.repos, workspace, ctx.initiative_id)
+        checklist_section, review_section = _review_sections(ctx, workspace)
         mode = _permission_mode(ctx)
         prompt = (
             f"{ctx.persona}\n\n"
@@ -504,6 +561,8 @@ class ClaudeCodeExecutor:
             f"{artifact_section}"
             f"{repo_section}"
             f"{mcp_extra}"
+            f"{checklist_section}"
+            f"{review_section}"
         )
         claude = _which("claude")
         log_parts: list[str] = []
@@ -554,6 +613,9 @@ class ClaudeCodeExecutor:
             log_parts.append(msg)
 
         diff = await _git_diff(workspace, self.repo_root, ctx.repos)
+        extra_artifacts, review_meta = await _extra_artifacts(
+            ctx, workspace, diff, harness=self.name
+        )
         tasks = {
             "tasks": [
                 {
@@ -579,6 +641,12 @@ Permission mode: `{mode}`
 ## Log
 {chr(10).join(log_parts)[:4000]}
 """
+        artifacts = {
+            "implementation.md": implementation,
+            "tasks.json": json.dumps(tasks, ensure_ascii=False, indent=2),
+            "diff.patch": diff,
+            **extra_artifacts,
+        }
         if needs_perm:
             return StageResult(
                 status="needs_hitl",
@@ -586,17 +654,14 @@ Permission mode: `{mode}`
                     "编码 Agent 需要写 worktree 权限。"
                     "请在门禁点「放行」以 bypass 权限重试，或在本机 Claude 设置中信任该目录。"
                 ),
-                artifacts={
-                    "implementation.md": implementation,
-                    "tasks.json": json.dumps(tasks, ensure_ascii=False, indent=2),
-                    "diff.patch": diff,
-                },
+                artifacts=artifacts,
                 proposed_next=ctx.stage,
                 meta={
                     "workspace": str(workspace),
                     "permission_block": True,
                     "permission_mode": mode,
                     "retry_permission_mode": "bypassPermissions",
+                    **review_meta,
                 },
             )
 
@@ -608,13 +673,9 @@ Permission mode: `{mode}`
         return StageResult(
             status="ok" if ok else "fail",
             message="Claude Code stage finished" if ok else fail_message,
-            artifacts={
-                "implementation.md": implementation,
-                "tasks.json": json.dumps(tasks, ensure_ascii=False, indent=2),
-                "diff.patch": diff,
-            },
+            artifacts=artifacts,
             proposed_next="qa_verify" if ok else ctx.stage,
-            meta={"workspace": str(workspace), "permission_mode": mode},
+            meta={"workspace": str(workspace), "permission_mode": mode, **review_meta},
         )
 
 
@@ -655,6 +716,7 @@ class CursorCliExecutor:
         prd = ctx.upstream_artifacts.get("prd.md", ctx.brief)
         artifact_section, brief_log = await _artifact_brief_section(ctx)
         repo_section, repo_log = await clone_repos(ctx.repos, workspace, ctx.initiative_id)
+        checklist_section, review_section = _review_sections(ctx, workspace)
         query = f"{ctx.brief}\n{prd}\n{ctx.human_instruction or ''}"
         kb_meta: dict[str, str] = {}
         try:
@@ -701,6 +763,8 @@ class CursorCliExecutor:
             f"{repo_section}"
             f"{kb_hint}"
             f"{mcp_extra}"
+            f"{checklist_section}"
+            f"{review_section}"
         )
         binary, prefix = _resolve_cursor_binary()
         log_parts: list[str] = []
@@ -739,6 +803,9 @@ class CursorCliExecutor:
         log = "\n".join(log_parts)
 
         diff = await _git_diff(workspace, self.repo_root, ctx.repos)
+        extra_artifacts, review_meta = await _extra_artifacts(
+            ctx, workspace, diff, harness=self.name
+        )
         task_status = "done" if ok else (
             "needs_auth" if needs_auth else ("needs_permission" if needs_perm else "failed")
         )
@@ -765,6 +832,12 @@ CLI: `{binary}` {' '.join(prefix)}
 ## Log
 {log[:4000]}
 """
+        artifacts = {
+            "implementation.md": implementation,
+            "tasks.json": json.dumps(tasks, ensure_ascii=False, indent=2),
+            "diff.patch": diff,
+            **extra_artifacts,
+        }
         if needs_auth:
             return StageResult(
                 status="needs_hitl",
@@ -773,11 +846,7 @@ CLI: `{binary}` {' '.join(prefix)}
                     "请在本机运行 `cursor-agent login`（或设置 CURSOR_API_KEY），"
                     "完成后在 Teams 回复 `/approve` 重试；也可改用 Claude Code。"
                 ),
-                artifacts={
-                    "implementation.md": implementation,
-                    "tasks.json": json.dumps(tasks, ensure_ascii=False, indent=2),
-                    "diff.patch": diff,
-                },
+                artifacts=artifacts,
                 proposed_next=ctx.stage,
                 meta={
                     "workspace": str(workspace),
@@ -785,23 +854,21 @@ CLI: `{binary}` {' '.join(prefix)}
                     "auth_block": True,
                     "retry_permission_mode": "bypassPermissions",
                     "knowledge_pack": kb_meta,
+                    **review_meta,
                 },
             )
         if needs_perm:
             return StageResult(
                 status="needs_hitl",
                 message="Cursor Agent 需要写 worktree 权限。请在门禁放行后重试，或检查 Cursor CLI 信任目录。",
-                artifacts={
-                    "implementation.md": implementation,
-                    "tasks.json": json.dumps(tasks, ensure_ascii=False, indent=2),
-                    "diff.patch": diff,
-                },
+                artifacts=artifacts,
                 proposed_next=ctx.stage,
                 meta={
                     "workspace": str(workspace),
                     "permission_block": True,
                     "retry_permission_mode": "bypassPermissions",
                     "knowledge_pack": kb_meta,
+                    **review_meta,
                 },
             )
 
@@ -813,11 +880,7 @@ CLI: `{binary}` {' '.join(prefix)}
         return StageResult(
             status="ok" if ok else "fail",
             message="Cursor CLI stage finished" if ok else fail_message,
-            artifacts={
-                "implementation.md": implementation,
-                "tasks.json": json.dumps(tasks, ensure_ascii=False, indent=2),
-                "diff.patch": diff,
-            },
+            artifacts=artifacts,
             proposed_next="qa_verify" if ok else ctx.stage,
-            meta={"workspace": str(workspace), "knowledge_pack": kb_meta},
+            meta={"workspace": str(workspace), "knowledge_pack": kb_meta, **review_meta},
         )

@@ -3,8 +3,10 @@ from __future__ import annotations
 from sortie_deck.agent_contract import AgentContract, ContractError, validate_handoff
 
 __all__ = [
+    "OPTIONAL",
     "REQUIRED",
     "ContractError",
+    "optional_artifacts",
     "StageContractError",
     "validate_stage_artifacts",
     "validate_handoff",
@@ -25,6 +27,37 @@ class StageContractError(ContractError):
         self.stage = stage
 
 _ENG_BUILD_ARTIFACTS = ["implementation.md", "tasks.json", "diff.patch"]
+
+# 可选产物：有就归档、缺了不算失败。用于「方法论增强」类文件
+# （实现清单 / 验证命令日志 / 自审报告），避免把它们塞进契约后
+# 卡死历史任务与 mock 执行器。
+OPTIONAL: dict[str, list[str]] = {
+    "eng_implement": ["checklist.md", "selftest_log.json"],
+    "eng_ios": ["checklist.md", "selftest_log.json"],
+    "eng_android": ["checklist.md", "selftest_log.json"],
+    "eng_web": ["checklist.md", "selftest_log.json"],
+    "eng_backend": ["checklist.md", "selftest_log.json"],
+    "eng_agent": ["checklist.md", "selftest_log.json"],
+    "eng_selftest": ["checklist.md", "selftest_log.json"],
+    "eng_ios_selftest": ["checklist.md", "selftest_log.json"],
+    "eng_android_selftest": ["checklist.md", "selftest_log.json"],
+    "eng_web_selftest": ["checklist.md", "selftest_log.json"],
+    "eng_backend_selftest": ["checklist.md", "selftest_log.json"],
+    "eng_agent_selftest": ["checklist.md", "selftest_log.json"],
+    "eng_integrate": ["selftest_log.json"],
+}
+# 技术方案阶段的实现清单（按后缀匹配：eng_backend_tech_design / eng_web_tech_design …）
+_TECH_DESIGN_OPTIONAL = ["checklist.md"]
+
+
+def optional_artifacts(stage: str) -> list[str]:
+    """本阶段的可选产物名（缺失不报错，只影响归档完整度）。"""
+    if stage in OPTIONAL:
+        return list(OPTIONAL[stage])
+    if stage.endswith("_tech_design"):
+        return list(_TECH_DESIGN_OPTIONAL)
+    return []
+
 
 REQUIRED: dict[str, list[str]] = {
     "product_prd": ["prd.md", "acceptance.json"],

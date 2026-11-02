@@ -146,6 +146,19 @@ class Settings(BaseSettings):
     harness_auto_compact_window: int = 200000
     # 单阶段最大 agent 轮次；0 表示不限制。用于兜住「反复打磨不收敛」的阶段。
     harness_max_turns: int = 0
+    # --- 多镜头自审（见 docs/plans/2026-11-02-多镜头自审方案与改动说明.md）---
+    # 编码/自测阶段结束后，由编排层在同一 provider 会话里追加 N 轮不同视角的审查；
+    # 每轮追加 logs/<stage>/review.jsonl，收尾写 review.json 与 review.md 产物。
+    # 关闭后完全退回旧行为（无额外轮次、无 review 产物）。
+    review_lenses_enabled: bool = True
+    # 轮次：3 = 正确性/边界/测试缺口（轻量）；>=5 = 再加并发/安全
+    review_lens_rounds: int = 3
+    # 生效档位：build（编码）/ selftest（自测）/ integrate（联调），逗号分隔
+    review_lens_stages: str = "build,selftest"
+    # 单轮审查超时（秒）；超时只把该轮标 failed，不打断阶段
+    review_lens_timeout_seconds: float = 300.0
+    # 仍有 blocking 发现时的处理：hitl（默认，转人工门禁）/ fail / ignore
+    review_blocking_policy: str = "hitl"
     # Stage timeout for coding CLI (seconds)
     coding_timeout_seconds: float = 900.0
     # When true, coding executors list/call MCP tools from toolkit bindings
