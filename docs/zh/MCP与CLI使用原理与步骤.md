@@ -33,7 +33,7 @@
    sortie worker ── 不出网，消费队列、真正执行任务（云端部署时）
 
 ② 客户端 A：Claude Code
-   读 .mcp.json 里的 url → 启动会话时向 /mcp 发 initialize → 拿到 12 个工具
+   读 .mcp.json 里的 url → 启动会话时向 /mcp 发 initialize → 拿到 17 个工具
    它不启动服务端，只是"连过去"
 
 ③ 客户端 B：终端里的 sortie CLI
@@ -66,7 +66,7 @@
 | 方法 | 状态 | 说明 |
 |---|---|---|
 | `initialize` | ✅ | 无状态，不返回 session |
-| `tools/list` | ✅ 12 个 | |
+| `tools/list` | ✅ 17 个 | |
 | `tools/call` | ✅ | 返回 `content` + `structuredContent` |
 | `resources/list` | ✅（空数组） | 资源以**模板**形式声明，不是具体列表 |
 | `resources/templates/list` | ✅ 2 个 | `mission://{id}/state`、`mission://{id}/artifact/{path}` |
@@ -321,6 +321,29 @@ claude mcp list          # sortie-deck 应显示 connected
 
 > 连不上先看 §5 第一行：服务端是否在跑、url 是否可达。
 
+**要绑仓库或挂材料时**，有两种说法，模型会自己选对：
+
+```
+# 方式一：一步到位（工具内先建草稿、装配、再启动）
+用 sortie-deck 跑个任务：给设置页加导出按钮，track 用 standard，
+eng 绑仓库 git@github.com:org/web.git 分支 dev，
+另外这是我的需求文档：<粘 PRD 内容>
+
+# 方式二：显式三步（想看清每一步时用）
+先 create_mission 建草稿（brief=...）；
+再 bind_repos 给 eng 绑 git@github.com:org/web.git（branch=dev）；
+再 attach_materials 挂一份 prd.md（pinned）；
+最后 start_mission(mission_id=...) 启动。
+```
+
+几个要点：
+
+- `role_repos` 的 key 是**角色槽位**（`product` / `eng` / `qa` / `deploy`），不是阶段名；
+- 开发 agent 会先 clone 到 `workspace/repos/<name>`，改完把 diff 收进 `diff.patch`；
+- 把仓库地址只写在 brief 里**不会 clone**，必须走 `role_repos`；
+- `pinned=true` 的材料会拼进 brief，随每个阶段的提示词走；
+- 仓库绑定只能在**启动前**做，启动后调用会返回 `conflict`。
+
 ### 3.4 本地 CLI 连云端
 
 ```bash
@@ -398,11 +421,14 @@ sortie logout      # 删掉 ~/.sortie/config.json，回到 embedded
 
 ## 4. 速查
 
-### 4.1 MCP 工具（12 个）
+### 4.1 MCP 工具（17 个）
 
 | 工具 | 参数 | 用途 |
 |---|---|---|
-| `start_mission` | `brief`, `title?`, `track?`, `harness?` | 建+确认+启动，立即返回 |
+| `start_mission` | `brief`, `title?`, `track?`, `harness?`, `mission_id?`, `role_repos?`, `materials?` | 建+确认+启动；传 `mission_id` 则启动已有草稿 |
+| `create_mission` | `brief`, `title?`, `track?`, `harness?` | **只建草稿不启动**，用于先装配 |
+| `bind_repos` | `mission_id`, `role_repos` | 给未启动任务绑仓库+分支（启动后不可改） |
+| `attach_materials` | `mission_id`, `materials` | 挂 PRD/资料，`pinned` 进每个阶段提示词 |
 | `await_mission` | `mission_id`, `timeout_seconds=120` | 等到门禁/终态 |
 | `get_mission` | `mission_id`, `response_format=concise\|detailed` | 查状态与门禁 |
 | `list_missions` | `status?`, `limit?` | 我可见的任务 |
@@ -411,6 +437,8 @@ sortie logout      # 删掉 ~/.sortie/config.json，回到 embedded
 | `list_artifacts` | `mission_id` | 产物清单 |
 | `read_artifact` | `mission_id`, `path` | 产物原文（>200k 截断） |
 | `get_events` | `mission_id`, `since_seq=0`, `limit=100` | 事件补播 |
+| `list_forge_drafts` | `mission_id` | 建队时生成、仍待审的角色草稿 |
+| `approve_forge_draft` | `draft_id`, `publish_agent=false` | 审批角色草稿，解除建队门禁 |
 | `list_tracks` | — | 航线与阶段 |
 | `retrieve_knowledge` | `query`, `top_k?` | 知识库检索 |
 | `create_memory` | `content`, ... | 写共享记忆 |
@@ -448,6 +476,8 @@ sortie logout      # 删掉 ~/.sortie/config.json，回到 embedded
 | 网页不实时 | api 与 worker 的 `TDT_DATA_DIR` 不是同一个卷 | 检查 compose 的 volume 挂载 |
 | 网页能看到任务但点不动门禁 | 不是任务 owner 且未被共享 | 用任务所有者账号，或 `shared_with` 授权 |
 | `sortie worker` 启动即报错 | 不是 `sqlite` 运行后端 | 需 `TDT_RUN_BACKEND=sqlite` + `TDT_STORAGE=sqlite` |
+| `start_mission` 返回 `forge_review_required` | 建队时生成了新角色草稿，需人工放行 | `list_forge_drafts` 看是哪个角色，确认后 `approve_forge_draft`，再 `start_mission(mission_id=...)` |
+| `bind_repos` 返回 `conflict` | 任务已启动 | 仓库只能在启动前绑；用 `create_mission` 重开一个草稿 |
 | 每个阶段都卡 60 秒才动 | 没配模型，但机器上有 `claude`，走了 CLI 回退并等超时 | 设 `TDT_LLM_CLI_FALLBACK=0`（或配好 `TDT_LLM_API_KEY`） |
 | `--cat 文件名` 报 404 | 旧版本只认完整存储路径 | 新版本三种写法都支持；确认为最新代码 |
 | 工具报错只有 `Error executing tool xxx` | SDK 屏蔽了普通异常消息 | 已改成 `ToolError`；若仍出现，检查是不是非业务异常（栈内异常本身不外泄） |
@@ -530,7 +560,7 @@ curl -s -o /dev/null -w "%{http_code}\n" -X POST $BASE/mcp \
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"1"}}}'
 
-# 3) 凭据与工具列表（应看到 12 个工具名）
+# 3) 凭据与工具列表（应看到 17 个工具名）
 curl -s -X POST $BASE/mcp \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \

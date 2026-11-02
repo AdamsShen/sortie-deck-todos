@@ -24,11 +24,15 @@ argument.
 Benefits: the endpoint scales horizontally, needs no sticky sessions, and
 clients keep working across server restarts.
 
-## 3. Tool surface (12)
+## 3. Tool surface (17)
 
 | Tool | R/W | Notes |
 |------|-----|-------|
-| `start_mission` | write (reversible) | create + confirm pipeline + start; returns `mission_id` and queue depth |
+| `start_mission` | write (reversible) | create + confirm pipeline + start; pass `mission_id` to start an existing draft; `role_repos` / `materials` may be inlined |
+| `create_mission` | write (draft) | create without starting, so repos/materials can be attached first |
+| `bind_repos` | write (draft) | attach git repos + target branch to a not-yet-started mission |
+| `attach_materials` | write | attach PRD/docs; `pinned` rides along in every stage prompt |
+| `list_forge_drafts` / `approve_forge_draft` | read / write | review and approve role drafts that block `forge_review_required` |
 | `await_mission` | read | long-poll; returns on gate/terminal state, otherwise `still_running` |
 | `get_mission` | read | status + gate (`response_format=concise\|detailed`) |
 | `list_missions` | read | missions I own or that are shared with me |

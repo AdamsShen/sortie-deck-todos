@@ -9,7 +9,7 @@
 
 | 问题 | 答案 |
 |---|---|
-| 暴露的是什么 | 12 个「任务级」MCP 工具，不是 117 个 REST 接口的镜像 |
+| 暴露的是什么 | 17 个「任务级」MCP 工具，不是 117 个 REST 接口的镜像 |
 | 跑在哪 | `sortie api` 进程内的 `/mcp` 路由，与 API 共享 `Orchestrator` 与 `data/` |
 | 协议 | MCP Streamable HTTP，**无状态**（不依赖协议级会话 / `Mcp-Session-Id`） |
 | 身份 | 用户级 API Key（`sk_sortie_...`），工具参数里没有 `user_id` |
@@ -99,14 +99,19 @@ def _principal_from(ctx: Context) -> Principal:
 2. 外层中间件做 **fail-fast 门禁**：凭据无效直接 401，不进入 JSON-RPC 处理，错误信息对机器客户端更清晰。
 3. 工具层再解析一次作为唯一身份依据——两次解析成本是一次 sha256 + 一次索引查询，可忽略。
 
-### 2.4 工具面：12 个，按「任务语义」命名
+### 2.4 工具面：17 个，按「任务语义」命名
 
 映射原则来自业界共识：**暴露 outcomes，不是 endpoints**。所以不暴露
 `POST /api/initiatives` + `confirm` + `start` 三步，而是一个 `start_mission`。
 
 | 工具 | 读/写 | 语义 |
 |---|---|---|
-| `start_mission` | 写（可逆） | 建任务 + 确认航线 + 启动，立即返回 `mission_id` + `queue_depth` |
+| `start_mission` | 写（可逆） | 建任务 + 确认航线 + 启动；传 `mission_id` 则启动已有草稿；可直接带 `role_repos` / `materials` |
+| `create_mission` | 写（草稿） | 只建不启动，用于「先装配、后开跑」 |
+| `bind_repos` | 写（草稿） | 给未启动任务绑仓库+分支（启动后 conflict） |
+| `attach_materials` | 写 | 追加/覆盖材料，`pinned` 进每阶段提示词 |
+| `list_forge_drafts` | 读 | 建队时仍待审的角色草稿 |
+| `approve_forge_draft` | 写（受门禁保护） | 审批草稿，解除 `forge_review_required` |
 | `await_mission` | 读 | 长轮询：命中门禁/终态立即返回，超时返回 `still_running` |
 | `get_mission` | 读 | 状态 + 门禁；`response_format=concise\|detailed` |
 | `list_missions` | 读 | 我创建或被共享的任务 |
@@ -539,7 +544,7 @@ WORKER_REPLICAS=3 docker compose up -d --scale worker=3
 | API Key | `tests/test_api_keys.py` 10 项（含 HTTP 往返、跨用户越权） |
 | MCP 协议 | `tests/test_mcp_server.py` 3 项（自客户端回环、无凭据 401、路由挂载） |
 | CLI | `tests/test_cli_mission.py` 6 项 + 实机 start→status→hitl→artifacts |
-| 真实进程端到端 | 建 Key → `tools/list`（12 个）→ `start_mission` → `await_mission` 到 `product_prd` 门禁 → REST 可见 → `submit_hitl` |
+| 真实进程端到端 | 建 Key → `tools/list`（17 个）→ `start_mission` → `await_mission` 到 `product_prd` 门禁 → REST 可见 → `submit_hitl` |
 | 容器 | 等价镜像实跑：`/api/health` 200、`/` 200、无凭据 `/mcp` 401、带 Key `tools/list` 正常 |
 | 文档站 | `mkdocs build --strict` 无新增告警 |
 

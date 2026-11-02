@@ -22,11 +22,15 @@
 好处：MCP 端点可以水平扩副本、不需要 sticky session、进程重启后客户端直接用原
 Key 继续调用。
 
-## 3. 工具面（12 个）
+## 3. 工具面（17 个）
 
 | 工具 | 读/写 | 说明 |
 |------|-------|------|
-| `start_mission` | 写（可逆） | 建任务 + 确认航线 + 启动，立即返回 `mission_id` 与队列深度 |
+| `start_mission` | 写（可逆） | 建任务 + 确认航线 + 启动；带 `mission_id` 则启动草稿；可直接传 `role_repos` / `materials` |
+| `create_mission` | 写（草稿） | 只建不启动，便于先绑仓库/挂材料 |
+| `bind_repos` | 写（草稿） | 给未启动任务绑仓库与目标分支 |
+| `attach_materials` | 写 | 挂 PRD/资料，`pinned` 会进每个阶段提示词 |
+| `list_forge_drafts` / `approve_forge_draft` | 读 / 写 | 处理建队时待审的角色草稿（`forge_review_required`） |
 | `await_mission` | 读 | 长轮询：命中门禁/终态立即返回，超时返回 `still_running` |
 | `get_mission` | 读 | 状态 + 门禁详情（`response_format=concise\|detailed`） |
 | `list_missions` | 读 | 我创建或被共享的任务 |
