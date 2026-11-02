@@ -57,3 +57,56 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
 
 ENTRYPOINT ["/usr/local/bin/sortie-entrypoint"]
 CMD ["api"]
+
+# ---------- harness 运行时（只给 worker，A 方案） ----------------------------
+# 队列任务在 worker 里执行，编码/文档阶段由 harness provider 直接 spawn agent CLI：
+#   claude_code → claude-agent-sdk 起子进程调 `claude`
+# 基础 runtime 镜像只装了 `pip install -e .`（不含可选依赖、不含 node），
+# 所以 worker 必须用本 stage。
+#
+# 注意：Docker 默认构建最后一个 stage。用本文件构建 api 镜像时必须显式
+#   docker build --target runtime .
+# 或由 docker-compose.yml 里的 target 指定，否则会构建出这个胖镜像。
+FROM runtime AS runtime-harness
+
+USER root
+
+# Node 直接复用上面 web 构建阶段的二进制（22.x），
+# 不走 apt：Debian 12 自带 node 18 偏旧，且省一次 apt 网络依赖。
+COPY --from=web /usr/local/bin/node /usr/local/bin/node
+COPY --from=web /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+    && node -v && npm -v
+
+# claude-agent-sdk 在 optional-dependencies 里（pyproject: harness-claude），
+# 基础镜像的 `pip install -e .` 不会装它，probe 会直接 missing。
+RUN pip install -e ".[harness-claude]"
+
+# claude-agent-sdk 的 wheel 自带原生 CLI（_bundled/claude，实测 314MB），
+# 而 SDK 的 _find_cli() 优先用它。所以不再 npm 安装 @anthropic-ai/claude-code
+# （那会重复占 314MB）；只做一条 PATH 软链，让 legacy 编码执行器/降级路径的
+# shutil.which("claude") 也能找到。
+RUN ln -sf /usr/local/lib/python3.12/site-packages/claude_agent_sdk/_bundled/claude \
+        /usr/local/bin/claude \
+    && claude --version
+
+# codex 只能走 npm（包内是 musl 静态二进制，按平台可选依赖安装，约 +390MB）。
+# 国内构建可用 --build-arg NPM_REGISTRY=https://registry.npmmirror.com
+ARG NPM_REGISTRY="https://registry.npmjs.org"
+RUN npm i -g --registry="${NPM_REGISTRY}" @openai/codex \
+    && codex --version
+
+# cursor 暂不装：它的 install 脚本装到 $HOME/.local/bin（构建期是 /root，运行期是
+# /home/sortie，路径对不上，需显式搬到 /usr/local/bin），且必须有 CURSOR_API_KEY
+# （容器内无法交互登录）。要启用时：
+#   RUN curl -fsSL https://cursor.com/install | bash \
+#       && cp /root/.local/bin/cursor-agent /usr/local/bin/ \
+#       && chmod +x /usr/local/bin/cursor-agent
+
+# 凭据不进镜像：ANTHROPIC_API_KEY 由 compose env_file/environment 在运行时注入。
+USER sortie
+
+# worker 不监听 HTTP，从 runtime 继承来的 /api/health 检查会把它判成 unhealthy，
+# 进而影响编排层的重启/依赖判断，这里显式关闭。
+HEALTHCHECK NONE

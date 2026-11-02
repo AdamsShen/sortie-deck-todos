@@ -15,7 +15,14 @@ x-common-env: &common-env
 
 services:
   api:
-    build: .
+    # 必须是显式 target：Dockerfile 最后一个 stage 是 runtime-harness，
+    # 不写 target 会构建出它；但写 runtime（精简）会导致 /api/harnesses 探针
+    # 在本进程里跑、看不到 Claude Code / Codex 二进制，页面把所有 harness
+    # 标成"不可用"（任务执行侧 worker 其实是可用的）。
+    # 因此 api 与 worker 统一使用 runtime-harness，两个服务共用一个镜像。
+    build:
+      context: .
+      target: runtime-harness
     image: sortie-deck:local
     init: true
     env_file:
@@ -33,8 +40,11 @@ services:
     restart: unless-stopped
 
   worker:
+    # 与 api 复用同一镜像，只是启动命令不同（worker 消费队列）
     image: sortie-deck:local
-    build: .
+    build:
+      context: .
+      target: runtime-harness
     init: true
     command: ["worker"]
     env_file:
