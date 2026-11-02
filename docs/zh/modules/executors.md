@@ -112,3 +112,62 @@ MCP 条目转成 SDK `mcp_servers`，并置 `strict_mcp_config=True`，不再从
   并打一条 info 日志，工作台据此判断该阶段是否压缩过
 - 同时回填 `num_turns` / `usage` / `cost_usd` / `stop_reason`
 - `TDT_HARNESS_MAX_TURNS`（默认 0 不限制）可兜住「反复打磨不收敛」的阶段
+
+## 9. 多镜头自审与实现清单
+
+方法论借自 autopilot-harness（MIT），但**不安装其 CLI、不写宿主 hooks**：一轮 lens 就是同一
+provider 会话上的下一次 `send()`，由编排层驱动，因此 claude_code / codex / cursor / opencode
+行为一致；mock 与 CLI 单发模式走降级（详见 `docs/plans/2026-11-02-多镜头自审方案与改动说明.md`）。
+
+### 9.1 计划 → 清单
+
+`*_tech_design` 阶段除 `tech_design.md` 外要求产出 `checklist.md`：
+
+```markdown
+- [ ] C1 <一项具体改动> — files: `src/x.py` — verify: `pytest tests/test_x.py -q` (expect exit=0)
+```
+
+编码阶段把它注入 prompt：一次做一项、完成后回写 `[x]`、**真跑** verify 命令并把
+`item / command / exit_code / tail` 追加进 `selftest_log.json`；自测阶段只允许重跑，禁止新增用例。
+`checklist.md` / `selftest_log.json` 是可选产物（`contracts.OPTIONAL`），缺失不影响契约校验。
+
+没有上游清单时（express 轨没有技术方案阶段），编码阶段会先要求写一份 3-8 项的 `checklist.md`
+再逐项执行，保证「逐项 + 可执行验证」对所有航线生效。
+
+### 9.2 多镜头自审
+
+编码/自测阶段收尾时在同一会话续跑 N 轮，每轮只换视角：
+
+| 轮次 | 视角 | 允许改代码 |
+|---|---|---|
+| 1 | 正确性与不变量（对照 acceptance.json） | 是 |
+| 2 | 空值、边界与错误路径 | 是 |
+| 3（默认最后一轮） | 测试缺口（只记录） | **否** |
+| 4 / 5（`rounds>=5`） | 并发与部分失败 / 安全与信任边界 | 是 |
+
+模型必须在回复结尾给出一个 ```review 围栏块：`status` / `reviewed` / `findings` / `summary`。
+编排层只认结构化结论；缺块记 `unparsed`（降级，不判失败）。
+
+### 9.3 自审日志（审查了什么 / 结果 / 状态）
+
+| 文件 | 内容 |
+|---|---|
+| `missions/<id>/logs/<stage>/review.jsonl` | 逐轮追加，崩溃也保留已完成轮次 |
+| `missions/<id>/logs/<stage>/review.json` | 汇总：scope（改动文件/契约/上游/清单）+ 每轮 status/findings/耗时 + verdict |
+| `missions/<id>/artifacts/<stage>/review.md` | 报告视图，进阶段产物供门禁与下游阅读（仅真正执行轮次时产出；`skipped` / `prompted` 只留日志） |
+
+`StageResult.meta["review"]` 同时带精简视图（`verdict` / `rounds` / `blocking` /
+`degraded` / `statuses` / 日志路径）。
+
+结论有 `blocking` 且 `TDT_REVIEW_BLOCKING_POLICY=hitl`（默认）时阶段转 `needs_hitl`；
+`fail` 直接失败，`ignore` 只记录。
+
+### 9.4 开关
+
+| 配置 | 默认 | 说明 |
+|---|---|---|
+| `TDT_REVIEW_LENSES_ENABLED` | `true` | 关闭即回旧行为 |
+| `TDT_REVIEW_LENS_ROUNDS` | `3` | 3 轻量 / >=5 全量（4 按轻量） |
+| `TDT_REVIEW_LENS_STAGES` | `build,selftest` | 逗号分隔，可加 `integrate` |
+| `TDT_REVIEW_LENS_TIMEOUT_SECONDS` | `300` | 单轮超时，只降级该轮 |
+| `TDT_REVIEW_BLOCKING_POLICY` | `hitl` | `hitl` / `fail` / `ignore` |

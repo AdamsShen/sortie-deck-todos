@@ -115,3 +115,60 @@ the same variable.
   `post_token` / `trigger`) plus one info log line
 - `num_turns` / `usage` / `cost_usd` / `stop_reason` are recorded too
 - `TDT_HARNESS_MAX_TURNS` (default 0 = unlimited) caps non-converging stages
+
+## 9. Multi-lens self-review and implementation checklist
+
+The method is borrowed from autopilot-harness (MIT), but its CLI and host hooks are **not** installed:
+one lens round is simply the next `send()` on the same provider session, driven by the orchestrator, so
+claude_code / codex / cursor / opencode behave identically; mock and single-shot CLI executors degrade
+(see `docs/plans/2026-11-02-多镜头自审方案与改动说明.md`).
+
+### 9.1 Plan → checklist
+
+`*_tech_design` stages also emit `checklist.md`:
+
+```markdown
+- [ ] C1 <one concrete change> — files: `src/x.py` — verify: `pytest tests/test_x.py -q` (expect exit=0)
+```
+
+Build stages receive it in the prompt: one item at a time, tick `[x]` when done, actually run the verify
+command and append `item / command / exit_code / tail` to `selftest_log.json`. Selftest stages may only
+re-run those commands. `checklist.md` / `selftest_log.json` are optional artifacts (`contracts.OPTIONAL`).
+
+When there is no upstream checklist (the express track has no tech-design stage), the build stage is
+asked to write a 3-8 item `checklist.md` first and then execute it, so item-by-item verification holds
+for every track.
+
+### 9.2 Lens rounds
+
+| Round | Lens | May edit code |
+|---|---|---|
+| 1 | Correctness & invariants (vs acceptance.json) | yes |
+| 2 | Nulls, boundaries & error paths | yes |
+| 3 (default last) | Test gaps (record only) | **no** |
+| 4 / 5 (`rounds>=5`) | Concurrency & partial failure / Security & trust boundaries | yes |
+
+Each reply must end with one ```review fenced block: `status` / `reviewed` / `findings` / `summary`.
+Only the structured verdict counts; a missing block is `unparsed` (degraded, not a failure).
+
+### 9.3 Review logs (what / result / status)
+
+| File | Content |
+|---|---|
+| `missions/<id>/logs/<stage>/review.jsonl` | one appended line per round (survives a crash) |
+| `missions/<id>/logs/<stage>/review.json` | aggregate: scope + per-round status/findings/duration + verdict |
+| `missions/<id>/artifacts/<stage>/review.md` | report view, archived with the stage artifacts (only when at least one round really ran; `skipped` / `prompted` stay log-only) |
+
+`StageResult.meta["review"]` carries a compact view (`verdict` / `rounds` / `blocking` / `degraded` /
+`statuses` / log paths). A `blocking` verdict with `TDT_REVIEW_BLOCKING_POLICY=hitl` (default) turns the
+stage into `needs_hitl`; `fail` fails it, `ignore` only records.
+
+### 9.4 Switches
+
+| Setting | Default | Notes |
+|---|---|---|
+| `TDT_REVIEW_LENSES_ENABLED` | `true` | off = legacy behaviour, no extra turns |
+| `TDT_REVIEW_LENS_ROUNDS` | `3` | 3 = light, >=5 = full (4 is treated as light) |
+| `TDT_REVIEW_LENS_STAGES` | `build,selftest` | comma separated; `integrate` optional |
+| `TDT_REVIEW_LENS_TIMEOUT_SECONDS` | `300` | per round; timeout only degrades that round |
+| `TDT_REVIEW_BLOCKING_POLICY` | `hitl` | `hitl` / `fail` / `ignore` |
