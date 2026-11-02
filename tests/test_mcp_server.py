@@ -85,9 +85,19 @@ async def test_tools_list_and_call_over_streamable_http(wired):
         try:
             await session.start()
             names = {tool.name for tool in session.tools}
-            # 工具面收敛：核心动作必须在
-            assert {"start_mission", "await_mission", "submit_hitl", "get_mission"} <= names
-            assert len(names) == 12, sorted(names)
+            # 工具面收敛：核心动作 + 装配动作必须在
+            assert {
+                "start_mission",
+                "await_mission",
+                "submit_hitl",
+                "get_mission",
+                "create_mission",
+                "bind_repos",
+                "attach_materials",
+                "list_forge_drafts",
+                "approve_forge_draft",
+            } <= names
+            assert len(names) == 17, sorted(names)
 
             result = await session.call_tool("start_mission", {"brief": "加一个健康检查接口"})
             assert result["isError"] is False
@@ -156,6 +166,59 @@ async def test_tool_error_message_reaches_the_client(wired, monkeypatch):
             assert "ini_nope" in text
         finally:
             await session.close()
+
+
+@pytest.mark.asyncio
+async def test_assembly_tools_go_through_service(wired, monkeypatch):
+    """create → bind → start 必须依次落到服务层，而不是各自为政。"""
+    from sortie_deck.mcp_http import HttpMcpSession
+
+    calls: list[tuple[str, dict]] = []
+    draft = Initiative(title="草稿", brief="b", status=InitiativeStatus.DRAFT)
+    running = Initiative(title="跑起来了", brief="b", status=InitiativeStatus.RUNNING)
+
+    class _Assembly:
+        def __init__(self) -> None:
+            self.orch = SimpleNamespace(run_queue=None)
+
+        async def create_mission(self, principal, **kwargs):
+            calls.append(("create", kwargs))
+            return draft
+
+        def bind_repos(self, principal, mission_id, repos):
+            calls.append(("bind", {"mission_id": mission_id, "repos": repos}))
+            return draft
+
+        async def start(self, principal, mission_id):
+            calls.append(("start", {"mission_id": mission_id}))
+            return running
+
+    monkeypatch.setattr(mcp_server, "get_mission_service", lambda: _Assembly())
+    app = mcp_server.build_mcp_app()
+    item = ToolkitItem(kind="mcp", name="sortie-deck", transport="http", url="http://test/mcp")
+
+    async with mcp_server.lifespan_context():
+        session = HttpMcpSession(item, http_transport=httpx.ASGITransport(app=app))
+        try:
+            await session.start()
+            created = await session.call_tool("create_mission", {"brief": "加导出按钮"})
+            assert created["structuredContent"]["mission_id"] == draft.id
+
+            bound = await session.call_tool(
+                "bind_repos",
+                {
+                    "mission_id": draft.id,
+                    "role_repos": {"eng": [{"url": "git@x:repo.git", "branch": "dev"}]},
+                },
+            )
+            assert bound["structuredContent"]["role_repos"]["eng"] == ["git@x:repo.git"]
+
+            started = await session.call_tool("start_mission", {"mission_id": draft.id})
+            assert started["structuredContent"]["mission_id"] == running.id
+        finally:
+            await session.close()
+
+    assert [name for name, _ in calls] == ["create", "bind", "start"]
 
 
 def test_api_app_mounts_mcp_route():

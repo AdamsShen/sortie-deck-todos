@@ -3,7 +3,7 @@
 设计取舍（对齐 2026-07-28 规范与业界实践）：
 - **无状态**：不依赖协议级会话，任意请求可打到任意副本；跨调用状态用
   ``mission_id`` 这个 server-minted handle 传递。
-- **工具面收敛**：12 个 task-shaped 工具，不镜像 117 个 REST 路由。
+- **工具面收敛**：17 个 task-shaped 工具（含装配用的 create/bind/attach），不镜像 117 个 REST 路由。
 - **身份只来自 Header**：工具参数里没有 user_id，避免冒充；无状态模式下
   每个请求解析一次 API Key。
 - **长任务不阻塞**：``start_mission`` 立即返回，轮询交给 ``await_mission``。
@@ -115,20 +115,42 @@ def _shape(mission: Any, response_format: str = "concise") -> dict[str, Any]:
     description=(
         "提交一个新任务并立即开始执行。返回 mission_id；任务会在第一个门禁处停下，"
         "用 await_mission 等待，不要假设它已经完成。"
+        "需要绑仓库或挂材料时二选一：①直接传 role_repos / materials；"
+        "②先用 create_mission 建草稿，装配完再调 start_mission(mission_id=...)。"
     )
 )
 async def start_mission(
-    brief: str,
+    brief: str = "",
     title: str | None = None,
     track: str | None = None,
     harness: str | None = None,
+    mission_id: str | None = None,
+    role_repos: dict[str, list[dict[str, Any]]] | None = None,
+    materials: list[dict[str, Any]] | None = None,
     ctx: Context = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
     principal = _principal_from(ctx)
+    svc = get_mission_service()
     try:
-        ini = await get_mission_service().start_mission(
-            principal, brief=brief, title=title, track=track, harness=harness
-        )
+        if mission_id:
+            # 启动已存在的草稿（create_mission 建的，可先 bind_repos / attach_materials）
+            ini = await svc.start(principal, mission_id)
+        elif role_repos or materials:
+            # 一次性装配再启动：建草稿 → 装配 → 启动，避免"跑起来才绑仓库"
+            ini = await svc.create_mission(
+                principal,
+                brief=brief,
+                title=title,
+                track=track,
+                harness=harness,
+                role_repos=role_repos,
+                materials=materials,
+            )
+            ini = await svc.start(principal, ini.id)
+        else:
+            ini = await svc.start_mission(
+                principal, brief=brief, title=title, track=track, harness=harness
+            )
     except ServiceError as exc:
         raise _tool_error(exc) from exc
     # 队列深度：让调用方知道是排队还是立刻执行（取不到就算了，不能因此失败）
@@ -144,6 +166,113 @@ async def start_mission(
         "queue_depth": queue_depth,
         "next": "await_mission 等待门禁；或 get_mission 查看状态",
     }
+
+
+@server.tool(
+    description=(
+        "只建任务草稿，不启动。用于需要先装配的场景：建草稿 → bind_repos / attach_materials "
+        "→ start_mission(mission_id=...)。如果不需要装配，直接用 start_mission 一步到位。"
+    )
+)
+async def create_mission(
+    brief: str,
+    title: str | None = None,
+    track: str | None = None,
+    harness: str | None = None,
+    ctx: Context = None,  # type: ignore[assignment]
+) -> dict[str, Any]:
+    principal = _principal_from(ctx)
+    try:
+        ini = await get_mission_service().create_mission(
+            principal, brief=brief, title=title, track=track, harness=harness
+        )
+    except ServiceError as exc:
+        raise _tool_error(exc) from exc
+    return {
+        **_shape(ini),
+        "next": "bind_repos / attach_materials 装配，然后 start_mission(mission_id=...) 启动",
+    }
+
+
+@server.tool(
+    description=(
+        "给尚未启动的任务绑定 git 仓库，开发 agent 会先 clone 到 workspace/repos/<name> 再改代码，"
+        "并把 diff 收进 diff.patch。role_repos 形如 "
+        '{"eng": [{"url": "git@github.com:org/repo.git", "branch": "dev", "name": "repo"}]}；'
+        "slot 取 product / eng / qa / deploy。任务一旦启动就改不了，只能新建任务重来。"
+    )
+)
+def bind_repos(
+    mission_id: str, role_repos: dict[str, list[dict[str, Any]]], ctx: Context = None  # type: ignore[assignment]
+) -> dict[str, Any]:
+    principal = _principal_from(ctx)
+    try:
+        get_mission_service().bind_repos(principal, mission_id, role_repos)
+    except ServiceError as exc:
+        raise _tool_error(exc) from exc
+    bound = {
+        slot: [r.get("url") for r in rows if isinstance(r, dict)]
+        for slot, rows in (role_repos or {}).items()
+        if rows
+    }
+    return {"mission_id": mission_id, "role_repos": bound, "next": "start_mission(mission_id=...)"}
+
+
+@server.tool(
+    description=(
+        "给任务挂输入材料（PRD / 设计稿文本 / 数据说明等）。同名覆盖，其余保留；"
+        "pinned=true 的材料会进每个阶段的提示词，是让 agent 遵循需求的主要手段。"
+        'materials 形如 [{"name": "prd.md", "kind": "prd", "content": "...", "pinned": true}]；'
+        "content 也可以用 text_excerpt 传。任务运行中也可以追加。"
+    )
+)
+def attach_materials(
+    mission_id: str, materials: list[dict[str, Any]], ctx: Context = None  # type: ignore[assignment]
+) -> dict[str, Any]:
+    principal = _principal_from(ctx)
+    try:
+        ini = get_mission_service().attach_materials(principal, mission_id, materials)
+    except ServiceError as exc:
+        raise _tool_error(exc) from exc
+    return {
+        "mission_id": mission_id,
+        "materials": [
+            {"name": m.name, "kind": m.kind, "pinned": m.pinned, "size": m.size}
+            for m in (ini.materials or [])
+        ],
+    }
+
+
+@server.tool(
+    description=(
+        "列出本任务建队时生成、仍待人工审核的角色草稿。若 start_mission 返回 "
+        "forge_review_required，说明存在待审草稿，需要先 approve_forge_draft 放行。"
+    )
+)
+def list_forge_drafts(mission_id: str, ctx: Context = None) -> list[dict[str, Any]]:  # type: ignore[assignment]
+    principal = _principal_from(ctx)
+    try:
+        return get_mission_service().forge_drafts(principal, mission_id)
+    except ServiceError as exc:
+        raise _tool_error(exc) from exc
+
+
+@server.tool(
+    description=(
+        "审批一个角色草稿（注册为角色），解除建队门禁；publish_agent=true 时同时发布为可复用 agent。"
+        "审批前先用 list_forge_drafts 看清它是哪个角色、要解决什么问题。"
+    )
+)
+def approve_forge_draft(
+    draft_id: str, publish_agent: bool = False, ctx: Context = None  # type: ignore[assignment]
+) -> dict[str, Any]:
+    principal = _principal_from(ctx)
+    try:
+        return get_mission_service().approve_forge_draft(
+            principal, draft_id, publish_agent=publish_agent
+        )
+    except ServiceError as exc:
+        raise _tool_error(exc) from exc
 
 
 @server.tool(

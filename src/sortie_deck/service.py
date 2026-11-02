@@ -13,18 +13,21 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
 
 from sortie_deck.api_keys import ApiKeyStore
 from sortie_deck.auth import AuthStore, PublicUser
 from sortie_deck.models import (
     CreateInitiativeRequest,
+    ExternalMaterial,
     ForgeReviewRequiredError,
     HitlAction,
     HitlDecision,
     Initiative,
     InitiativeStatus,
     PipelineNotConfirmedError,
+    RepoConfig,
 )
 from sortie_deck.orchestrator import Orchestrator, get_orchestrator
 from sortie_deck.settings import settings
@@ -74,6 +77,62 @@ class ServiceError(Exception):
 
     def as_dict(self) -> dict[str, Any]:
         return {"code": self.code, "message": self.message}
+
+
+def _clean_role_repos(
+    raw: dict[str, list[dict[str, Any]]] | None,
+) -> dict[str, list[RepoConfig]]:
+    """把外部传入的 role_repos 规范成 ``{slot: [RepoConfig]}``，丢掉空 URL。"""
+    out: dict[str, list[RepoConfig]] = {}
+    for slot, rows in (raw or {}).items():
+        items: list[RepoConfig] = []
+        for row in rows or []:
+            if isinstance(row, RepoConfig):
+                items.append(row)
+                continue
+            if not isinstance(row, dict):
+                continue
+            url = str(row.get("url") or "").strip()
+            if not url:
+                continue
+            items.append(
+                RepoConfig(
+                    url=url,
+                    branch=str(row.get("branch") or "").strip(),
+                    name=str(row.get("name") or "").strip(),
+                    token=str(row.get("token") or "").strip() or None,
+                )
+            )
+        if items:
+            out[str(slot)] = items
+    return out
+
+
+def _clean_materials(raw: list[dict[str, Any]] | None) -> list[ExternalMaterial]:
+    """把外部传入的材料规范成 ExternalMaterial；``content`` 等价于 ``text_excerpt``。"""
+    out: list[ExternalMaterial] = []
+    for row in raw or []:
+        if isinstance(row, ExternalMaterial):
+            out.append(row)
+            continue
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        text = str(row.get("text_excerpt") or row.get("content") or "")
+        out.append(
+            ExternalMaterial(
+                name=name,
+                kind=str(row.get("kind") or "other"),
+                mime=str(row.get("mime") or ""),
+                size=len(text.encode("utf-8")),
+                pinned=bool(row.get("pinned", False)),
+                text_excerpt=text,
+                extract_status="ok" if text else "pending",
+            )
+        )
+    return out
 
 
 def artifact_candidates(mission_id: str, path: str) -> list[str]:
@@ -397,6 +456,122 @@ class MissionService:
             raise ServiceError("forge_review_required", exc.message) from exc
         except RuntimeError as exc:
             raise ServiceError("conflict", str(exc)) from exc
+
+    async def create_mission(
+        self,
+        principal: Principal,
+        *,
+        brief: str,
+        title: str | None = None,
+        track: str | None = None,
+        harness: str | None = None,
+        role_repos: dict[str, list[dict[str, Any]]] | None = None,
+        materials: list[dict[str, Any]] | None = None,
+    ) -> Initiative:
+        """建任务但**不启动**：先绑仓库、挂材料，再单独 start。
+
+        一句话建任务（``start_mission``）会立刻开跑，仓库/材料只能落到已经
+        跑起来的任务上，等于无效。所以需要这个"先装配、后开跑"的入口。
+        航线在这里就确认好，后续 ``start`` 不需要再确认。
+        """
+        if not (brief or "").strip():
+            raise ServiceError("validation", "brief 不能为空")
+        req = CreateInitiativeRequest(
+            title=(title or brief.strip().splitlines()[0])[:80],
+            brief=brief.strip(),
+            template=track or "default",
+            pipeline_track=track if track in {"express", "standard", "default", "research"} else None,
+            harness=harness,
+            auto_start=False,
+            auto_confirm_pipeline=True,
+            creator_name=principal.display_name,
+            created_by=principal.user.id,
+            role_repos=_clean_role_repos(role_repos),
+            materials=_clean_materials(materials),
+        )
+        return await self.orch.create_initiative(req)
+
+    def bind_repos(
+        self, principal: Principal, mission_id: str, role_repos: dict[str, list[dict[str, Any]]]
+    ) -> Initiative:
+        """给**未启动**的任务绑仓库（启动后改不了，只能新建任务）。"""
+        ini = self.get(principal, mission_id)
+        ensure_control(ini, principal)
+        if ini.status is not InitiativeStatus.DRAFT:
+            raise ServiceError(
+                "conflict",
+                f"任务已是 {ini.status.value}，仓库需在启动前绑定；"
+                "请用 create_mission 建草稿 → bind_repos → start_mission",
+            )
+        clean = _clean_role_repos(role_repos)
+        meta = dict(ini.meta or {})
+        meta["role_repos"] = {
+            slot: [r.model_dump(mode="json") for r in rows] for slot, rows in clean.items()
+        }
+        ini.meta = meta
+        return self.orch.store.upsert(ini)
+
+    def attach_materials(
+        self, principal: Principal, mission_id: str, materials: list[dict[str, Any]]
+    ) -> Initiative:
+        """追加/覆盖材料（同名覆盖，其余保留）；pinned 的会进每个阶段的提示词。"""
+        ini = self.get(principal, mission_id)
+        ensure_control(ini, principal)
+        merged = {m.name: m for m in (ini.materials or [])}
+        for item in _clean_materials(materials):
+            merged[item.name] = item
+        return self.orch.set_materials(mission_id, list(merged.values()))
+
+    def forge_drafts(self, principal: Principal, mission_id: str) -> list[dict[str, Any]]:
+        """本任务建队时生成、仍待审核的角色草稿（forge_review_required 的根因）。"""
+        ini = self.get(principal, mission_id)
+        ids = [str(x) for x in ((ini.meta or {}).get("forge_drafts") or []) if str(x).strip()]
+        if not ids:
+            return []
+        from sortie_deck.agent_forge import ForgeStore
+
+        store = ForgeStore(Path(self.orch.cfg.data_dir) / "forge.json")
+        rows: list[dict[str, Any]] = []
+        for draft_id in ids:
+            try:
+                draft = store.get(draft_id)
+            except KeyError:
+                continue
+            if draft.status != "pending-review":
+                continue
+            rows.append(
+                {
+                    "draft_id": draft.id,
+                    "role": draft.role_key,
+                    "title": draft.title,
+                    "summary": draft.summary,
+                    "status": draft.status,
+                    "issues": list(draft.issues or []),
+                }
+            )
+        return rows
+
+    def approve_forge_draft(
+        self, principal: Principal, draft_id: str, *, publish_agent: bool = False
+    ) -> dict[str, Any]:
+        """审批角色草稿（注册角色，可选发布为 agent），解除建队门禁。"""
+        from sortie_deck.agent_forge import get_agent_forge
+
+        try:
+            draft, role, agent = get_agent_forge().approve(
+                draft_id, reviewer=principal.display_name, publish_agent=publish_agent
+            )
+        except KeyError as exc:
+            raise ServiceError("not_found", f"草稿不存在: {draft_id}") from exc
+        except ValueError as exc:
+            raise ServiceError("conflict", str(exc)) from exc
+        return {
+            "draft_id": draft.id,
+            "role": draft.role_key,
+            "status": draft.status,
+            "role_registered": role is not None,
+            "agent_published": agent is not None,
+        }
 
     async def hitl(
         self,
