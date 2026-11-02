@@ -17,6 +17,7 @@ CLI is the **developer entry** without the browser: smoke a full mission loop an
 - `sortie api` / `tdt-api` — uvicorn entry
 - `sortie worker` — run-queue consumer only, no HTTP (scales horizontally)
 - `sortie doctor` — runtime checks (including the storage/queue combination)
+- `sortie mission create / bind-repos / attach / start / forge` — assemble a mission (parity with the MCP tools)
 
 **Out of scope**
 
@@ -31,6 +32,24 @@ sortie api                     # binds TDT_HOST:TDT_PORT
 # Multi-worker: API replicas set TDT_RUN_WORKER=false, execution runs as workers
 TDT_RUN_BACKEND=sqlite TDT_STORAGE=sqlite sortie worker --id w1
 ```
+
+Mission commands come in two shapes: **one-shot** (`mission start --brief`) and **assembly**
+(`create` → `bind-repos` / `attach` → `start <id>`).
+
+```bash
+sortie mission create --brief "add an export button" --track standard
+sortie mission bind-repos ini_xxx --repo eng=git@github.com:org/web.git#dev
+sortie mission attach ini_xxx --file prd.md --kind prd --pinned
+sortie mission start ini_xxx --wait
+
+sortie mission forge list ini_xxx
+sortie mission forge approve fgd_xxx
+```
+
+- `--repo SLOT=URL[@BRANCH]` is repeatable; slots are `product/eng/qa/deploy`; use `URL#branch` for branch names containing `/`
+- `--file` accepts text only (upload binaries in the workbench); `--pinned` materials ride along in every stage prompt
+- Repos can only be bound **before start**; afterwards the CLI returns `conflict` (exit 5)
+- Remote and embedded modes behave the same; embedded `start` blocks until a gate because the process is the executor
 
 Implementation sketch: instantiate `Orchestrator`, `create_and_start` / confirm path, poll HITL, `submit_hitl(APPROVE)` until done.
 

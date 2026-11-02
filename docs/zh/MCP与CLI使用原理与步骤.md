@@ -366,6 +366,12 @@ sortie mission artifacts --cat test_cases.md
 
 # 6) 持续跟随（SSE）
 sortie mission watch
+
+# 7) 装配式：先建草稿、绑仓库、挂材料，再启动（与 MCP 的 create/bind/attach 对齐）
+sortie mission create --brief "给设置页加导出按钮" --track standard
+sortie mission bind-repos ini_xxx --repo eng=git@github.com:org/web.git#dev
+sortie mission attach ini_xxx --file prd.md --kind prd --pinned
+sortie mission start ini_xxx --wait
 ```
 
 想等它停在门禁再返回，加 `--wait`：
@@ -452,7 +458,12 @@ sortie logout      # 删掉 ~/.sortie/config.json，回到 embedded
 |---|---|
 | `sortie login --url U --key K` | 保存凭据 |
 | `sortie logout` | 删除凭据，回到 embedded |
-| `sortie mission start --brief "..." [--track] [--harness] [--wait] [--json] [--dry-run]` | 建任务 |
+| `sortie mission start --brief "..." [--track] [--harness] [--wait] [--json] [--dry-run]` | 一步式建任务 |
+| `sortie mission start <id> [--wait]` | 启动已建草稿 |
+| `sortie mission create --brief "..." [--repo] [--file]` | 只建草稿（可内联仓库/材料） |
+| `sortie mission bind-repos [id] --repo SLOT=URL[@BRANCH] [--repos-file f.json]` | 启动前绑仓库 |
+| `sortie mission attach [id] --file prd.md [--kind] [--pinned]` | 挂材料（同名覆盖） |
+| `sortie mission forge list [id]` / `forge approve <draft_id>` | 处理建队角色草稿 |
 | `sortie mission status [id] [--json]` | 查状态 |
 | `sortie mission list [--status] [--limit]` | 列任务 |
 | `sortie mission hitl [id] --approve\|--reject\|--stop\|--instruction "..."` | 解门禁 |
