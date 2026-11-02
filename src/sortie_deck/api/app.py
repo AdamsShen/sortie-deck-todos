@@ -74,6 +74,7 @@ from sortie_deck.models import (
     MissionShare,
     PipelineNotConfirmedError,
     PostRoomMessageRequest,
+    RepoConfig,
     UpdatePipelineRequest,
 )
 from sortie_deck.orchestrator import Orchestrator, bind_catalogs, get_orchestrator
@@ -1989,6 +1990,32 @@ async def patch_initiative_materials(
         return ini.model_dump(mode="json")
     except KeyError:
         raise HTTPException(404, "Initiative not found") from None
+
+
+class BindReposRequest(BaseModel):
+    role_repos: dict[str, list[RepoConfig]] = Field(default_factory=dict)
+
+
+@app.patch("/api/initiatives/{initiative_id}/repos")
+async def patch_initiative_repos(
+    initiative_id: str,
+    req: BindReposRequest,
+    user: PublicUser = Depends(_mission_control_guard),
+) -> dict[str, Any]:
+    """绑定任务仓库（仅草稿态）。启动后返回 409，需新建任务。
+
+    开发 agent 会先 clone 到 ``workspace/repos/<name>`` 再迭代，并把 diff
+    收进 ``diff.patch``；只在 brief 里写仓库地址不会触发 clone。
+    """
+    from sortie_deck.service import MissionService, Principal, ServiceError
+
+    try:
+        ini = MissionService().bind_repos(
+            Principal(user=user, source="web"), initiative_id, req.role_repos
+        )
+    except ServiceError as exc:
+        raise HTTPException(exc.http_status, exc.message) from exc
+    return ini.model_dump(mode="json")
 
 
 def _mission_input_guard(

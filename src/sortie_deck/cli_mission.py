@@ -188,6 +188,14 @@ async def _with_orchestrator(fn):
 # ---------------------------------------------------------------------------
 
 
+class ConflictError(RuntimeError):
+    """服务端 409：状态不允许（如给已启动任务绑仓库）。"""
+
+
+class ValidationError(RuntimeError):
+    """服务端 400/422：参数或状态前置条件不满足。"""
+
+
 class RemoteClient:
     def __init__(self, cfg: dict[str, Any]) -> None:
         import httpx
@@ -213,14 +221,18 @@ class RemoteClient:
             raise ConnectionError(str(exc)) from exc
         if resp.status_code == 401:
             raise PermissionError(resp.text)
+        # 服务端错误体是 {"detail": "..."}，直接抛原文会让 CLI 打出嵌套 JSON
+        detail = resp.text
+        with contextlib.suppress(Exception):
+            detail = str(resp.json().get("detail") or resp.text)
         if resp.status_code == 404:
-            # 服务端错误体是 {"detail": "..."}，直接抛原文会让 CLI 打出嵌套 JSON
-            detail = resp.text
-            with contextlib.suppress(Exception):
-                detail = str(resp.json().get("detail") or resp.text)
             raise LookupError(detail)
+        if resp.status_code == 409:
+            raise ConflictError(detail)
+        if resp.status_code in {400, 422}:
+            raise ValidationError(detail)
         if resp.status_code >= 400:
-            raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:300]}")
+            raise RuntimeError(f"HTTP {resp.status_code}: {detail[:300]}")
         return resp.json()
 
     def start_mission(self, args: Any) -> dict[str, Any]:
@@ -257,6 +269,64 @@ class RemoteClient:
             f"/api/initiatives/{mission_id}/hitl",
             # source 必须如实上报，否则服务端审计会把 CLI 审批记成"网页"
             json={"action": action, "instruction": instruction, "source": "cli"},
+        )
+
+    def create_mission(
+        self,
+        args: Any,
+        role_repos: dict[str, list[dict[str, Any]]],
+        materials: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """建草稿（不启动）：auto_confirm 让航线当场确认，start 时不必再确认。"""
+        body: dict[str, Any] = {
+            "title": args.title or args.brief.strip().splitlines()[0][:80],
+            "brief": args.brief,
+            "template": args.track or "default",
+            "pipeline_track": args.track,
+            "coding_executor": "auto",
+            "harness": args.harness,
+            "auto_start": False,
+            "auto_confirm_pipeline": True,
+        }
+        if role_repos:
+            body["role_repos"] = role_repos
+        if materials:
+            body["materials"] = materials
+        return self.request("POST", "/api/initiatives", json=body)
+
+    def bind_repos(
+        self, mission_id: str, role_repos: dict[str, list[dict[str, Any]]]
+    ) -> dict[str, Any]:
+        return self.request(
+            "PATCH", f"/api/initiatives/{mission_id}/repos", json={"role_repos": role_repos}
+        )
+
+    def set_materials(self, mission_id: str, materials: list[dict[str, Any]]) -> dict[str, Any]:
+        return self.request(
+            "PATCH", f"/api/initiatives/{mission_id}/materials", json={"materials": materials}
+        )
+
+    def start_existing(self, mission_id: str) -> dict[str, Any]:
+        try:
+            return self.request("POST", f"/api/initiatives/{mission_id}/start")
+        except ValidationError:
+            # 航线未确认（例如草稿是手工 POST 建的）：补一次确认再重试
+            self.request("POST", f"/api/initiatives/{mission_id}/pipeline/confirm", json={})
+            return self.request("POST", f"/api/initiatives/{mission_id}/start")
+
+    def forge_drafts(self, mission_id: str) -> list[dict[str, Any]]:
+        ini = self.get(mission_id)
+        ids = {str(x) for x in ((ini.get("meta") or {}).get("forge_drafts") or [])}
+        if not ids:
+            return []
+        rows = self.request("GET", "/api/forge/drafts", params={"status": "pending-review"})
+        return [r for r in rows if str(r.get("id")) in ids]
+
+    def approve_forge_draft(self, draft_id: str, publish: bool = False) -> dict[str, Any]:
+        return self.request(
+            "POST",
+            f"/api/forge/drafts/{draft_id}/approve",
+            json={"publish_agent": bool(publish)},
         )
 
 
@@ -374,11 +444,101 @@ def cmd_mission_list(args: Any) -> int:
     return asyncio.run(_with_orchestrator(run))
 
 
+_REPO_SLOTS = ("product", "eng", "qa", "deploy")
+
+
+def _split_repo_url(raw: str) -> tuple[str, str]:
+    """把 ``url[@branch]`` / ``url#branch`` 拆成 (url, branch)。
+
+    ``git@github.com:org/repo.git`` 里的 ``@`` 不是分支分隔符，所以只有尾部
+    ``@`` 之后既没有 ``:`` 也没有 ``/`` 时才当成分支（``https://h/r.git@dev``）。
+    含 ``/`` 的分支名（``release/1.0``）请用 ``#`` 写法。
+    """
+    text = (raw or "").strip()
+    if "#" in text:
+        base, _, branch = text.partition("#")
+        return base.strip(), branch.strip()
+    if "@" in text:
+        base, _, tail = text.rpartition("@")
+        if tail and ":" not in tail and "/" not in tail:
+            return base.strip(), tail.strip()
+    return text, ""
+
+
+def _parse_repo_spec(
+    specs: list[str] | None, repos_file: str | None
+) -> dict[str, list[dict[str, Any]]]:
+    """解析 ``--repo SLOT=URL[@BRANCH]`` 与 ``--repos-file``，返回 role_repos。"""
+    out: dict[str, list[dict[str, Any]]] = {}
+    if repos_file:
+        payload = json.loads(Path(repos_file).expanduser().read_text(encoding="utf-8"))
+        rows = payload.get("role_repos", payload) if isinstance(payload, dict) else {}
+        for slot, items in (rows or {}).items():
+            for item in items or []:
+                if isinstance(item, str):
+                    url, branch = _split_repo_url(item)
+                    item = {"url": url, "branch": branch}
+                if not isinstance(item, dict) or not str(item.get("url") or "").strip():
+                    continue
+                out.setdefault(str(slot), []).append(dict(item))
+    for spec in specs or []:
+        slot, sep, rest = str(spec).partition("=")
+        if not sep or not slot.strip() or not rest.strip():
+            raise ValueError(f"仓库参数应形如 SLOT=URL[@BRANCH]：{spec}")
+        slot_key = slot.strip().lower()
+        if slot_key not in _REPO_SLOTS:
+            raise ValueError(f"未知槽位 {slot.strip()}，可选 {', '.join(_REPO_SLOTS)}")
+        url, branch = _split_repo_url(rest)
+        out.setdefault(slot_key, []).append({"url": url, "branch": branch})
+    return out
+
+
+def _collect_materials(args: Any) -> list[dict[str, Any]]:
+    """把 ``--file`` / ``--content`` 收成 materials；二进制直接拒绝。"""
+    items: list[dict[str, Any]] = []
+    kind = getattr(args, "kind", "other") or "other"
+    pinned = bool(getattr(args, "pinned", False))
+    limit = int(getattr(args, "max_bytes", 0) or 0)
+    for raw_path in getattr(args, "file", []) or []:
+        path = Path(raw_path).expanduser()
+        if not path.is_file():
+            raise FileNotFoundError(f"材料文件不存在: {raw_path}")
+        data = path.read_bytes()
+        if limit and len(data) > limit:
+            data = data[:limit]
+            print(f"[warn] {raw_path} 超过 {limit} 字节，已截断", file=sys.stderr)
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"{raw_path} 不是文本文件；二进制请用网页上传原件") from exc
+        items.append(
+            {"name": path.name, "kind": kind, "pinned": pinned, "text_excerpt": text}
+        )
+    content = getattr(args, "content", None)
+    if content:
+        name = (getattr(args, "name", None) or "inline.md").strip()
+        items.append({"name": name, "kind": kind, "pinned": pinned, "text_excerpt": content})
+    return items
+
+
+def _merge_materials(
+    existing: list[dict[str, Any]], adding: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """同名覆盖、其余保留：服务端 PATCH 是整体替换，追加语义放在 CLI 侧。"""
+    merged: dict[str, dict[str, Any]] = {
+        str(row.get("name")): row for row in existing or [] if row.get("name")
+    }
+    for row in adding or []:
+        merged[str(row["name"])] = row
+    return list(merged.values())
+
+
 def cmd_mission_start(args: Any) -> int:
     printer = Printer(args.json)
-    if not (args.brief or "").strip():
-        return _fail("usage", "--brief 不能为空")
-    if args.dry_run:
+    target = (getattr(args, "mission_id", None) or "").strip()
+    if not target and not (args.brief or "").strip():
+        return _fail("usage", "要么给 mission_id（启动已有草稿），要么给 --brief（新建任务）")
+    if not target and args.dry_run:
         printer.data(
             {
                 "dry_run": True,
@@ -395,13 +555,19 @@ def cmd_mission_start(args: Any) -> int:
     if cfg["url"]:
         try:
             with RemoteClient(cfg) as remote:
-                ini = remote.start_mission(args)
+                ini = remote.start_existing(target) if target else remote.start_mission(args)
         except PermissionError:
             return _fail("auth_required", "凭据无效")
+        except LookupError as exc:
+            return _fail("not_found", str(exc))
+        except ConflictError as exc:
+            return _fail("conflict", str(exc))
+        except ValidationError as exc:
+            return _fail("validation", str(exc))
         except (ConnectionError, RuntimeError) as exc:
             return _fail("transient", str(exc))
         remember_mission(ini["id"])
-        printer.note(f"→ 已创建 {ini['id']}")
+        printer.note(f"→ 已启动 {ini['id']}" if target else f"→ 已创建 {ini['id']}")
         if args.wait:
             return _wait_remote(remote_cfg=cfg, mission_id=ini["id"], printer=printer)
         printer.data(_mission_brief(ini), human=_render_status(_mission_brief(ini)))
@@ -411,18 +577,22 @@ def cmd_mission_start(args: Any) -> int:
         from sortie_deck.service import MissionService, ServiceError
 
         principal = _resolve_principal(args.owner)
+        svc = MissionService(orch)
         try:
-            ini = await MissionService(orch).start_mission(
-                principal,
-                brief=args.brief,
-                title=args.title,
-                track=args.track,
-                harness=args.harness,
-            )
+            if target:
+                ini = await svc.start(principal, target)
+            else:
+                ini = await svc.start_mission(
+                    principal,
+                    brief=args.brief,
+                    title=args.title,
+                    track=args.track,
+                    harness=args.harness,
+                )
         except ServiceError as exc:
             return _fail(exc.code, exc.message)
         remember_mission(ini.id)
-        printer.note(f"→ 已创建 {ini.id}")
+        printer.note(f"→ 已启动 {ini.id}" if target else f"→ 已创建 {ini.id}")
         if not args.wait:
             # 嵌入式模式没有后台进程接管：任务跑在本进程里，进程一退就被取消，
             # 状态会停在 failed。所以这里必须等到门禁/终态；想让 start 立即返回，
@@ -432,6 +602,250 @@ def cmd_mission_start(args: Any) -> int:
                 "（远程模式可立即返回）"
             )
         return await _wait_embedded(orch, principal, ini.id, printer)
+
+    return asyncio.run(_with_orchestrator(run))
+
+
+def _remote_call(fn):
+    """统一把远程异常映射成 CLI 退出码，避免每个命令重复七行 except。"""
+    try:
+        return fn()
+    except PermissionError:
+        return _fail("auth_required", "凭据无效")
+    except LookupError as exc:
+        return _fail("not_found", str(exc))
+    except ConflictError as exc:
+        return _fail("conflict", str(exc))
+    except ValidationError as exc:
+        return _fail("validation", str(exc))
+    except (ConnectionError, RuntimeError) as exc:
+        return _fail("transient", str(exc))
+
+
+def cmd_mission_create(args: Any) -> int:
+    printer = Printer(args.json)
+    try:
+        repos = _parse_repo_spec(args.repo, args.repos_file)
+        materials = _collect_materials(args)
+    except (ValueError, FileNotFoundError) as exc:
+        return _fail("usage", str(exc))
+
+    cfg = load_config()
+    if cfg["url"]:
+        def call():
+            with RemoteClient(cfg) as remote:
+                return remote.create_mission(args, repos, materials)
+
+        result = _remote_call(call)
+        if isinstance(result, int):
+            return result
+        ini = result
+        remember_mission(ini["id"])
+        printer.note(f"→ 已创建草稿 {ini['id']}（{len(repos)} 个槽位仓库 / {len(materials)} 份材料）")
+        printer.note("→ 下一步：sortie mission bind-repos / attach，然后 sortie mission start <id>")
+        printer.data(_mission_brief(ini), human=_render_status(_mission_brief(ini)))
+        return EXIT_OK
+
+    async def run(orch):
+        from sortie_deck.service import MissionService, ServiceError
+
+        principal = _resolve_principal(args.owner)
+        try:
+            ini = await MissionService(orch).create_mission(
+                principal,
+                brief=args.brief,
+                title=args.title,
+                track=args.track,
+                harness=args.harness,
+                role_repos=repos,
+                materials=materials,
+            )
+        except ServiceError as exc:
+            return _fail(exc.code, exc.message)
+        remember_mission(ini.id)
+        printer.note(f"→ 已创建草稿 {ini.id}（{len(repos)} 个槽位仓库 / {len(materials)} 份材料）")
+        printer.note("→ 下一步：sortie mission bind-repos / attach，然后 sortie mission start <id>")
+        brief = _mission_brief(ini.model_dump(mode="json"))
+        printer.data(brief, human=_render_status(brief))
+        return EXIT_OK
+
+    return asyncio.run(_with_orchestrator(run))
+
+
+def cmd_mission_bind_repos(args: Any) -> int:
+    printer = Printer(args.json)
+    try:
+        repos = _parse_repo_spec(args.repo, args.repos_file)
+    except (ValueError, FileNotFoundError) as exc:
+        return _fail("usage", str(exc))
+    if not repos:
+        return _fail("usage", "至少给一个 --repo SLOT=URL[@BRANCH] 或 --repos-file")
+
+    cfg = load_config()
+    if cfg["url"]:
+        def call():
+            with RemoteClient(cfg) as remote:
+                target = _resolve_target(args, remote, None, printer)
+                return target, remote.bind_repos(target, repos)
+
+        result = _remote_call(call)
+        if isinstance(result, int):
+            return result
+        target, ini = result
+        printer.note(f"→ 已绑定 {sum(len(v) for v in repos.values())} 个仓库到 {target}")
+        printer.data(
+            {"mission_id": target, "role_repos": ini_meta_repos(ini)},
+            human="\n".join(f"{slot}: {', '.join(r['url'] for r in rows)}" for slot, rows in repos.items()),
+        )
+        return EXIT_OK
+
+    async def run(orch):
+        from sortie_deck.service import MissionService, ServiceError
+
+        principal = _resolve_principal(args.owner)
+        svc = MissionService(orch)
+        try:
+            target = _resolve_target(args, None, principal, printer)
+            ini = svc.bind_repos(principal, target, repos)
+        except ServiceError as exc:
+            return _fail(exc.code, exc.message)
+        printer.note(f"→ 已绑定 {sum(len(v) for v in repos.values())} 个仓库到 {target}")
+        printer.data(
+            {"mission_id": target, "role_repos": ini_meta_repos(ini.model_dump(mode="json"))},
+            human="\n".join(f"{slot}: {', '.join(r['url'] for r in rows)}" for slot, rows in repos.items()),
+        )
+        return EXIT_OK
+
+    return asyncio.run(_with_orchestrator(run))
+
+
+def ini_meta_repos(payload: dict[str, Any]) -> dict[str, Any]:
+    """从任务 payload 里取生效的 role_repos（服务端已清洗过）。"""
+    meta = payload.get("meta") if isinstance(payload, dict) else None
+    return dict((meta or {}).get("role_repos") or {})
+
+
+def cmd_mission_attach(args: Any) -> int:
+    printer = Printer(args.json)
+    try:
+        materials = _collect_materials(args)
+    except (ValueError, FileNotFoundError) as exc:
+        return _fail("usage", str(exc))
+    if not materials:
+        return _fail("usage", "至少给一个 --file 或 --content")
+
+    cfg = load_config()
+    if cfg["url"]:
+        def call():
+            with RemoteClient(cfg) as remote:
+                target = _resolve_target(args, remote, None, printer)
+                ini = remote.get(target)
+                merged = _merge_materials(ini.get("materials") or [], materials)
+                return target, remote.set_materials(target, merged)
+
+        result = _remote_call(call)
+        if isinstance(result, int):
+            return result
+        target, ini = result
+        printer.note(f"→ 已追加 {len(materials)} 份材料到 {target}")
+        printer.data(_material_names(ini), human="\n".join(_material_names(ini)))
+        return EXIT_OK
+
+    async def run(orch):
+        from sortie_deck.service import MissionService, ServiceError
+
+        principal = _resolve_principal(args.owner)
+        svc = MissionService(orch)
+        try:
+            target = _resolve_target(args, None, principal, printer)
+            ini = svc.attach_materials(principal, target, materials)
+        except ServiceError as exc:
+            return _fail(exc.code, exc.message)
+        printer.note(f"→ 已追加 {len(materials)} 份材料到 {target}")
+        rows = _material_names(ini.model_dump(mode="json"))
+        printer.data(rows, human="\n".join(rows))
+        return EXIT_OK
+
+    return asyncio.run(_with_orchestrator(run))
+
+
+def _material_names(payload: dict[str, Any]) -> list[str]:
+    rows = payload.get("materials") if isinstance(payload, dict) else None
+    return [
+        f"{m.get('name')}  kind={m.get('kind')}  pinned={m.get('pinned')}"
+        for m in (rows or [])
+    ]
+
+
+def cmd_forge_list(args: Any) -> int:
+    printer = Printer(args.json)
+    cfg = load_config()
+    if cfg["url"]:
+        def call():
+            with RemoteClient(cfg) as remote:
+                target = _resolve_target(args, remote, None, printer)
+                return remote.forge_drafts(target)
+
+        result = _remote_call(call)
+        if isinstance(result, int):
+            return result
+        rows = result
+        if args.json:
+            printer.data(rows)
+        elif not rows:
+            print("没有待审的角色草稿")
+        else:
+            for row in rows:
+                print(f"{row['id']}  {row.get('role_key')}  {row.get('title')}")
+        return EXIT_OK
+
+    async def run(orch):
+        from sortie_deck.service import MissionService, ServiceError
+
+        principal = _resolve_principal(args.owner)
+        try:
+            target = _resolve_target(args, None, principal, printer)
+            rows = MissionService(orch).forge_drafts(principal, target)
+        except ServiceError as exc:
+            return _fail(exc.code, exc.message)
+        if args.json:
+            printer.data(rows)
+        elif not rows:
+            print("没有待审的角色草稿")
+        else:
+            for row in rows:
+                print(f"{row['draft_id']}  {row.get('role')}  {row.get('title')}")
+        return EXIT_OK
+
+    return asyncio.run(_with_orchestrator(run))
+
+
+def cmd_forge_approve(args: Any) -> int:
+    printer = Printer(args.json)
+    cfg = load_config()
+    if cfg["url"]:
+        def call():
+            with RemoteClient(cfg) as remote:
+                return remote.approve_forge_draft(args.draft_id, publish=args.publish)
+
+        result = _remote_call(call)
+        if isinstance(result, int):
+            return result
+        printer.data(result, human=f"已审批 {args.draft_id}（publish={args.publish}）")
+        return EXIT_OK
+
+    async def run(orch):
+        from sortie_deck.service import MissionService, ServiceError
+
+        principal = _resolve_principal(args.owner)
+        try:
+            result = MissionService(orch).approve_forge_draft(
+                principal, args.draft_id, publish_agent=args.publish
+            )
+        except ServiceError as exc:
+            return _fail(exc.code, exc.message)
+        printer.data(result, human=f"已审批 {args.draft_id}（publish={args.publish}）")
+        return EXIT_OK
 
     return asyncio.run(_with_orchestrator(run))
 

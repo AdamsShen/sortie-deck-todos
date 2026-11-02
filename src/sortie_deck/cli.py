@@ -228,7 +228,8 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("logout", help="删除本地保存的凭据")
 
     mission = sub.add_parser(
-        "mission", help="任务操作：start / status / hitl / artifacts / watch / list"
+        "mission",
+        help="任务操作：start / create / bind-repos / attach / forge / status / hitl / artifacts / watch / list",
     )
     mission_sub = mission.add_subparsers(dest="mission_cmd", required=True)
 
@@ -238,8 +239,29 @@ def main(argv: list[str] | None = None) -> None:
         p.add_argument("--json", action="store_true", help="stdout 只输出 JSON")
         p.add_argument("--owner", default=None, help="嵌入式模式下的操作账号（默认第一个 admin）")
 
-    m_start = mission_sub.add_parser("start", help="建任务 + 确认航线 + 启动")
-    m_start.add_argument("--brief", required=True, help="任务简报 / 需求描述")
+    def _repo_opts(p) -> None:
+        p.add_argument(
+            "--repo",
+            action="append",
+            default=[],
+            metavar="SLOT=URL[@BRANCH]",
+            help="绑仓库，可重复；slot 取 product/eng/qa/deploy",
+        )
+        p.add_argument("--repos-file", default=None, help="仓库清单 JSON（批量，形如 role_repos）")
+
+    def _material_opts(p) -> None:
+        p.add_argument("--file", action="append", default=[], help="材料文件路径，可重复")
+        p.add_argument("--content", default=None, help="内联文本材料内容（配 --name）")
+        p.add_argument("--name", default=None, help="内联材料名字（配 --content）")
+        p.add_argument("--kind", default="other", help="prd / plan / design / data / other")
+        p.add_argument("--pinned", action="store_true", help="进每个阶段的提示词")
+        p.add_argument("--max-bytes", type=int, default=1_000_000, help="单个材料读取上限")
+
+    m_start = mission_sub.add_parser(
+        "start", help="建任务并启动；给了 mission_id 则启动已有草稿（不传 --brief）"
+    )
+    m_start.add_argument("mission_id", nargs="?", default=None, help="已有草稿 id；省略则按 --brief 新建")
+    m_start.add_argument("--brief", default=None, help="任务简报 / 需求描述（新建时必填）")
     m_start.add_argument("--title", default=None)
     m_start.add_argument(
         "--track", default=None, choices=["express", "standard", "default", "research"]
@@ -249,6 +271,35 @@ def main(argv: list[str] | None = None) -> None:
     m_start.add_argument("--json", action="store_true")
     m_start.add_argument("--dry-run", action="store_true")
     m_start.add_argument("--owner", default=None)
+
+    m_create = mission_sub.add_parser("create", help="只建任务草稿，不启动（先装配、后开跑）")
+    m_create.add_argument("--brief", required=True, help="任务简报 / 需求描述")
+    m_create.add_argument("--title", default=None)
+    m_create.add_argument(
+        "--track", default=None, choices=["express", "standard", "default", "research"]
+    )
+    m_create.add_argument("--harness", default=None, help="claude_code / codex / cursor / mock")
+    m_create.add_argument("--json", action="store_true")
+    m_create.add_argument("--owner", default=None)
+    _repo_opts(m_create)
+    _material_opts(m_create)
+
+    m_bind = mission_sub.add_parser("bind-repos", help="给未启动任务绑仓库（启动后返回 conflict）")
+    _common(m_bind)
+    _repo_opts(m_bind)
+
+    m_attach = mission_sub.add_parser("attach", help="挂材料（PRD/设计稿），pinned 进每阶段提示词")
+    _common(m_attach)
+    _material_opts(m_attach)
+
+    m_forge = mission_sub.add_parser("forge", help="建队角色草稿：list / approve")
+    forge_sub = m_forge.add_subparsers(dest="forge_cmd", required=True)
+    _common(forge_sub.add_parser("list", help="列出本任务待审的角色草稿"))
+    m_forge_ok = forge_sub.add_parser("approve", help="审批角色草稿，解除 forge_review_required")
+    m_forge_ok.add_argument("draft_id", help="草稿 id（fgd_...）")
+    m_forge_ok.add_argument("--publish", action="store_true", help="同时发布为可复用 agent")
+    m_forge_ok.add_argument("--json", action="store_true")
+    m_forge_ok.add_argument("--owner", default=None)
 
     _common(mission_sub.add_parser("status", help="查看任务状态与门禁"))
 
@@ -343,12 +394,21 @@ def main(argv: list[str] | None = None) -> None:
                 raise SystemExit(cli_mission.cmd_logout(args))
             handlers = {
                 "start": cli_mission.cmd_mission_start,
+                "create": cli_mission.cmd_mission_create,
+                "bind-repos": cli_mission.cmd_mission_bind_repos,
+                "attach": cli_mission.cmd_mission_attach,
                 "status": cli_mission.cmd_mission_status,
                 "list": cli_mission.cmd_mission_list,
                 "hitl": cli_mission.cmd_mission_hitl,
                 "artifacts": cli_mission.cmd_mission_artifacts,
                 "watch": cli_mission.cmd_mission_watch,
             }
+            if args.mission_cmd == "forge":
+                forge_handlers = {
+                    "list": cli_mission.cmd_forge_list,
+                    "approve": cli_mission.cmd_forge_approve,
+                }
+                raise SystemExit(forge_handlers[args.forge_cmd](args))
             raise SystemExit(handlers[args.mission_cmd](args))
         if args.cmd == "api":
             import uvicorn
