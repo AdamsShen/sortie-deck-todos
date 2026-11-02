@@ -287,7 +287,21 @@ USER sortie
 
 注意：**只有 api 与 worker 拆开时才只需要给 worker 装**；如果单容器跑（`TDT_RUN_WORKER=true` 在 api 里），这一个容器就同时是 api 和 worker，harness 二进制必须装进 api 镜像。
 
-`/srv/sortie/.env`（对照本机 `.env` 的差异）：
+**环境文件双轨**（本地 newapi / 云端 DeepSeek）：
+
+| 文件 | 用途 | 模型来源 |
+|---|---|---|
+| `.env` | 本机开发 | 内网 `newapi.zbjt.com:3000`（OpenAI + Anthropic 两个端点） |
+| `.env.cloud` | 云端部署 | DeepSeek 官方（`api.deepseek.com/v1` + `api.deepseek.com/anthropic`） |
+
+两份都含真实密钥，`.gitignore` 已忽略（`.env` / `.env.cloud`）。compose 通过 `SORTIE_ENV_FILE` 选择：
+
+```bash
+docker compose up -d                                  # 本地，读 .env
+SORTIE_ENV_FILE=.env.cloud docker compose up -d       # 云端，读 .env.cloud
+```
+
+`/srv/sortie/.env.cloud` 关键项：
 
 ```ini
 TDT_ENV=production
@@ -312,17 +326,21 @@ TDT_WEKNORA_MEMORY_KB_ID=<新 sortie-memory id>
 TDT_WEKNORA_RETRIEVAL_MODE=hybrid
 TDT_HARNESS_RAG_TIMEOUT_SECONDS=15
 
-# LLM（与 4.2 的 KnowledgeQA 配置保持一致或不同端点均可）
-TDT_LLM_BASE_URL=<可达的 /v1 地址>
-TDT_LLM_API_KEY=<key>
-TDT_LLM_MODEL=<model>
+# 编排层模型（航线规划 / 房间 / PRD / 记忆总结）
+TDT_LLM_BASE_URL=https://api.deepseek.com/v1
+TDT_LLM_API_KEY=<DeepSeek key>
+TDT_LLM_MODEL=deepseek-flash
 
-# harness
+# harness（Claude Code 走 Anthropic 兼容端点）
 TDT_DEFAULT_HARNESS=claude_code
 TDT_HARNESS_FALLBACK=true
+ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
+ANTHROPIC_API_KEY=<同一个 DeepSeek key>
+ANTHROPIC_MODEL=deepseek-flash
+ANTHROPIC_SMALL_FAST_MODEL=deepseek-flash
 ```
 
-compose：api 用精简镜像、worker 用 `runtime-harness`；两者共享 `sortie-data` 卷；`networks: [sortie-net]`（`external: true`）。起服务后 `curl 127.0.0.1:8787/api/health`。
+compose：api 与 worker 都用 `runtime-harness`（同一个 `sortie-deck:local` 镜像），共享 `sortie-data` 卷；`networks: [sortie-net]`（`external: true`）。起服务后 `curl 127.0.0.1:8787/api/health`。
 
 ### 4.5 阶段 4：Caddy 反代 + HTTPS
 
