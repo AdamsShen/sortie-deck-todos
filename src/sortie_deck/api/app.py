@@ -3030,6 +3030,13 @@ async def get_org_policy(_user: PublicUser = Depends(require_user)) -> dict[str,
 # 前端产物目录：默认按仓库布局推导，容器里用 TDT_WEB_DIST 显式指定
 WEB_DIST = settings.resolved_web_dist
 if WEB_DIST.exists():
+    # slim 镜像里没有 /etc/mime.types，mimetypes 不认识 webp/avif，
+    # StaticFiles 会回 application/octet-stream，浏览器可能不按图片渲染。
+    import mimetypes as _mimetypes
+
+    _mimetypes.add_type("image/webp", ".webp")
+    _mimetypes.add_type("image/avif", ".avif")
+
     app.mount("/assets", StaticFiles(directory=WEB_DIST / "assets"), name="assets")
 
     # public/ 目录（Vite 原样拷贝到 dist 根）里的图片与音频：开发态由 Vite 直接服务，
