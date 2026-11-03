@@ -2,10 +2,43 @@
 
 from __future__ import annotations
 
+import os
 import platform
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
+
+
+class RevealUnavailable(RuntimeError):
+    """运行服务的环境没有桌面文件管理器，无法在 OS 里打开路径。
+
+    典型场景：Sortie Deck 部署在云端容器（无 DISPLAY、无 xdg-open），
+    用户却在浏览器里点「打开 Worktree」。此时不存在可打开的窗口，
+    由调用方降级为「把路径回传给前端复制」而不是抛 500。
+    """
+
+    def __init__(self, path: Path, reason: str) -> None:
+        super().__init__(reason)
+        self.path = path
+        self.reason = reason
+
+
+def reveal_unavailable_reason() -> str:
+    """返回当前环境无法在 OS 中打开路径的原因；能力可用时返回空串。
+
+    浏览器与 API 进程可能不在同一台机器上（云端部署时 API 跑在容器里），
+    因此以服务端自身环境判断，而不是以请求来源判断。
+    """
+    system = platform.system()
+    if system in {"Darwin", "Windows"}:
+        return ""
+    # Linux 需要图形会话与 xdg-open 同时具备，否则 Popen 只会抛 FileNotFoundError
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        return "server has no graphical session (DISPLAY/WAYLAND_DISPLAY unset)"
+    if shutil.which("xdg-open") is None:
+        return "xdg-open is not installed on server"
+    return ""
 
 _SKIP_DIRS = {
     ".git",
@@ -125,22 +158,33 @@ def is_under_allowed(target: Path, roots: list[Path]) -> bool:
 
 
 def reveal_in_os(path: Path) -> None:
-    """Open path in the system file manager (folder) or reveal file."""
+    """Open path in the system file manager (folder) or reveal file.
+
+    环境不具备该能力时抛 RevealUnavailable（而非 FileNotFoundError），
+    便于 API 层区分「环境不支持」与「真故障」，并给前端可读的降级提示。
+    """
     target = path.resolve()
+    reason = reveal_unavailable_reason()
+    if reason:
+        raise RevealUnavailable(target, reason)
     system = platform.system()
-    if system == "Darwin":
-        if target.is_file():
-            subprocess.Popen(["open", "-R", str(target)])  # noqa: S603
+    try:
+        if system == "Darwin":
+            if target.is_file():
+                subprocess.Popen(["open", "-R", str(target)])  # noqa: S603
+            else:
+                subprocess.Popen(["open", str(target)])  # noqa: S603
+        elif system == "Windows":
+            if target.is_file():
+                subprocess.Popen(["explorer", "/select,", str(target)])  # noqa: S603
+            else:
+                subprocess.Popen(["explorer", str(target)])  # noqa: S603
         else:
-            subprocess.Popen(["open", str(target)])  # noqa: S603
-    elif system == "Windows":
-        if target.is_file():
-            subprocess.Popen(["explorer", "/select,", str(target)])  # noqa: S603
-        else:
-            subprocess.Popen(["explorer", str(target)])  # noqa: S603
-    else:
-        folder = target if target.is_dir() else target.parent
-        subprocess.Popen(["xdg-open", str(folder)])  # noqa: S603
+            folder = target if target.is_dir() else target.parent
+            subprocess.Popen(["xdg-open", str(folder)])  # noqa: S603
+    except OSError as exc:
+        # 兜底：环境判断通过但拉起进程仍失败（权限、被裁剪的镜像等）
+        raise RevealUnavailable(target, str(exc)) from exc
 
 
 def mission_workspace(

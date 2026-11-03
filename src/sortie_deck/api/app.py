@@ -2695,10 +2695,19 @@ class RevealPathBody(BaseModel):
 
 @app.post("/api/system/reveal")
 async def reveal_path(body: RevealPathBody, _user: PublicUser = Depends(require_user)) -> dict[str, Any]:
-    """Open a local folder/file in the OS file manager (dev workbench helper)."""
+    """Open a local folder/file in the OS file manager (dev workbench helper).
+
+    返回 available=false 表示服务端没有桌面环境（云端容器部署的常态），
+    前端据此把「打开目录」降级为「展示并复制路径」，不再显示红色报错。
+    """
     from pathlib import Path
 
-    from sortie_deck.workspace import allowed_roots, is_under_allowed, reveal_in_os
+    from sortie_deck.workspace import (
+        RevealUnavailable,
+        allowed_roots,
+        is_under_allowed,
+        reveal_in_os,
+    )
 
     raw = (body.path or "").strip()
     if not raw:
@@ -2710,6 +2719,11 @@ async def reveal_path(body: RevealPathBody, _user: PublicUser = Depends(require_
         # Allow revealing soon-to-exist dirs under allowed roots
         if not is_under_allowed(target, roots):
             raise HTTPException(403, "path outside allowed roots")
+
+    def _unavailable(exc: RevealUnavailable, shown: Path, **extra: Any) -> dict[str, Any]:
+        # 无桌面环境不是服务端故障：返回 200 + 明确原因，交给前端做降级提示
+        return {"ok": False, "available": False, "path": str(shown), "reason": exc.reason, **extra}
+
     if not target.exists():
         # Create empty mission dirs so reveal still works early in a run
         try:
@@ -2717,16 +2731,21 @@ async def reveal_path(body: RevealPathBody, _user: PublicUser = Depends(require_
                 target.parent.mkdir(parents=True, exist_ok=True)
                 if not is_under_allowed(target.parent, roots):
                     raise HTTPException(403, "path outside allowed roots")
-                reveal_in_os(target.parent)
-                return {"ok": True, "path": str(target.parent), "created": False, "missing": True}
+                try:
+                    reveal_in_os(target.parent)
+                except RevealUnavailable as exc:
+                    return _unavailable(exc, target.parent, created=False, missing=True)
+                return {"ok": True, "available": True, "path": str(target.parent), "created": False, "missing": True}
             target.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             raise HTTPException(400, f"cannot create path: {exc}") from exc
     try:
         reveal_in_os(target)
+    except RevealUnavailable as exc:
+        return _unavailable(exc, target)
     except OSError as exc:
         raise HTTPException(500, f"reveal failed: {exc}") from exc
-    return {"ok": True, "path": str(target.resolve())}
+    return {"ok": True, "available": True, "path": str(target.resolve())}
 
 
 async def _mission_event_stream(o: Any, initiative_id: str, *, is_owner: bool):
