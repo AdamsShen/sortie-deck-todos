@@ -14,13 +14,67 @@ from the pipeline state). This executor:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import re
+import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from sortie_deck.models import CODING_ROLE_VALUES, ENG_BUILD_STAGES, StageContext, StageResult
+
+
+async def _emit_progress(ctx: StageContext, payload: dict[str, Any]) -> None:
+    """把执行器内的实时进度交给编排层（→ stage_progress SSE）。
+
+    ``progress_cb`` 由 graph 注入；直连单测/CLI 调用没有回调，静默跳过。
+    进度是观测增强项，回调失败绝不能反过来打断阶段。
+    """
+    cb = getattr(ctx, "progress_cb", None)
+    if cb is None:
+        return
+    try:
+        result = cb(
+            {
+                **payload,
+                "stage": ctx.stage,
+                "role": str(getattr(ctx.role, "value", ctx.role)),
+            }
+        )
+        if inspect.isawaitable(result):
+            await result
+    except Exception:  # noqa: BLE001 — 观测失败不影响执行
+        logger.debug("阶段进度回调失败: stage=%s phase=%s", ctx.stage, payload.get("phase"))
+
+
+# 自审最小可用轮预算 / 阶段收尾预留：低于这个额度就别审了，纯浪费阶段预算
+_REVIEW_MIN_ROUND_SECONDS = 90.0
+_REVIEW_TAIL_RESERVE_SECONDS = 60.0
+
+
+def _review_timeout_within_budget(
+    ctx: StageContext, started: float, timeout: float, rounds: int
+) -> float | None:
+    """把单轮自审超时压进阶段剩余预算；压不下来返回 None（整段跳过自审）。
+
+    实测（2026-11-03 HK，claude_code）：主体回合 324s + 第 1 轮超时 305s +
+    第 2 轮跑到一半，把 900s 阶段预算吃光，阶段被判超时失败——已经产出的
+    代码只能走产物回收。自审是增强项，绝不能反过来打死阶段。
+    """
+    total = float(getattr(ctx, "stage_timeout_seconds", 0.0) or 0.0)
+    # started<=0：老调用方没传起点，无法计算已耗时，不干预
+    if total <= 0 or timeout <= 0 or started <= 0:
+        return timeout
+    remaining = total - (time.monotonic() - started) - _REVIEW_TAIL_RESERVE_SECONDS
+    if remaining <= _REVIEW_MIN_ROUND_SECONDS:
+        return None
+    per_round = min(timeout, remaining / max(1, rounds))
+    # 压到自适应值一半以下：这一轮大概率还是超时，不如跳过把预算留给阶段收尾
+    if per_round < max(_REVIEW_MIN_ROUND_SECONDS, timeout * 0.5):
+        return None
+    return per_round
 
 _TOOLKIT_META_PROTOCOL = """Toolkit meta-tool (in-loop capability requests):
 If you are missing a capability (tool / MCP / skill), you may request it from the
@@ -550,15 +604,33 @@ class HarnessStageExecutor:
         probe = ProbeStatus(status="missing", detail=f"harness `{harness}` is not registered")
         if registry.has(harness):
             probe = registry.probe(harness)
-        if not probe.ok:
-            if settings.harness_fallback:
-                return await self._fallback_run(ctx, harness, probe, host=host)
-            return StageResult(
-                status="fail",
-                message=f"harness `{harness}` unavailable: {probe.detail}",
-                meta={"harness": harness, "probe": probe.as_dict(), "fallback": False},
-            )
-        return await self._run_harness(ctx, harness, host=host)
+        # stage_start 由 graph 的阶段入口统一发（覆盖 harness / mock / coding CLI），
+        # 这里只补阶段结束状态，避免同一阶段发两条开始事件。
+        try:
+            if not probe.ok:
+                if settings.harness_fallback:
+                    result = await self._fallback_run(ctx, harness, probe, host=host)
+                else:
+                    result = StageResult(
+                        status="fail",
+                        message=f"harness `{harness}` unavailable: {probe.detail}",
+                        meta={"harness": harness, "probe": probe.as_dict(), "fallback": False},
+                    )
+            else:
+                result = await self._run_harness(ctx, harness, host=host)
+        except BaseException:
+            await _emit_progress(ctx, {"phase": "stage_end", "harness": harness, "status": "error"})
+            raise
+        await _emit_progress(
+            ctx,
+            {
+                "phase": "stage_end",
+                "harness": harness,
+                "status": result.status,
+                "message": str(result.message or "")[:200],
+            },
+        )
+        return result
 
     async def run_session(self, ctx: StageContext, host: Any) -> StageResult:
         """会话入口：给真实 harness 的 agent loop 补上小群讨论能力。
@@ -602,6 +674,8 @@ class HarnessStageExecutor:
         )
         from sortie_deck.settings import settings
 
+        # 自审预算从「阶段开始」起算，主体回合耗时必须先扣掉
+        stage_started = time.monotonic()
         # 目录优先取编排器注入值（ctx），只有旧调用方/直接单测才回退全局 settings：
         # 否则测试与多实例场景会把任务沙盒写进进程级真实数据目录
         data_dir = Path(ctx.data_dir) if ctx.data_dir else settings.data_dir
@@ -787,7 +861,8 @@ class HarnessStageExecutor:
         from sortie_deck.plugins.coding import _git_diff
         from sortie_deck.review_lens import load_review_config, stage_in_review_scope
 
-        review_cfg = load_review_config()
+        # 超时按 harness 自适应：各 CLI 的 agent loop 单回合耗时差一个量级
+        review_cfg = load_review_config(harness)
         wants_review = bool(review_cfg.enabled) and stage_in_review_scope(ctx.stage, review_cfg)
         needs_diff = "diff.patch" in _REQUIRED.get(ctx.stage, [])
         repo_root = (Path(ctx.data_dir) if ctx.data_dir else settings.data_dir).parent
@@ -809,6 +884,7 @@ class HarnessStageExecutor:
                 data_dir=data_dir,
                 workspace=workspace,
                 cfg=review_cfg,
+                started=stage_started,
             )
             # 自审轮次可能就地修过文件：diff.patch 必须反映最终状态，
             # 不能沿用自审开始前的快照（否则 QA 看到的是旧改动）
@@ -959,12 +1035,13 @@ class HarnessStageExecutor:
         data_dir: Path,
         workspace: Path,
         cfg: Any,
+        started: float = 0.0,
     ) -> Any:
         """编码/自测阶段的收尾自审：同一会话跑 N 轮，返回 ReviewLog。
 
-        跳过条件是「审了也没意义」的场景（mock harness / 首轮就失败），
-        跳过也会留一条 ``skipped`` 记录，避免日志里出现「这一阶段没有 review」
-        却不知道是没开还是被跳过。
+        跳过条件是「审了也没意义」的场景（mock harness / 首轮就失败 / 阶段剩余
+        预算不足），跳过也会留一条 ``skipped`` 记录，避免日志里出现
+        「这一阶段没有 review」却不知道是没开还是被跳过。
         """
         from sortie_deck.review_lens import (
             build_scope,
@@ -1002,6 +1079,49 @@ class HarnessStageExecutor:
                 data_dir=data_dir,
             )
 
+        # 预算压缩：主体回合可能已经吃掉大半阶段预算，自审必须给收尾留余量。
+        # 压不下来就整段跳过——不能让增强项把阶段顶成超时失败。
+        original_timeout = float(getattr(cfg, "timeout", 0.0) or 0.0)
+        budgeted = _review_timeout_within_budget(ctx, started, original_timeout, cfg.rounds)
+        if budgeted is None:
+            logger.warning(
+                "自审跳过（阶段剩余预算不足）: initiative=%s stage=%s elapsed=%.0fs budget=%.0fs",
+                ctx.initiative_id,
+                ctx.stage,
+                0.0 if not started else time.monotonic() - started,
+                float(getattr(ctx, "stage_timeout_seconds", 0.0) or 0.0),
+            )
+            await _emit_progress(
+                ctx,
+                {
+                    "phase": "review_skip",
+                    "total": cfg.rounds,
+                    "status": "skipped",
+                    "title": "阶段剩余预算不足，跳过自审",
+                },
+            )
+            return build_skipped_log(
+                ctx,
+                scope,
+                reason="阶段剩余预算不足，跳过自审",
+                harness=harness,
+                data_dir=data_dir,
+            )
+        if budgeted != original_timeout:
+            cfg = replace(cfg, timeout=budgeted)
+            logger.info(
+                "自审单轮超时按阶段预算压缩: initiative=%s stage=%s %.0fs -> %.0fs",
+                ctx.initiative_id,
+                ctx.stage,
+                original_timeout,
+                budgeted,
+            )
+        # 首轮实现 → 自审的切换点：前端据此把转圈从「实现中」切到「自审第 1/N 轮」
+        await _emit_progress(
+            ctx,
+            {"phase": "review_begin", "total": cfg.rounds, "timeout": cfg.timeout},
+        )
+
         async def send(prompt: str) -> Any:
             # 续接同一 provider 会话：第 2..N 轮必须看到首轮实现上下文
             return await _send_turn(
@@ -1017,6 +1137,8 @@ class HarnessStageExecutor:
             harness=harness,
             session_id=session.native_id or session.id,
             data_dir=data_dir,
+            on_progress=lambda payload: _emit_progress(ctx, payload),
+            circuit_breaker=bool(getattr(cfg, "circuit_breaker", True)),
         )
 
     async def _maybe_consult_subroom(

@@ -1460,6 +1460,29 @@ def build_graph_from_template(
         """
         stage_cfg = stage_by_name.get(stage, {"name": stage, "role": "product"})
         stage_role = _role_id(str(stage_cfg.get("role", "product")))
+        # 阶段入口立刻通知前端（harness / mock / coding CLI 共用）：
+        # 只靠 current_stage 落库要等阶段结束，运行中界面会长时间没有反馈。
+        try:
+            from sortie_deck.orchestrator import get_orchestrator
+
+            await get_orchestrator()._emit(
+                str(state.get("initiative_id") or ""),
+                {
+                    "type": "stage_progress",
+                    "initiative_id": str(state.get("initiative_id") or ""),
+                    "stage": stage,
+                    "role": stage_role.value,
+                    "phase": "stage_start",
+                    "executor": _executor_name(stage, stage_role.value, state, stage_cfg),
+                },
+            )
+        except Exception:  # noqa: BLE001 — 进度推送失败不影响阶段执行
+            logging.getLogger(__name__).debug(
+                "stage_start 推送失败: initiative=%s stage=%s",
+                state.get("initiative_id"),
+                stage,
+                exc_info=True,
+            )
         with obs.span(
             "stage.run",
             **{
@@ -1640,6 +1663,42 @@ def build_graph_from_template(
         # 执行器只做查表，避免模型编造阶段名（二次校验仍在 _apply_handoff）。
         next_targets = _handoff_next_targets(stages, stage, contract_targets)
 
+        async def _stage_progress(payload: dict[str, Any]) -> None:
+            """执行器内的实时进度 → ``stage_progress`` SSE。
+
+            阶段主回合可能跑十几分钟、自审还要多轮，只靠最终的 update 事件，
+            前端除了「出击中」看不到任何变化。这里把每个子步骤即时推出去。
+            """
+            try:
+                from sortie_deck.orchestrator import get_orchestrator
+
+                await get_orchestrator()._emit(
+                    state["initiative_id"],
+                    {
+                        "type": "stage_progress",
+                        "initiative_id": state["initiative_id"],
+                        "stage": stage,
+                        "role": role.value,
+                        **payload,
+                    },
+                )
+            except Exception:  # noqa: BLE001 — 进度推送失败不能影响阶段执行
+                logging.getLogger(__name__).debug(
+                    "stage_progress 推送失败: initiative=%s stage=%s",
+                    state.get("initiative_id"),
+                    stage,
+                    exc_info=True,
+                )
+
+        from sortie_deck.settings import settings as _settings
+
+        # 注入配置优先：不同实例（含单测）各用各的超时，不读进程级全局值
+        timeout = float(
+            getattr(app_cfg, "stage_timeout_seconds", None)
+            or getattr(_settings, "stage_timeout_seconds", 1800)
+            or 1800
+        )
+
         ctx = StageContext(
             initiative_id=state["initiative_id"],
             thread_id=state["thread_id"],
@@ -1671,6 +1730,10 @@ def build_graph_from_template(
             # 编排器配置注入：执行器据此定位任务沙盒，不再读进程级全局 settings
             data_dir=str(getattr(app_cfg, "data_dir", "") or ""),
             worktrees_dir=str(getattr(app_cfg, "worktrees_dir", "") or ""),
+            # 阶段内实时进度（起止 / 自审轮次）经此回调推 SSE
+            progress_cb=_stage_progress,
+            # 自审必须在这条总预算内收尾，不能反过来把阶段顶成超时
+            stage_timeout_seconds=timeout,
         )
 
         # Session-capable executors get a host so they can pull a sub-room
@@ -1680,15 +1743,6 @@ def build_graph_from_template(
 
         async def _execute() -> StageResult:
             return await run_executor(executor, ctx, session_host)
-
-        from sortie_deck.settings import settings as _settings
-
-        # 注入配置优先：不同实例（含单测）各用各的超时，不读进程级全局值
-        timeout = float(
-            getattr(app_cfg, "stage_timeout_seconds", None)
-            or getattr(_settings, "stage_timeout_seconds", 1800)
-            or 1800
-        )
 
         async def _execute_with_timeout() -> StageResult:
             try:

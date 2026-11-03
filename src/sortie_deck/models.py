@@ -402,6 +402,12 @@ class StageContext(BaseModel):
     # 由图按「plan 后继节点 ∩ 契约白名单 ∩ 非 HITL 节点」生成，提示词据此
     # 让模型用角色表达交接意图，执行器再把角色解析成阶段名写回 proposed_next。
     next_targets: list[dict[str, str]] = Field(default_factory=list)
+    # 实时进度回调（编排层注入）：执行器在阶段/自审轮次起止时调用，编排层转成
+    # stage_progress 事件推给 SSE。回调不可序列化，exclude 掉，避免进 checkpoint。
+    progress_cb: Any = Field(default=None, exclude=True)
+    # 本阶段总超时预算（秒，编排层注入）。执行器据此给自审压缩单轮超时，
+    # 避免「主体回合 + 多轮自审」一起撞阶段超时，把已经产出的阶段判成 fail。
+    stage_timeout_seconds: float = 0.0
 
 
 class StageResult(BaseModel):

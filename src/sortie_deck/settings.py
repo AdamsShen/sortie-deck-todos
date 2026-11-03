@@ -155,8 +155,17 @@ class Settings(BaseSettings):
     review_lens_rounds: int = 3
     # 生效档位：build（编码）/ selftest（自测）/ integrate（联调），逗号分隔
     review_lens_stages: str = "build,selftest"
-    # 单轮审查超时（秒）；超时只把该轮标 failed，不打断阶段
-    review_lens_timeout_seconds: float = 300.0
+    # 单轮审查超时（秒）；0 = 按 harness 自适应（见 review_lens_timeout_by_harness）。
+    # 超时只把该轮标 failed，不打断阶段。
+    review_lens_timeout_seconds: float = 0.0
+    # 各 harness 的自适应单轮超时：`harness=秒`，逗号分隔。
+    # 编码型 agent loop 单回合实测常在 5–10 分钟（2026-11-03 HK 实测 claude_code 单回合
+    # 324s），统一 300s 会让每一轮都卡在超时线上，白等 3×5 分钟。
+    review_lens_timeout_by_harness: str = (
+        "claude_code=900,codex=900,cursor=900,opencode=900,mock=30"
+    )
+    # 自审熔断：任一轮超时后最多再补一轮，其余轮次标 skipped（不再各等一个超时窗口）
+    review_lens_circuit_breaker: bool = True
     # 仍有 blocking 发现时的处理：hitl（默认，转人工门禁）/ fail / ignore
     review_blocking_policy: str = "hitl"
     # Stage timeout for coding CLI (seconds)

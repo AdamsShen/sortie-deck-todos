@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -201,6 +202,96 @@ async def test_run_review_lenses_survives_timeout(tmp_path):
     )
     assert log.lenses[0].status == LensStatus.FAILED
     assert "timeout" in log.lenses[0].error
+
+
+def test_load_review_config_adapts_timeout_by_harness(monkeypatch):
+    """单轮超时必须跟着 harness 走：claude_code 的回合远长于 mock。"""
+    from sortie_deck.review_lens import load_review_config
+    from sortie_deck.settings import settings
+
+    monkeypatch.setattr(settings, "review_lens_timeout_seconds", 0.0)
+    monkeypatch.setattr(settings, "review_lens_timeout_by_harness", "claude_code=900,mock=30")
+    assert load_review_config("claude_code").timeout == 900
+    assert load_review_config("MOCK").timeout == 30
+    assert load_review_config("unknown").timeout == 600  # 兜底值
+    assert load_review_config().timeout == 600
+
+    # 显式配置优先于 harness 自适应
+    monkeypatch.setattr(settings, "review_lens_timeout_seconds", 120.0)
+    assert load_review_config("claude_code").timeout == 120
+
+
+def test_review_timeout_budget_respects_stage_deadline(tmp_path):
+    """自审不能吃掉阶段预算：剩余额度不够就整段跳过。"""
+    from sortie_deck.harness_providers.executor import _review_timeout_within_budget
+
+    ctx = _ctx(tmp_path)
+    # 阶段 900s，主体已跑 324s：900-324-60=516，516/3=172 < 自适应值一半 → 跳过
+    ctx_900 = ctx.model_copy(update={"stage_timeout_seconds": 900})
+    assert _review_timeout_within_budget(ctx_900, time.monotonic() - 324, 900, 3) is None
+
+    # 阶段 3600s：剩余 3216s，均摊 1072s，自适应 900s 原样保留
+    ctx_3600 = ctx.model_copy(update={"stage_timeout_seconds": 3600})
+    assert _review_timeout_within_budget(ctx_3600, time.monotonic() - 324, 900, 3) == 900
+
+    # 没有注入阶段预算（旧调用方/单测）时不干预
+    ctx_none = ctx.model_copy(update={"stage_timeout_seconds": 0})
+    assert _review_timeout_within_budget(ctx_none, 0, 900, 3) == 900
+
+
+async def test_review_circuit_breaker_skips_remaining_rounds(tmp_path):
+    """首轮超时后再给一轮，第二次超时即熔断，不再各等一个超时窗口。"""
+    ctx = _ctx(tmp_path)
+    scope = ReviewScope(stage="eng_web", role="eng_web")
+    calls: list[str] = []
+
+    async def slow(prompt: str) -> HarnessReply:
+        calls.append(prompt)
+        await asyncio.sleep(0.3)
+        return _reply(_review_text())
+
+    log = await run_review_lenses(
+        ctx, scope, slow, rounds=3, timeout=0.01, data_dir=tmp_path / "data"
+    )
+
+    assert len(calls) == 2  # 第三轮没有真正发出去
+    assert [run.status for run in log.lenses] == [
+        LensStatus.FAILED,
+        LensStatus.FAILED,
+        LensStatus.SKIPPED,
+    ]
+    assert "熔断" in log.lenses[2].summary
+
+
+async def test_review_progress_events_cover_each_round(tmp_path):
+    """每轮起止都要有进度事件，前端才能显示「第 N/M 轮自审中」。"""
+    ctx = _ctx(tmp_path)
+    scope = ReviewScope(stage="eng_web", role="eng_web")
+    events: list[dict[str, Any]] = []
+
+    async def send(_prompt: str) -> HarnessReply:
+        return _reply(_review_text("passed"))
+
+    await run_review_lenses(
+        ctx,
+        scope,
+        send,
+        rounds=2,
+        timeout=5,
+        data_dir=tmp_path / "data",
+        on_progress=events.append,
+    )
+
+    assert [event["phase"] for event in events] == [
+        "review_start",
+        "review_end",
+        "review_start",
+        "review_end",
+    ]
+    assert events[0]["round"] == 1
+    assert events[0]["total"] == 2
+    assert events[0]["lens"] == "correctness"
+    assert events[-1]["status"] == "passed"
 
 
 def test_static_review_is_marked_prompted_not_passed(tmp_path):

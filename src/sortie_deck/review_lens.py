@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import re
@@ -132,10 +133,37 @@ class ReviewConfig:
     stages: frozenset[str]
     timeout: float
     blocking_policy: str
+    circuit_breaker: bool = True
 
 
-def load_review_config() -> ReviewConfig:
-    """读取自审配置；settings 缺字段时按「关闭」处理（单测/旧配置安全）。"""
+# 未命中 harness 映射时的兜底超时：编码型 agent loop 单回合常见 5–10 分钟，
+# 300s 会让每轮都撞线（见 settings.review_lens_timeout_by_harness 注释）。
+_DEFAULT_LENS_TIMEOUT = 600.0
+
+
+def _timeout_by_harness(raw: Any) -> dict[str, float]:
+    """解析 `claude_code=900,codex=900` 形式的映射，非法项直接丢弃。"""
+    mapping: dict[str, float] = {}
+    for part in str(raw or "").split(","):
+        name, _, value = part.partition("=")
+        key = name.strip().lower()
+        if not key:
+            continue
+        try:
+            seconds = float(value.strip())
+        except (TypeError, ValueError):
+            continue
+        if seconds > 0:
+            mapping[key] = seconds
+    return mapping
+
+
+def load_review_config(harness: str | None = None) -> ReviewConfig:
+    """读取自审配置；settings 缺字段时按「关闭」处理（单测/旧配置安全）。
+
+    超时优先级：显式 ``review_lens_timeout_seconds`` > 该 harness 的自适应值 >
+    兜底 600s。显式值写 0 表示「交给 harness 自适应」。
+    """
     from sortie_deck.settings import settings
 
     enabled = bool(getattr(settings, "review_lenses_enabled", False))
@@ -146,9 +174,15 @@ def load_review_config() -> ReviewConfig:
     raw_stages = str(getattr(settings, "review_lens_stages", "build,selftest") or "")
     stages = frozenset(part.strip().lower() for part in raw_stages.split(",") if part.strip())
     try:
-        timeout = float(getattr(settings, "review_lens_timeout_seconds", 300.0) or 300.0)
+        configured = float(getattr(settings, "review_lens_timeout_seconds", 0.0) or 0.0)
     except (TypeError, ValueError):
-        timeout = 300.0
+        configured = 0.0
+    if configured > 0:
+        timeout = configured
+    else:
+        mapping = _timeout_by_harness(getattr(settings, "review_lens_timeout_by_harness", ""))
+        key = str(harness or "").strip().lower()
+        timeout = mapping.get(key, _DEFAULT_LENS_TIMEOUT)
     policy = str(getattr(settings, "review_blocking_policy", "hitl") or "hitl").strip().lower()
     if policy not in {"hitl", "fail", "ignore"}:
         policy = "hitl"
@@ -158,6 +192,7 @@ def load_review_config() -> ReviewConfig:
         stages=stages,
         timeout=max(10.0, timeout),
         blocking_policy=policy,
+        circuit_breaker=bool(getattr(settings, "review_lens_circuit_breaker", True)),
     )
 
 
@@ -537,6 +572,20 @@ def _append_run_log(log: ReviewLog, run: LensRun) -> None:
 # --- 执行 ---------------------------------------------------------------------
 
 SendTurn = Callable[[str], Awaitable[Any]]
+# 进度回调：同步或异步均可，异常一律吞掉（进度不能反过来失败掉阶段）
+ProgressFn = Callable[[dict[str, Any]], Any]
+
+
+async def _notify_progress(fn: ProgressFn | None, payload: dict[str, Any]) -> None:
+    """把一轮进度交给编排层；回调缺失/抛错都只告警，不影响自审。"""
+    if fn is None:
+        return
+    try:
+        result = fn(payload)
+        if inspect.isawaitable(result):
+            await result
+    except Exception:  # noqa: BLE001 — 进度是观测增强项
+        logger.warning("自审进度回调失败: %s", payload.get("phase"), exc_info=True)
 
 
 async def run_review_lenses(
@@ -549,6 +598,8 @@ async def run_review_lenses(
     harness: str = "",
     session_id: str = "",
     data_dir: Path | None = None,
+    on_progress: ProgressFn | None = None,
+    circuit_breaker: bool = True,
 ) -> ReviewLog:
     """在同一会话上依次跑 N 轮审查，返回汇总日志。
 
@@ -574,7 +625,36 @@ async def run_review_lenses(
         log.log_lines_path = str(log_dir / "review.jsonl")
 
     runs: list[LensRun] = []
+    # 熔断额度：任意一轮超时后仍允许「再等一轮」，第二次超时即跳过剩余视角。
+    # 三个视角各超时一次 = 15 分钟纯等待，UI 上完全看不出在干什么。
+    timeout_credits = 1
+    skip_reason = ""
     for index, lens in enumerate(lenses, start=1):
+        if skip_reason:
+            skipped = LensRun(
+                lens=lens.name,
+                title=lens.title,
+                round=index,
+                status=LensStatus.SKIPPED,
+                summary=skip_reason,
+                started_at=utc_now().isoformat(),
+                ended_at=utc_now().isoformat(),
+            )
+            runs.append(skipped)
+            _append_run_log(log, skipped)
+            await _notify_progress(
+                on_progress,
+                {
+                    "phase": "review_skip",
+                    "round": index,
+                    "total": len(lenses),
+                    "lens": lens.name,
+                    "title": lens.title,
+                    "status": skipped.status.value,
+                },
+            )
+            continue
+
         prompt = build_lens_prompt(lens, index, len(lenses), scope, runs)
         run = LensRun(
             lens=lens.name,
@@ -584,17 +664,34 @@ async def run_review_lenses(
             started_at=utc_now().isoformat(),
         )
         run_started = time.monotonic()
+        await _notify_progress(
+            on_progress,
+            {
+                "phase": "review_start",
+                "round": index,
+                "total": len(lenses),
+                "lens": lens.name,
+                "title": lens.title,
+                "timeout": timeout,
+            },
+        )
         try:
             reply = await asyncio.wait_for(send_turn(prompt), timeout=timeout)
         except TimeoutError:
             run.error = f"timeout after {timeout:.0f}s"
             logger.warning(
-                "自审轮次超时: initiative=%s stage=%s lens=%s timeout=%.0fs",
+                "自审轮次超时: initiative=%s stage=%s lens=%s timeout=%.0fs credits=%d",
                 ctx.initiative_id,
                 ctx.stage,
                 lens.name,
                 timeout,
+                timeout_credits,
             )
+            if circuit_breaker:
+                if timeout_credits <= 0:
+                    skip_reason = f"熔断：第 {index} 轮超时，跳过剩余审查"
+                else:
+                    timeout_credits -= 1
         except Exception as exc:  # noqa: BLE001 — 单轮失败不打断阶段
             run.error = str(exc)[:300]
             logger.warning(
@@ -626,6 +723,20 @@ async def run_review_lenses(
             run.status.value,
             len(run.findings),
             run.duration_ms,
+        )
+        await _notify_progress(
+            on_progress,
+            {
+                "phase": "review_end",
+                "round": index,
+                "total": len(lenses),
+                "lens": lens.name,
+                "title": lens.title,
+                "status": run.status.value,
+                "findings": len(run.findings),
+                "duration_ms": run.duration_ms,
+                "error": run.error,
+            },
         )
 
     log.lenses = runs
