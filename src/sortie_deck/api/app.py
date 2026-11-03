@@ -3032,9 +3032,30 @@ WEB_DIST = settings.resolved_web_dist
 if WEB_DIST.exists():
     app.mount("/assets", StaticFiles(directory=WEB_DIST / "assets"), name="assets")
 
+    # public/ 目录（Vite 原样拷贝到 dist 根）里的图片与音频：开发态由 Vite 直接服务，
+    # 容器里没人代劳，必须显式挂载。否则这些请求会落到文件末尾 MCP 的根挂载上，
+    # 表现为 img 返回 401、页面 logo 与内置头像全部裂图。
+    for _sub in ("audio", "avatars", "backgrounds", "brand"):
+        _sub_dir = WEB_DIST / _sub
+        if _sub_dir.is_dir():
+            app.mount(f"/{_sub}", StaticFiles(directory=_sub_dir), name=f"public-{_sub}")
+
     @app.get("/")
     async def index() -> FileResponse:
         return FileResponse(WEB_DIST / "index.html")
+
+    # dist 根目录下的单文件（logo.png / favicon 等）。逐个注册而不是用
+    # /{filename} 兜底，避免把单段的 /mcp 等路由一起吃掉。
+    def _root_file_handler(path: Path):
+        async def _serve() -> FileResponse:
+            return FileResponse(path)
+
+        return _serve
+
+    for _name in ("logo.png", "logo2.png", "favicon.ico", "favicon.svg", "robots.txt"):
+        _file = WEB_DIST / _name
+        if _file.is_file():
+            app.get(f"/{_name}", name=f"public-{_name}")(_root_file_handler(_file))
 
 
 # ---------------------------------------------------------------------------
