@@ -2736,6 +2736,13 @@ textarea {
   border-right: none;
 }
 
+/* 非错误提示条（如云端无桌面环境时的「路径已复制」）：中性蓝，弱于红色告警 */
+.alert.notice {
+  border-color: color-mix(in srgb, var(--copper) 35%, transparent);
+  background: color-mix(in srgb, var(--copper) 8%, transparent);
+  color: var(--text);
+}
+
 .admin-form {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -8088,5 +8095,75 @@ tr:hover td {
 
   .akeys-ttls {
     grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* --- 阶段实时进度：转圈 + 子步骤文案 ---------------------------------------
+   agent 单回合可能跑 5–10 分钟，自审还要多轮；没有即时反馈时界面与卡死无法区分。 */
+@keyframes sortie-progress-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.live-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 44ch;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--signal) 7%, transparent);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.01em;
+}
+
+.live-step.busy {
+  border-color: color-mix(in srgb, var(--signal) 38%, var(--line));
+  color: var(--signal);
+}
+
+.live-step-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-step-elapsed {
+  flex: none;
+  opacity: 0.62;
+  font-variant-numeric: tabular-nums;
+}
+
+.spin,
+.rail-spin {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  flex: none;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: sortie-progress-spin 0.8s linear infinite;
+}
+
+/* 当前阶段节点右上角转圈：走到下一步时转圈跟着节点走 */
+.rail-node .rail-spin {
+  position: absolute;
+  top: 4px;
+  right: 10px;
+  width: 10px;
+  height: 10px;
+  border-color: var(--signal);
+  border-right-color: transparent;
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--signal) 55%, transparent));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin,
+  .rail-spin {
+    animation-duration: 2.4s;
   }
 }

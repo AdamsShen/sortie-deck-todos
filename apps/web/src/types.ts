@@ -310,6 +310,16 @@ export interface HitlRequest {
   artifacts?: ArtifactRef[];
 }
 
+/** POST /api/system/reveal 的返回：available=false 表示服务端无桌面环境，只能回传路径 */
+export interface RevealResult {
+  ok: boolean;
+  available?: boolean;
+  path: string;
+  reason?: string;
+  missing?: boolean;
+  created?: boolean;
+}
+
 export interface TimelineEvent {
   id?: string;
   at?: string;
@@ -646,4 +656,38 @@ export type ApiKeyCreated = {
     command?: string;
     clients: McpClientSnippet[];
   };
+};
+
+// --- 阶段实时进度（SSE stage_progress）--------------------------------------
+
+/** 阶段内子步骤：起止、自审开工、单轮起止、熔断跳过 */
+export type StageProgressPhase =
+  | "stage_start"
+  | "stage_end"
+  | "review_begin"
+  | "review_start"
+  | "review_end"
+  | "review_skip";
+
+/** 执行器在阶段内部推送的实时进度，用于前端转圈与子步骤文案 */
+export type StageProgress = {
+  type: "stage_progress";
+  initiative_id: string;
+  stage: string;
+  role?: string;
+  phase: StageProgressPhase;
+  harness?: string;
+  status?: string;
+  round?: number;
+  total?: number;
+  lens?: string;
+  title?: string;
+  timeout?: number;
+  findings?: number;
+  duration_ms?: number;
+  error?: string;
+  message?: string;
+  seq?: number;
+  /** 前端收到该事件的时间戳（用于展示已等待秒数） */
+  at: number;
 };

@@ -74,6 +74,8 @@ import type {
   UserRole,
   View,
   Visibility,
+  RevealResult,
+  StageProgress,
 } from "./types";
 import { ApiError, TOOLKIT_CATEGORIES } from "./types";
 
@@ -126,6 +128,33 @@ function errMsg(err: unknown): string {
   return String(err);
 }
 
+// 复制文本：以 http://<公网IP> 访问时不是安全上下文，navigator.clipboard 不可用，
+// 回退到临时 textarea + execCommand；两者都失败返回 false（只影响提示文案，不影响主流程）
+async function copyText(text: string): Promise<boolean> {
+  try {
+    if (window.isSecureContext && navigator.clipboard) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* 落到 execCommand 兜底 */
+  }
+  try {
+    const el = document.createElement("textarea");
+    el.value = text;
+    el.setAttribute("readonly", "");
+    el.style.position = "fixed";
+    el.style.opacity = "0";
+    document.body.appendChild(el);
+    el.select();
+    const ok = document.execCommand("copy");
+    el.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 // 导出文件名兜底：与后端 Content-Disposition 同规则
 // （sortie-data-{username}-{YYYYMMDD-HHmmss}.json），仅在响应头缺失时使用
 function exportFallbackName(username: string): string {
@@ -161,6 +190,9 @@ export default function App() {
   const [dash, setDash] = useState<Dashboard | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<Initiative | null>(null);
+  // 阶段内实时进度（stage_progress SSE）：用于「第 N/M 轮自审中」转圈与已等待秒数
+  const [stageProgress, setStageProgress] = useState<StageProgress | null>(null);
+  const [tickNow, setTickNow] = useState(() => Date.now());
   const [harnesses, setHarnesses] = useState<HarnessInfo[]>([]);
   const [harnessPick, setHarnessPick] = useState("");
   const [messages, setMessages] = useState<RoomMessage[]>([]);
@@ -192,6 +224,9 @@ export default function App() {
   // 独立小群页当前查看的任务：默认跟随作战室选中任务，顶部切换器可改
   const [subroomMissionId, setSubroomMissionId] = useState<string | null>(null);
   const [error, setError] = useState("");
+  // 「打开目录」在无桌面环境（云端部署）下的降级提示：显示路径并自动复制，6 秒后消失
+  const [revealNote, setRevealNote] = useState("");
+  const revealNoteTimer = useRef<number | null>(null);
   const [busy, setBusy] = useState(false);
   // 设置区「导出数据」：请求中禁点 + 结果提示（提示 3 秒后自动消失）
   const [exporting, setExporting] = useState(false);
@@ -913,6 +948,53 @@ export default function App() {
 
   const harnessLocked = Boolean(selected?.harness_locked) && selected?.status !== "draft";
 
+  // current_stage 在阶段收尾时才落库，早于它到达的 stage_start 不能被过滤掉，
+  // 否则「刚开始的这一步」永远不转圈；任务不在 running 时一律隐藏。
+  const liveProgress = stageProgress && selected?.status === "running" ? stageProgress : null;
+  // 只要任务在跑就必须有转圈：即使 SSE 还没送到子步骤（例如刚刷新页面），
+  // 也先按当前阶段给一个兜底文案，避免界面看起来完全没有反应。
+  const liveBusy = selected?.status === "running";
+  const [stageEnteredAt, setStageEnteredAt] = useState(() => Date.now());
+
+  useEffect(() => {
+    setStageEnteredAt(Date.now());
+  }, [selected?.id, selected?.current_stage, selected?.status]);
+
+  // 秒级心跳：让「已等待 8m32s」能涨，用户才知道不是卡死
+  useEffect(() => {
+    if (!liveBusy) return undefined;
+    const timer = window.setInterval(() => setTickNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [liveBusy]);
+
+  const liveLabel = useMemo(() => {
+    const railList = railFromInitiative(selected, lang);
+    const stageId = liveProgress?.stage || selected?.current_stage || "";
+    const stageText = railList.find((s) => s.id === stageId)?.label || stageId;
+    if (!liveProgress) return `${stageText} · ${tr("stageWorking")}`;
+    const p = liveProgress;
+    const roundText =
+      p.phase === "review_start" || p.phase === "review_end" || p.phase === "review_skip"
+        ? ` · ${tr("stageReview")} ${p.round ?? 1}/${p.total ?? 1}`
+        : "";
+    if (p.phase === "review_begin") return `${stageText} · ${tr("stageReview")} 1/${p.total ?? 1}`;
+    if (p.phase === "review_start") return `${stageText}${roundText}${p.title ? ` · ${p.title}` : ""}`;
+    if (p.phase === "review_end") {
+      return `${stageText}${roundText}${p.status === "failed" ? ` · ${tr("stageTimeout")}` : ""}`;
+    }
+    if (p.phase === "review_skip") return `${stageText}${roundText} · ${tr("stageDegraded")}`;
+    if (p.phase === "stage_end") {
+      return `${stageText} · ${p.status === "ok" ? "✓" : statusLabel(lang, String(p.status || ""))}`;
+    }
+    return `${stageText} · ${tr("stageWorking")}`;
+  }, [liveProgress, selected, lang, tr]);
+
+  const liveElapsed = liveBusy
+    ? Math.max(0, Math.floor((tickNow - (liveProgress?.at ?? stageEnteredAt)) / 1000))
+    : 0;
+  const liveElapsedText =
+    liveElapsed >= 60 ? `${Math.floor(liveElapsed / 60)}m${liveElapsed % 60}s` : `${liveElapsed}s`;
+
   async function saveHarness(harness: string) {
     if (!selectedId || !harness) return;
     setBusy(true);
@@ -980,7 +1062,17 @@ export default function App() {
     })();
 
     const es = new EventSource(`/api/initiatives/${selectedId}/events?token=${encodeURIComponent(token)}`);
-    es.addEventListener("snapshot", (ev: MessageEvent) => setDetail(JSON.parse(String(ev.data)) as Initiative));
+    es.addEventListener("snapshot", (ev: MessageEvent) => {
+      const ini = JSON.parse(String(ev.data)) as Initiative;
+      setDetail(ini);
+      // selected 优先取 items 里的对象：重连 snapshot 只写 detail 的话，
+      // 页面会一直停在进入前的旧状态（转圈不消失 / 待放行不出现）。
+      setItems((prev) =>
+        prev.some((p) => p.id === ini.id)
+          ? prev.map((p) => (p.id === ini.id ? ini : p))
+          : [ini, ...prev],
+      );
+    });
     es.addEventListener("room_snapshot", (ev: MessageEvent) => setMessages(JSON.parse(String(ev.data)) as RoomMessage[]));
     es.addEventListener("room_message", (ev: MessageEvent) => {
       const payload = JSON.parse(String(ev.data)) as { message?: RoomMessage };
@@ -1008,6 +1100,13 @@ export default function App() {
     es.addEventListener("update", onUpdate);
     es.addEventListener("progress", onUpdate);
     es.addEventListener("stopped", onUpdate);
+    // 阶段内子步骤（起止 / 自审第 N 轮）：不改变任务状态，只驱动转圈与文案。
+    // 没有这些事件时，一个 5–10 分钟的 agent 回合在界面上和卡死无法区分。
+    es.addEventListener("stage_progress", (ev: MessageEvent) => {
+      const payload = JSON.parse(String(ev.data)) as Partial<StageProgress>;
+      if (!payload?.stage || !payload?.phase) return;
+      setStageProgress({ ...(payload as StageProgress), at: Date.now() });
+    });
     return () => {
       cancelled = true;
       es.close();
@@ -1069,13 +1168,24 @@ export default function App() {
     setView("home");
   }
 
-  // 卸载时清掉导出提示定时器，避免对已卸载组件 setState
+  // 卸载时清掉导出/目录提示定时器，避免对已卸载组件 setState
   useEffect(
     () => () => {
       if (exportNoteTimer.current !== null) window.clearTimeout(exportNoteTimer.current);
+      if (revealNoteTimer.current !== null) window.clearTimeout(revealNoteTimer.current);
     },
     [],
   );
+
+  // 「打开目录」降级提示：6 秒后自动消失，避免长时间占住顶部空间
+  function flashRevealNote(note: string) {
+    setRevealNote(note);
+    if (revealNoteTimer.current !== null) window.clearTimeout(revealNoteTimer.current);
+    revealNoteTimer.current = window.setTimeout(() => {
+      setRevealNote("");
+      revealNoteTimer.current = null;
+    }, 6000);
+  }
 
   // 导出结果提示：3 秒后自动消失（PRD C-5）
   function flashExportNote(note: string) {
@@ -1396,11 +1506,22 @@ export default function App() {
     if (!path) return;
     try {
       playSfx("click");
-      await api("/api/system/reveal", {
+      // 后端在无桌面环境（云端容器）时返回 available=false 而不是 500：
+      // 这里降级为「提示 + 复制路径」，仍可让用户拿到路径自行去服务器上查看
+      const res = await api<RevealResult>("/api/system/reveal", {
         token,
         method: "POST",
         body: JSON.stringify({ path }),
       });
+      if (res?.available === false) {
+        const shown = res.path || path;
+        const copied = await copyText(shown);
+        flashRevealNote(
+          lang === "zh"
+            ? `服务端无图形界面，无法打开目录${copied ? "，路径已复制" : ""}：${shown}`
+            : `Server has no desktop session — folder cannot be opened${copied ? ", path copied" : ""}: ${shown}`,
+        );
+      }
     } catch (err) {
       setError(errMsg(err));
     }
@@ -2892,6 +3013,11 @@ export default function App() {
       </header>
 
       {error && <div className="alert bar">{error}</div>}
+      {revealNote && (
+        <div className="alert bar notice" role="status">
+          {revealNote}
+        </div>
+      )}
 
       {view === "home" && (
         <main className="main page-pad">
@@ -3134,6 +3260,13 @@ export default function App() {
               </div>
             </div>
             <div className="topbar-actions">
+              {liveBusy && (
+                <span className="live-step busy" title={liveLabel}>
+                  <span className="spin" aria-hidden />
+                  <span className="live-step-text">{liveLabel}</span>
+                  <span className="live-step-elapsed">{liveElapsedText}</span>
+                </span>
+              )}
               <span className={`st large ${selected.status}`}>{statusLabel(lang, selected.status)}</span>
               {!canControlMission && <span className="st">{tr("readOnlyMission")}</span>}
               {canControlMission && selected.status === "draft" && !selected.meta?.pipeline_confirmed && (
@@ -3176,6 +3309,7 @@ export default function App() {
               speakingRoles={speakingRoles}
               lang={lang}
               missionKey={selected.id}
+              liveLabel={liveBusy ? liveLabel : null}
               activeParallel={
                 Array.isArray(selected.meta?.active_parallel)
                   ? (selected.meta.active_parallel as string[])

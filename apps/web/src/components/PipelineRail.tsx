@@ -364,6 +364,7 @@ export function PipelineRail({
   lang = "zh",
   missionKey,
   activeParallel,
+  liveLabel,
 }: {
   stage: string;
   status: string;
@@ -374,6 +375,8 @@ export function PipelineRail({
   lang?: Lang;
   missionKey?: string;
   activeParallel?: string[];
+  /** 当前阶段内的子步骤文案（如「自审 2/3 · 空值与边界」），有值即在该节点转圈 */
+  liveLabel?: string | null;
 }) {
   const rail: RailStage[] = stages && stages.length ? stages : [...DEFAULT_STAGES];
   const columns = useMemo(() => groupRailColumns(rail), [rail]);
@@ -554,11 +557,14 @@ export function PipelineRail({
             }}
             onClick={() => onSelect?.(n.id, n.stage.label)}
             title={
-              n.parallel
-                ? `${n.stage.label} · ${lang === "en" ? "parallel branch" : "并行分支"}`
-                : n.stage.label
+              nodeState === "live" && liveLabel
+                ? liveLabel
+                : n.parallel
+                  ? `${n.stage.label} · ${lang === "en" ? "parallel branch" : "并行分支"}`
+                  : n.stage.label
             }
           >
+            {nodeState === "live" && liveLabel ? <span className="rail-spin" aria-hidden /> : null}
             {n.stage.role || n.stage.avatar ? (
               <RoleAvatar
                 avatar={n.stage.avatar}
