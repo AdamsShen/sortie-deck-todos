@@ -13,7 +13,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="TDT_", env_file=".env", extra="ignore")
 
     data_dir: Path = REPO_ROOT / "data"
-    host: str = "127.0.0.1"
+    # 默认绑 0.0.0.0 允许局域网访问；仅本机调试时可显式设 TDT_HOST=127.0.0.1
+    host: str = "0.0.0.0"
     port: int = 8787
     cors_origins: str = "http://127.0.0.1:5173,http://localhost:5173"
     postgres_uri: str | None = None
