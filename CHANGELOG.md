@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Per-stage timeout budget**: each stage can now carry its own `timeout_seconds` in the stage spec (pipeline YAML / `PipelineStageSpec`, persisted through `normalize_specs` → `materialize_template`). Resolution order: stage spec → `TDT_ENG_STAGE_TIMEOUT_SECONDS` (default 3600s, applies to `ENG_BUILD_STAGES`: eng_implement / eng_ios / eng_android / eng_web / eng_backend / eng_agent) → `TDT_STAGE_TIMEOUT_SECONDS` (default 1800s). Build stages get one hour by default because coding agents routinely exceed 30 minutes writing modules and running self-tests; the old single 1800s cap killed in-progress work and failed the stage with missing artifacts
 - **API key revocation is a hard delete**: `DELETE /api/keys/{id}` now removes the row from `data/api_keys.sqlite` instead of writing `revoked_at`; clients using the key fail on their next request. `POST /api/keys` accepts `expires_in_months` and rejects anything outside 1/3/6/12. Existing rows are migrated with `expires_at = NULL` (treated as non-expiring) so an upgrade never invalidates keys in use
 
 ### Added

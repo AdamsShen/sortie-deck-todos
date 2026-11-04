@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import re
 from typing import Any, Literal
 
@@ -615,6 +616,10 @@ def normalize_specs(raw: list[dict[str, Any]] | list[Any]) -> list[dict[str, Any
                 base["depends_on"] = [str(x) for x in deps if x]
             else:
                 base.pop("depends_on", None)
+        # per-stage 超时（秒）：非法值静默忽略，走全局默认；下限 1s 防 0 值立即超时
+        if item.get("timeout_seconds") is not None:
+            with contextlib.suppress(TypeError, ValueError):
+                base["timeout_seconds"] = max(float(item["timeout_seconds"]), 1.0)
         base["id"] = sid
         base["name"] = sid
         out.append(base)
@@ -672,6 +677,8 @@ def materialize_template(specs: list[dict[str, Any]], *, name: str = "custom") -
             entry["branch"] = s["branch"]
         if s.get("depends_on"):
             entry["depends_on"] = list(s["depends_on"])
+        if s.get("timeout_seconds") is not None:
+            entry["timeout_seconds"] = float(s["timeout_seconds"])
         stages.append(entry)
     return {
         "name": name,

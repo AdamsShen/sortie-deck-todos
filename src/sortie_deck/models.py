@@ -464,6 +464,9 @@ class PipelineStageSpec(BaseModel):
     branch: str | None = None
     depends_on: list[str] | None = None
     enabled: bool = True
+    # 本阶段单独的超时上限（秒）；不配则按阶段类型取全局默认
+    # （编码类 eng_stage_timeout_seconds=3600s，其余 stage_timeout_seconds=1800s）
+    timeout_seconds: float | None = None
 
 
 class UpdatePipelineRequest(BaseModel):

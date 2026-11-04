@@ -301,6 +301,10 @@ class Settings(BaseSettings):
     # （2026-10-27 `eng_backend_tech_design` 540 行方案 14m47s 才落盘），
     # 900s 会让"已产出但未返回"的阶段被判超时，故默认放宽到 30 分钟。
     stage_timeout_seconds: float = 1800.0
+    # 开发/编码类阶段（ENG_BUILD_STAGES）的默认单阶段超时（秒）。
+    # 编码 agent 要写多模块代码并跑自测，30 分钟不够（2026-11-04 本机实测
+    # eng_backend 在 1800s 被砍时 agent 仍在正常产出），默认放宽到 1 小时。
+    eng_stage_timeout_seconds: float = 3600.0
     # --- OpenTelemetry 全链路追踪（见 docs/plans/2026-10-27-otel-full-tracing.md）---
     # 默认关；开启且 otel_endpoint 非空时才真正建 provider 导出 span。
     # 只装了 opentelemetry-api 没装 [otel] extra 时自动降级为 no-op，不影响启动。

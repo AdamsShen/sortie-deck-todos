@@ -219,6 +219,35 @@ def _validate_or_explain(stage: str, result: StageResult) -> None:
         raise
 
 
+def _resolve_stage_timeout(
+    stage: str,
+    stage_cfg: dict[str, Any] | None,
+    app_cfg: Any = None,
+) -> float:
+    """解析单个阶段的超时上限（秒）。
+
+    优先级：阶段 spec 的 timeout_seconds（航线 YAML / 前端编辑阶段均可配）
+    > 编码类阶段默认（eng_stage_timeout_seconds=3600s）
+    > 全局默认（stage_timeout_seconds=1800s）。
+    app_cfg 是编排器实例注入的 Settings，优先于进程级全局 settings，
+    保证多实例/单测各用各的超时。
+    """
+    configured = (stage_cfg or {}).get("timeout_seconds")
+    if configured:
+        return float(configured)
+    is_build = stage in ENG_BUILD_STAGES
+    attr = "eng_stage_timeout_seconds" if is_build else "stage_timeout_seconds"
+    fallback = 3600.0 if is_build else 1800.0
+
+    from sortie_deck.settings import settings as _settings
+
+    return float(
+        getattr(app_cfg, attr, None)
+        or getattr(_settings, attr, fallback)
+        or fallback
+    )
+
+
 def _salvage_stage_artifacts(
     stage: str,
     workspace: Path | None,
@@ -1695,14 +1724,8 @@ def build_graph_from_template(
                     exc_info=True,
                 )
 
-        from sortie_deck.settings import settings as _settings
-
-        # 注入配置优先：不同实例（含单测）各用各的超时，不读进程级全局值
-        timeout = float(
-            getattr(app_cfg, "stage_timeout_seconds", None)
-            or getattr(_settings, "stage_timeout_seconds", 1800)
-            or 1800
-        )
+        # 超时解析：阶段 spec 显式配置 > 编码类默认 3600s > 全局默认 1800s
+        timeout = _resolve_stage_timeout(stage, stage_by_name.get(stage), app_cfg)
 
         ctx = StageContext(
             initiative_id=state["initiative_id"],
