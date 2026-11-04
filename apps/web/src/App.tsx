@@ -17,6 +17,9 @@ import {
   updateInitiativeHarness,
 } from "./api";
 import { ApiKeysPage } from "./components/ApiKeysPage";
+import { GitCredentialsPanel } from "./components/GitCredentialsPanel";
+import { MyReposPanel } from "./components/MyReposPanel";
+import { WorkspaceReposPanel } from "./components/WorkspaceReposPanel";
 import { OperatorChip } from "./components/OperatorChip";
 import { PipelineEditor } from "./components/PipelineEditor";
 import { ChatComposer, SparkleIcon, type MentionOption } from "./components/ChatComposer";
@@ -6194,6 +6197,8 @@ export default function App() {
       {view === "keys" && (
         <main className="main page-pad">
           <ApiKeysPage token={token} lang={lang} tr={tr} />
+          <GitCredentialsPanel token={token} lang={lang} />
+          <MyReposPanel token={token} lang={lang} />
         </main>
       )}
 
@@ -6372,6 +6377,8 @@ export default function App() {
               </form>
             </div>
           </div>
+
+          <WorkspaceReposPanel token={token} lang={lang} />
         </main>
       )}
     </div>

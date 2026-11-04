@@ -1,10 +1,22 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { api } from "../api";
 import { playSfx } from "../sfx";
-import type { ExternalMaterial, RepoConfig } from "../types";
+import type {
+  ExternalMaterial,
+  RepoConfig,
+  UserRepoInfo,
+  WorkspaceRepoInfo,
+} from "../types";
 import { ChatComposer, type ComposerAttachment, type ComposerPayload } from "./ChatComposer";
 
-type RepoRow = { url: string; branch: string };
+type RepoRow = {
+  url: string;
+  branch: string;
+  name?: string;
+  /** workspace=管理员配的工作区仓库（用工作区凭据）；custom=自填 URL（用个人凭据） */
+  source?: "workspace" | "custom";
+  credential_id?: string | null;
+};
 type ReposBySlot = Record<string, RepoRow[]>;
 
 /** localStorage key holding the resumable briefing session id. */
@@ -104,9 +116,35 @@ export function MissionBriefingChat({
   const [sending, setSending] = useState(false);
   const [bootError, setBootError] = useState("");
   const [repos, setRepos] = useState<ReposBySlot>({});
+  // 仓库选择器数据源：工作区仓库（管理员配）+ 我的私有仓库（本人登记）
+  const [workspaceRepos, setWorkspaceRepos] = useState<WorkspaceRepoInfo[]>([]);
+  const [myRepos, setMyRepos] = useState<UserRepoInfo[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const locked = busy || sending;
+
+  // 仓库选择器数据：工作区仓库全员可读，私有仓库仅本人可读；失败不阻断会话
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [ws, mine] = await Promise.all([
+          api<WorkspaceRepoInfo[]>("/api/git/workspace-repos", { token }),
+          api<UserRepoInfo[]>("/api/me/git/repos", { token }),
+        ]);
+        if (!cancelled) {
+          setWorkspaceRepos(ws);
+          setMyRepos(mine);
+        }
+      } catch {
+        /* 选择器退化为手填 URL */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
 
   useEffect(() => {
     let cancelled = false;
@@ -223,7 +261,13 @@ export function MissionBriefingChat({
     const out: Record<string, RepoConfig[]> = {};
     for (const [slot, rows] of Object.entries(repos)) {
       const clean = rows
-        .map((r) => ({ url: r.url.trim(), branch: r.branch.trim() }))
+        .map((r) => ({
+          url: r.url.trim(),
+          branch: r.branch.trim(),
+          name: r.name,
+          source: r.source || "custom",
+          credential_id: r.source === "workspace" ? r.credential_id || null : null,
+        }))
         .filter((r) => r.url);
       if (clean.length) out[slot] = clean;
     }
@@ -457,10 +501,64 @@ export function MissionBriefingChat({
                   <span className="loadout-label">{slot}</span>
                   {(repos[slot] || []).map((row, i) => (
                     <div key={i} className="briefing-repo-row">
+                      <select
+                        value=""
+                        onChange={(e) => {
+                          const url = e.target.value;
+                          if (!url) return;
+                          const ws = workspaceRepos.find((r) => r.url === url);
+                          if (ws) {
+                            updateRepoRow(slot, i, {
+                              url: ws.url,
+                              name: ws.name,
+                              branch: row.branch || ws.default_branch,
+                              source: "workspace",
+                              credential_id: ws.credential_id,
+                            });
+                            return;
+                          }
+                          const mine = myRepos.find((r) => r.url === url);
+                          if (mine) {
+                            updateRepoRow(slot, i, {
+                              url: mine.url,
+                              name: mine.name,
+                              branch: row.branch || mine.default_branch,
+                              source: "custom",
+                              credential_id: null,
+                            });
+                          }
+                        }}
+                      >
+                        <option value="">{lang === "zh" ? "选择仓库…" : "pick a repo…"}</option>
+                        {workspaceRepos.length > 0 && (
+                          <optgroup label={lang === "zh" ? "工作区仓库" : "Workspace repos"}>
+                            {workspaceRepos.map((r) => (
+                              <option key={r.id} value={r.url}>
+                                {r.name}
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
+                        {myRepos.length > 0 && (
+                          <optgroup label={lang === "zh" ? "我的私有仓库" : "My private repos"}>
+                            {myRepos.map((r) => (
+                              <option key={r.id} value={r.url}>
+                                {r.name}
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
+                      </select>
                       <input
                         value={row.url}
                         placeholder="https://github.com/org/repo.git"
-                        onChange={(e) => updateRepoRow(slot, i, { url: e.target.value })}
+                        onChange={(e) =>
+                          updateRepoRow(slot, i, {
+                            url: e.target.value,
+                            source: "custom",
+                            credential_id: null,
+                          })
+                        }
                       />
                       <input
                         className="briefing-repo-branch"

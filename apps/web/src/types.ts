@@ -229,7 +229,48 @@ export interface RepoConfig {
   url: string;
   branch?: string;
   name?: string;
+  /** workspace=管理员维护的工作区仓库；custom=用户自填 URL（凭据按 host 匹配） */
+  source?: "workspace" | "custom";
+  credential_id?: string | null;
+  /** @deprecated 旧版明文凭据，后端已忽略 */
   token?: string | null;
+}
+
+/** 凭据对外视图：永远不含 secret，只有指纹 */
+export interface GitCredentialInfo {
+  id: string;
+  scope: "workspace" | "user";
+  label: string;
+  host: string;
+  scheme: "https" | "ssh";
+  username: string;
+  fingerprint: string;
+  expires_at?: number | null;
+  disabled_at?: number | null;
+  created_at: number;
+  last_used_at?: number | null;
+}
+
+/** 工作区仓库条目（全员可见，仅管理员可改） */
+export interface WorkspaceRepoInfo {
+  id: string;
+  name: string;
+  url: string;
+  default_branch: string;
+  role_slots: string[];
+  credential_id: string;
+  enabled: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+/** 个人登记的私有仓库（仅本人可见） */
+export interface UserRepoInfo {
+  id: string;
+  name: string;
+  url: string;
+  default_branch: string;
+  created_at: number;
 }
 
 export interface RoleAgent {
