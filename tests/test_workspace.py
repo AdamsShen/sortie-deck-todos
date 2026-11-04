@@ -1,9 +1,11 @@
 from pathlib import Path
+import zipfile
 
 import pytest
 
 from sortie_deck.workspace import (
     RevealUnavailable,
+    archive_repos_snapshot,
     is_under_allowed,
     list_files,
     mission_workspace,
@@ -77,3 +79,135 @@ def test_reveal_unavailable_reason_missing_xdg_open(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr("sortie_deck.workspace.shutil.which", lambda _name: None)
 
     assert "xdg-open" in reveal_unavailable_reason()
+
+
+# --- archive_repos_snapshot：未绑定仓库任务的代码归档 ------------------------
+
+
+def _mk_ws(tmp_path: Path, ini: str = "ini_arc") -> tuple[Path, Path]:
+    """构造任务沙盒与 artifacts 目录，返回 (workspace, artifacts)。"""
+    ws = tmp_path / "missions" / ini / "workspace"
+    art = tmp_path / "missions" / ini / "artifacts"
+    (ws / "repos").mkdir(parents=True)
+    art.mkdir(parents=True)
+    return ws, art
+
+
+def test_archive_repos_snapshot_basics(tmp_path: Path):
+    """产出代码打包 zip：含 repos 前缀路径，排除依赖目录与隐藏文件，manifest 落盘。"""
+    ws, art = _mk_ws(tmp_path)
+    (ws / "repos" / "app.py").write_text("print('hi')\n", encoding="utf-8")
+    sub = ws / "repos" / "sub"
+    sub.mkdir()
+    (sub / "util.py").write_text("x = 1\n", encoding="utf-8")
+    nm = ws / "repos" / "node_modules" / "pkg"
+    nm.mkdir(parents=True)
+    (nm / "index.js").write_text("j", encoding="utf-8")
+    (ws / "repos" / ".env").write_text("secret", encoding="utf-8")
+
+    result = archive_repos_snapshot(ws, art)
+    assert result and result["status"] == "archived"
+    assert result["source"] == "repos"
+    assert result["file_count"] == 2
+
+    zip_path = art / "code-archive" / result["zip"]
+    assert zip_path.is_file()
+    with zipfile.ZipFile(zip_path) as zf:
+        names = set(zf.namelist())
+    assert "repos/app.py" in names and "repos/sub/util.py" in names
+    assert not any("node_modules" in n for n in names)
+    assert not any(n.endswith(".env") for n in names)
+
+    import json
+
+    manifest = json.loads((art / "code-archive" / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["initiative_id"] == "ini_arc"
+    assert manifest["file_count"] == 2
+    assert manifest["truncated"] is False
+
+
+def test_archive_repos_snapshot_skips_bound_repos(tmp_path: Path):
+    """repos/ 下存在 clone（<name>/.git）→ 绑定任务跳过归档。"""
+    ws, art = _mk_ws(tmp_path)
+    clone = ws / "repos" / "repo"
+    clone.mkdir(parents=True)
+    (clone / ".git").mkdir()
+    (clone / "app.py").write_text("x=1\n", encoding="utf-8")
+
+    result = archive_repos_snapshot(ws, art)
+    assert result == {"status": "skipped", "reason": "bound_repo", "initiative_id": "ini_arc"}
+    assert not (art / "code-archive").exists()
+
+
+def test_archive_repos_snapshot_skips_bound_flag(tmp_path: Path):
+    """调用方元数据标记绑定（push 后 clone 已被清理的场景）→ 跳过。"""
+    ws, art = _mk_ws(tmp_path)
+    (ws / "repos" / "app.py").write_text("x=1\n", encoding="utf-8")
+    result = archive_repos_snapshot(ws, art, bound=True)
+    assert result["status"] == "skipped" and result["reason"] == "bound_repo"
+
+
+def test_archive_repos_snapshot_empty_sandbox(tmp_path: Path):
+    """空沙盒（只有 README 与空 repos/）→ 跳过，不打空包。"""
+    ws, art = _mk_ws(tmp_path)
+    (ws / "README.md").write_text("# Workspace\n", encoding="utf-8")
+    result = archive_repos_snapshot(ws, art)
+    assert result["status"] == "skipped" and result["reason"] == "empty"
+
+
+def test_archive_repos_snapshot_fallback_root(tmp_path: Path):
+    """repos/ 为空但沙盒根有散落文件（agent 未按约定写）→ 兜底打包根文件。"""
+    ws, art = _mk_ws(tmp_path)
+    (ws / "README.md").write_text("# Workspace\n", encoding="utf-8")
+    (ws / "impl.py").write_text("print('x')\n", encoding="utf-8")
+
+    result = archive_repos_snapshot(ws, art)
+    assert result and result["status"] == "archived"
+    assert result["source"] == "workspace_root"
+    with zipfile.ZipFile(art / "code-archive" / result["zip"]) as zf:
+        names = set(zf.namelist())
+    assert "impl.py" in names
+    assert not any(n == "README.md" for n in names)
+
+
+def test_archive_repos_snapshot_truncation(tmp_path: Path):
+    """累计体积超过 max_mb 停止添加并标记 truncated。"""
+    ws, art = _mk_ws(tmp_path)
+    (ws / "repos" / "big.bin").write_bytes(b"a" * (2 * 1024 * 1024))
+    (ws / "repos" / "small.py").write_text("x=1\n", encoding="utf-8")
+
+    result = archive_repos_snapshot(ws, art, max_mb=1)
+    assert result and result["status"] == "archived"
+    assert result["truncated"] is True
+    assert result["file_count"] == 0
+
+
+def test_archive_repos_snapshot_idempotent(tmp_path: Path):
+    """内容未变重复触发跳过（sweep 与终态都会调）；zip 缺失时强制重打。"""
+    ws, art = _mk_ws(tmp_path)
+    (ws / "repos" / "app.py").write_text("x=1\n", encoding="utf-8")
+
+    first = archive_repos_snapshot(ws, art)
+    assert first and first["status"] == "archived"
+
+    second = archive_repos_snapshot(ws, art)
+    assert second and second["status"] == "skipped" and second["reason"] == "unchanged"
+
+    # 内容变化 → 新归档
+    (ws / "repos" / "app.py").write_text("x=2\n", encoding="utf-8")
+    third = archive_repos_snapshot(ws, art)
+    assert third and third["status"] == "archived" and third["zip"] != first["zip"]
+
+    # zip 被删（人工清理）→ fingerprint 失效强制重打
+    (art / "code-archive" / third["zip"]).unlink()
+    fourth = archive_repos_snapshot(ws, art)
+    assert fourth and fourth["status"] == "archived"
+
+
+def test_archive_repos_snapshot_no_workspace(tmp_path: Path):
+    """workspace 不存在（终态已清理过）→ no-op。"""
+    result = archive_repos_snapshot(
+        tmp_path / "missions" / "ini_x" / "workspace",
+        tmp_path / "missions" / "ini_x" / "artifacts",
+    )
+    assert result is None

@@ -2630,6 +2630,27 @@ async def post_squad_message(
         raise HTTPException(400, str(exc)) from exc
 
 
+def _binary_artifact_response(rel: str) -> FileResponse:
+    """二进制产物（如 code-archive 的 zip）转附件下载。
+
+    read_text 读二进制会 UnicodeDecodeError，无法走 JSON 预览；这里按
+    Content-Disposition: attachment 返回文件流，浏览器直接触发下载。
+    """
+    store = orch().artifacts
+    absolute = getattr(store, "absolute", None)
+    if absolute is None:
+        raise HTTPException(409, "binary artifact download requires the local artifact backend")
+    path = absolute(rel)
+    if not path.is_file():
+        raise HTTPException(404, "Artifact not found")
+    media = "application/zip" if path.suffix == ".zip" else "application/octet-stream"
+    return FileResponse(
+        path,
+        media_type=media,
+        headers={"Content-Disposition": f'attachment; filename="{path.name}"'},
+    )
+
+
 @app.get("/api/initiatives/{initiative_id}/artifacts/{artifact_path:path}")
 async def read_artifact(
     initiative_id: str, artifact_path: str, _user: PublicUser = Depends(_mission_access_guard)
@@ -2650,6 +2671,8 @@ async def read_artifact(
             break
         except ArtifactPathError as exc:
             raise HTTPException(400, str(exc)) from exc
+        except UnicodeDecodeError:
+            return _binary_artifact_response(candidate)
         except FileNotFoundError:
             continue
     if content is None:
@@ -2664,7 +2687,10 @@ async def read_artifact(
         )
         if len(unique) == 1:
             rel = unique[0]
-            content = orch().artifacts.read_text(rel)
+            try:
+                content = orch().artifacts.read_text(rel)
+            except UnicodeDecodeError:
+                return _binary_artifact_response(rel)
         elif len(unique) > 1:
             raise HTTPException(409, f"同名产物有多个，请写完整路径: {', '.join(unique)}")
     if content is None:

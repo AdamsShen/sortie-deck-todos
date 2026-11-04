@@ -951,7 +951,7 @@ class HarnessStageExecutor:
             "workspace": str(workspace),
             "artifact_dir": str(artifact_dir) if artifact_dir else "",
             "artifact_direct_write": doc_stage,
-            "files_written": _count_impl_files(workspace),
+            "files_written": _count_impl_files(workspace, has_repos=bool(ctx.repos)),
             "context_tokens": int(pack.get("token_estimate") or 0),
             **artifact_meta,
         }
@@ -1630,7 +1630,7 @@ class HarnessStageExecutor:
                         "summary": (reply.text or "")[:1500],
                         "harness": harness,
                         "workspace": str(workspace),
-                        "files_written": _count_impl_files(workspace),
+                        "files_written": _count_impl_files(workspace, has_repos=bool(ctx.repos)),
                         "degraded": True,
                     },
                     ensure_ascii=False,

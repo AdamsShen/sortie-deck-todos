@@ -1531,12 +1531,18 @@ class Orchestrator:
         """执行一次 workspace TTL 兜底扫描（脏状态用延长 TTL），返回清理列表。"""
         from sortie_deck.git_publish import sweep_worktrees
 
+        # 绑定仓库的任务代码在远端 git，sweep 回收时不归档（归档函数内部还有
+        # repos/<name>/.git clone 特征兜底，这里传元数据是为了覆盖 push 后
+        # clone 已被清理、文件系统看不出绑定痕迹的场景）
+        bound = {ini.id for ini in self.store.list() if any(r.repos for r in ini.roles)}
         try:
             cleaned = sweep_worktrees(
                 self.cfg.missions_dir,
                 self._active_mission_ids(),
                 ttl_seconds=self.cfg.worktree_ttl_seconds,
                 dirty_ttl_seconds=self.cfg.worktree_dirty_ttl_seconds,
+                bound_ids=bound,
+                archive_max_mb=int(getattr(self.cfg, "archive_workspace_max_mb", 500) or 500),
             )
         except Exception as exc:  # noqa: BLE001 — 兜底扫描失败不影响主流程
             logger.warning("workspace TTL sweep 异常: %s", exc)
@@ -1576,10 +1582,26 @@ class Orchestrator:
         """任务终态/删除时回收 workspace 沙盒（含 repos clone）。
 
         终态（DONE/STOPPED）只删 workspace；delete_initiative 删整个任务目录。
+        回收前把未绑定仓库任务的产出代码（约定写在 workspace/repos/）打包归档到
+        artifacts/code-archive/；绑定仓库任务代码在远端 git，跳过归档。
         """
         from sortie_deck.git_publish import cleanup_workspace
-        from sortie_deck.layout import mission_workspace_dir
+        from sortie_deck.layout import mission_artifacts_dir, mission_workspace_dir
+        from sortie_deck.workspace import archive_repos_snapshot
 
+        if getattr(self.cfg, "archive_workspace_on_cleanup", True):
+            try:
+                ini = self.store.get(initiative_id)
+                # 绑定判定看角色身上的 repos（CreateInitiativeRequest.role_repos 建队时落到 roles）
+                bound = bool(ini and any(r.repos for r in ini.roles))
+                archive_repos_snapshot(
+                    mission_workspace_dir(self.cfg.data_dir, initiative_id),
+                    mission_artifacts_dir(self.cfg.data_dir, initiative_id),
+                    max_mb=int(getattr(self.cfg, "archive_workspace_max_mb", 500) or 500),
+                    bound=bound,
+                )
+            except Exception as exc:  # noqa: BLE001 — 归档失败不阻断清理与状态流转
+                logger.warning("任务代码归档失败（忽略） ini=%s: %s", initiative_id, exc)
         try:
             cleanup_workspace(mission_workspace_dir(self.cfg.data_dir, initiative_id))
         except Exception as exc:  # noqa: BLE001 — 清理失败不影响任务状态流转

@@ -143,6 +143,45 @@ export async function exportUserData(
   };
 }
 
+/**
+ * 下载任务产物（二进制，如 code-archive 代码归档 zip）。
+ *
+ * 不走 `api<T>()`——它固定按 JSON 解析响应体；这里返回完整 Blob 与
+ * Content-Disposition 建议的文件名，交给浏览器触发另存。
+ */
+export async function downloadMissionArtifact(
+  token: string,
+  initiativeId: string,
+  path: string,
+): Promise<{ blob: Blob; filename: string }> {
+  const res = await fetch(
+    `${API}/api/initiatives/${encodeURIComponent(initiativeId)}/artifacts/${path}`,
+    { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+  );
+  if (res.status === 401) {
+    throw new ApiError("unauthorized", 401);
+  }
+  if (!res.ok) {
+    const raw = await res.text();
+    let msg = raw || res.statusText;
+    try {
+      const parsed = JSON.parse(raw) as { detail?: unknown };
+      if (typeof parsed?.detail === "string") msg = parsed.detail;
+    } catch {
+      /* 非 JSON 响应保留原文 */
+    }
+    throw new ApiError(msg, res.status);
+  }
+  const blob = await res.blob();
+  return {
+    blob,
+    filename:
+      filenameFromDisposition(res.headers.get("Content-Disposition")) ||
+      path.split("/").pop() ||
+      "artifact.zip",
+  };
+}
+
 // --- api keys -------------------------------------------------------------
 
 /** 列出当前账号的 API Key（不含明文与哈希） */

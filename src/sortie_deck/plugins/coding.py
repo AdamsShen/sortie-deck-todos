@@ -378,7 +378,19 @@ async def clone_repos(
     prompt/log 中说明，防止极端并发打爆服务器磁盘。
     """
     if not repos:
-        return "", []
+        # 未绑定仓库：repos/ 约定为统一产出目录（任务终态打包归档到
+        # artifacts/code-archive/，见 workspace.archive_repos_snapshot）。
+        # 不预创建并在 prompt 里说明的话，agent 会把代码散落沙盒根，回收时全部丢失。
+        out_dir = workspace / "repos"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        section = (
+            "\n\nNo git repositories are bound to this mission.\n"
+            f"Write ALL implementation code into `{out_dir}` (already created): every\n"
+            "code file, script and static asset must live under that directory — it is\n"
+            "archived to the mission artifacts when the mission finishes; files written\n"
+            "outside it may be lost.\n"
+        )
+        return section, ["mission_repos=0 (no repos; output dir repos/ prepared)"]
     repos_root = workspace / "repos"
     repos_root.mkdir(parents=True, exist_ok=True)
     log: list[str] = [f"mission_repos={len(repos)}"]
@@ -489,18 +501,24 @@ def ensure_worktree(repo_root: Path, initiative_id: str, worktrees_root: Path) -
     return target
 
 
-def _count_impl_files(workspace: Path) -> int:
-    # .cursor / .sortie-deck 是知识包注入产物，不是 agent 写的实现文件；
-    # 不排除会让「exit=0 但没写代码」的失败判定永远不触发。
+def _count_impl_files(workspace: Path, *, has_repos: bool = False) -> int:
+    """统计 agent 写的实现文件数（「exit=0 但没写代码」失败判定的依据）。
+
+    has_repos=True（绑定仓库）时排除 repos/（业务 clone，非 agent 产出）；
+    未绑定时 repos/ 是约定产出目录（见 clone_repos），必须计入。
+    .cursor / .sortie-deck 是知识包注入产物，不是 agent 写的实现文件；
+    不排除会让「exit=0 但没写代码」的失败判定永远不触发。
+    """
     skip = {
         ".git",
         "__pycache__",
         "node_modules",
         ".write_probe",
-        "repos",
         ".cursor",
         ".sortie-deck",
     }
+    if has_repos:
+        skip.add("repos")
     n = 0
     for p in workspace.rglob("*"):
         if not p.is_file():
@@ -599,7 +617,7 @@ class ClaudeCodeExecutor:
             combined = f"{out}\n{err}"
             log_parts.append(f"exit={code}\n{combined[:3500]}")
             needs_perm = _looks_like_permission_block(combined)
-            wrote = _count_impl_files(workspace)
+            wrote = _count_impl_files(workspace, has_repos=bool(ctx.repos))
             ok = code == 0 and not needs_perm and (wrote > 0 or "DONE" in combined.upper())
             if code == 0 and wrote == 0 and not needs_perm:
                 # Succeeded textually but no files — treat as soft fail for Teams loop
@@ -626,7 +644,7 @@ class ClaudeCodeExecutor:
             ],
             "workspace": str(workspace),
             "permission_mode": mode,
-            "files_written": _count_impl_files(workspace),
+            "files_written": _count_impl_files(workspace, has_repos=bool(ctx.repos)),
             "repos": [
                 {"url": r.url, "branch": r.branch or "default", "name": _repo_dirname(r)}
                 for r in ctx.repos
@@ -789,7 +807,7 @@ class CursorCliExecutor:
             log_parts.append(f"exit={code}\n{combined[:3500]}")
             needs_auth = _looks_like_auth_block(combined)
             needs_perm = (not needs_auth) and _looks_like_permission_block(combined)
-            wrote = _count_impl_files(workspace)
+            wrote = _count_impl_files(workspace, has_repos=bool(ctx.repos))
             ok = code == 0 and not needs_perm and not needs_auth and wrote > 0
             if code == 0 and wrote == 0 and not needs_perm and not needs_auth:
                 ok = False
@@ -818,7 +836,7 @@ class CursorCliExecutor:
                 }
             ],
             "workspace": str(workspace),
-            "files_written": _count_impl_files(workspace),
+            "files_written": _count_impl_files(workspace, has_repos=bool(ctx.repos)),
             "repos": [
                 {"url": r.url, "branch": r.branch or "default", "name": _repo_dirname(r)}
                 for r in ctx.repos

@@ -4,6 +4,7 @@ import {
   api,
   createKnowledgeBase,
   deleteKnowledgeBase,
+  downloadMissionArtifact,
   deleteOwnAccount,
   exportUserData,
   importKnowledgeFile,
@@ -1486,6 +1487,22 @@ export default function App() {
   }
 
   async function openArtifact(path: string, kind?: string) {
+    // 二进制产物（代码归档 zip 等）无法文本预览：取 blob 触发浏览器另存
+    const name = kind || path.split("/").pop() || "";
+    if (name.toLowerCase().endsWith(".zip") && token && selectedId) {
+      try {
+        const { blob, filename } = await downloadMissionArtifact(token, selectedId, path);
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = filename;
+        anchor.click();
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        setError(errMsg(err));
+      }
+      return "";
+    }
     const data = await api<{ content: string }>(`/api/initiatives/${selectedId}/artifacts/${path}`, { token });
     setArtifactPreview(data.content);
     setArtifactPreviewPath(path);

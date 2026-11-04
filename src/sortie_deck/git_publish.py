@@ -306,11 +306,15 @@ def sweep_worktrees(
     active_ids: set[str],
     ttl_seconds: float,
     dirty_ttl_seconds: float,
+    *,
+    bound_ids: set[str] | None = None,
+    archive_max_mb: int = 500,
 ) -> list[str]:
     """TTL 兜底扫描：删除非运行中任务遗留的 workspace（进程崩溃残留等）。
 
     - 运行中（active_ids）任务跳过；
     - 脏状态（未提交/未推送）用 dirty_ttl，否则用 ttl；
+    - 回收前把未绑定仓库任务（不在 bound_ids）的产出代码归档进 artifacts；
     - 返回被清理的 initiative id 列表。
     """
     cleaned: list[str] = []
@@ -337,6 +341,13 @@ def sweep_worktrees(
             limit = dirty_ttl_seconds
         if age <= limit:
             continue
+        if bound_ids is None or ini_dir.name not in bound_ids:
+            try:
+                from sortie_deck.workspace import archive_repos_snapshot
+
+                archive_repos_snapshot(ws, ini_dir / "artifacts", max_mb=archive_max_mb)
+            except Exception as exc:  # noqa: BLE001 — 归档失败不阻断回收
+                logger.warning("sweep 归档失败 ini=%s: %s", ini_dir.name, exc)
         cleanup_workspace(ws)
         cleaned.append(ini_dir.name)
     return cleaned

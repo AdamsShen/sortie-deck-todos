@@ -7,7 +7,7 @@ import pytest
 
 from sortie_deck.graph import _maybe_publish
 from sortie_deck.models import RepoConfig, RoleId, StageContext, StageResult
-from sortie_deck.plugins.coding import clone_repos, ensure_worktree
+from sortie_deck.plugins.coding import _count_impl_files, clone_repos, ensure_worktree
 from sortie_deck.settings import settings
 
 
@@ -43,6 +43,33 @@ def test_ensure_worktree_sandbox_layout(tmp_path: Path):
     assert ensure_worktree(tmp_path, "ini_ws1", missions) == ws
     # 不是 git 仓库（无 worktree 语义）
     assert not (ws / ".git").exists()
+
+
+@pytest.mark.anyio
+async def test_clone_repos_without_repos_prepares_output_dir(tmp_path: Path):
+    """未绑定仓库：预创建 repos/ 统一产出目录，prompt 注入写入指引。
+
+    任务终态会把 repos/ 打包归档（workspace.archive_repos_snapshot），
+    agent 代码必须写进该目录才能被归档。
+    """
+    workspace = ensure_worktree(tmp_path, "ini_norepos", tmp_path)
+    section, log = await clone_repos([], workspace, "ini_norepos")
+    assert (workspace / "repos").is_dir()
+    assert "Write ALL implementation code" in section
+    assert str(workspace / "repos") in section
+    assert any("mission_repos=0" in line for line in log)
+
+
+def test_count_impl_files_repos_semantics(tmp_path: Path):
+    """实现文件计数按绑定与否区分 repos/ 语义：绑定时是 clone（排除），未绑定时是产出（计入）。"""
+    repos = tmp_path / "repos"
+    repos.mkdir(parents=True)
+    (repos / "app.py").write_text("x=1\n", encoding="utf-8")
+    (tmp_path / "README.md").write_text("r", encoding="utf-8")
+    # 绑定仓库：repos/ 是业务 clone，不计入
+    assert _count_impl_files(tmp_path, has_repos=True) == 0
+    # 未绑定：repos/ 是约定产出目录，计入；README 是沙盒说明，不计入
+    assert _count_impl_files(tmp_path, has_repos=False) == 1
 
 
 @pytest.mark.anyio
