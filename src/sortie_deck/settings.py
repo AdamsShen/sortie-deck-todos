@@ -318,8 +318,16 @@ class Settings(BaseSettings):
     # 形如 "authorization=Bearer xxx"：部分 OTLP 网关需要鉴权
     otel_headers: str = ""
     # --- git 回写链路（任务分支 + GitLab MR）---------------------------------
-    # 任务分支命名前缀：单仓库 sortie/<id>，多仓库 sortie/<id>-<repo>
+    # 任务分支命名前缀：统一 sortie/<id>-<repo>（单仓也带 repo 后缀，见 D6）
     git_branch_prefix: str = "sortie"
+    # 两级凭据（见 docs/plans/2026-11-03-git-credentials-two-tier.md）：
+    # 加密主密钥（urlsafe base64 32B，逗号分隔可做轮换，新钥在前）。
+    # 未配置时拒绝保存任何 git 凭据，绝不降级为明文。
+    git_secret_key: str | None = None
+    # 凭据与仓库注册表 sqlite 路径；空则用 <data_dir>/git_registry.sqlite
+    git_registry_path: Path | None = None
+    # 绑定仓库时的 ls-remote 预检超时（秒）
+    git_preflight_timeout: float = 10.0
     # push 时机：on_stage_success（编码阶段成功即 push）| on_approval（HITL 放行后
     # 重入编码阶段时 push）| off（不回写，仅本地沙盒）
     git_push_mode: str = "on_stage_success"

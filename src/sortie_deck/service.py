@@ -82,12 +82,19 @@ class ServiceError(Exception):
 def _clean_role_repos(
     raw: dict[str, list[dict[str, Any]]] | None,
 ) -> dict[str, list[RepoConfig]]:
-    """把外部传入的 role_repos 规范成 ``{slot: [RepoConfig]}``，丢掉空 URL。"""
+    """把外部传入的 role_repos 规范成 ``{slot: [RepoConfig]}``，丢掉空 URL。
+
+    凭据改造后：只认 ``source`` + ``credential_id``（见 git_cred），
+    历史字段 ``token`` 不再读取——避免明文凭据继续经请求体流入任务 payload。
+    """
     out: dict[str, list[RepoConfig]] = {}
     for slot, rows in (raw or {}).items():
         items: list[RepoConfig] = []
         for row in rows or []:
             if isinstance(row, RepoConfig):
+                if row.token:
+                    logger.warning("忽略 RepoConfig.token（已废弃），请改用 source/credential_id")
+                    row = row.model_copy(update={"token": None})
                 items.append(row)
                 continue
             if not isinstance(row, dict):
@@ -95,17 +102,94 @@ def _clean_role_repos(
             url = str(row.get("url") or "").strip()
             if not url:
                 continue
+            if row.get("token"):
+                logger.warning("忽略请求中的 repo token（已废弃），请改用 source/credential_id")
             items.append(
                 RepoConfig(
                     url=url,
                     branch=str(row.get("branch") or "").strip(),
                     name=str(row.get("name") or "").strip(),
-                    token=str(row.get("token") or "").strip() or None,
+                    source="workspace" if row.get("source") == "workspace" else "custom",
+                    credential_id=str(row.get("credential_id") or "").strip() or None,
                 )
             )
         if items:
             out[str(slot)] = items
     return out
+
+
+def _validate_repo_credentials(
+    clean: dict[str, list[RepoConfig]], *, actor_user_id: str
+) -> None:
+    """绑定前校验凭据归属（不联网；网络探活由 API 层的 preflight 负责）。
+
+    - workspace：credential_id 必填且存在、未禁用（执行期不会再用个人凭据兜底）；
+    - custom：操作人必须已配置该 host 的个人凭据。
+    """
+    from sortie_deck.git_cred import (
+        GitCredentialError,
+        host_of,
+        scheme_of,
+        stores_from_settings,
+    )
+
+    if not clean:
+        return
+    try:
+        creds, _workspace_repos, _user_repos = stores_from_settings()
+    except GitCredentialError as exc:
+        raise ServiceError("validation", f"git 凭据存储不可用：{exc}") from exc
+
+    for slot, rows in clean.items():
+        for repo in rows:
+            if repo.source == "workspace":
+                if not repo.credential_id:
+                    raise ServiceError(
+                        "validation",
+                        f"{slot}: 工作区仓库必须指定 credential_id（{repo.url}）",
+                    )
+                credential = creds.get(repo.credential_id)
+                if credential is None or not credential.is_active():
+                    raise ServiceError(
+                        "validation",
+                        f"{slot}: 工作区仓库凭据不存在或已禁用（{repo.credential_id}）",
+                    )
+                continue
+            host = host_of(repo.url)
+            if not host:
+                # 非常规 URL（本地路径 / 自定义 remote helper）：无法按 host 匹配凭据，
+                # 放行交给执行期 git 自行处理，避免误伤本机路径类仓库
+                logger.warning("%s: 无法从 URL 解析 host，跳过个人凭据校验（%s）", slot, repo.url)
+                continue
+            if actor_user_id and creds.find_for_host(
+                owner_id=actor_user_id, host=host, scheme=scheme_of(repo.url)
+            ) is None:
+                raise ServiceError(
+                    "validation",
+                    f"{slot}: 未配置 {host} 的个人 git 凭据，请先在「设置 → Git 凭据」中添加",
+                )
+
+
+async def preflight_role_repos(
+    clean: dict[str, list[RepoConfig]], *, actor_user_id: str
+) -> None:
+    """绑定前逐个仓库 `git ls-remote` 探活；失败直接报错，避免拖到 coding 阶段才炸。
+
+    必须由 async 调用方（API 路由 / MCP 工具）在自身事件循环里 await，
+    不要放进同步的 bind_repos：那里无法安全跑协程。
+    """
+    from sortie_deck.git_cred import preflight_git_access, resolver_from_settings
+
+    if not clean:
+        return
+    resolver = resolver_from_settings() if actor_user_id else None
+    for slot, rows in clean.items():
+        for repo in rows:
+            ok, reason = await preflight_git_access(
+                repo, resolver=resolver, actor_user_id=actor_user_id
+            )
+            if not ok:
+                raise ServiceError("validation", f"{slot}: {repo.url} 预检失败：{reason}")
 
 
 def _clean_materials(raw: list[dict[str, Any]] | None) -> list[ExternalMaterial]:
@@ -476,6 +560,8 @@ class MissionService:
         """
         if not (brief or "").strip():
             raise ServiceError("validation", "brief 不能为空")
+        clean_repos = _clean_role_repos(role_repos)
+        _validate_repo_credentials(clean_repos, actor_user_id=principal.user.id)
         req = CreateInitiativeRequest(
             title=(title or brief.strip().splitlines()[0])[:80],
             brief=brief.strip(),
@@ -486,7 +572,7 @@ class MissionService:
             auto_confirm_pipeline=True,
             creator_name=principal.display_name,
             created_by=principal.user.id,
-            role_repos=_clean_role_repos(role_repos),
+            role_repos=clean_repos,
             materials=_clean_materials(materials),
         )
         return await self.orch.create_initiative(req)
@@ -504,6 +590,7 @@ class MissionService:
                 "请用 create_mission 建草稿 → bind_repos → start_mission",
             )
         clean = _clean_role_repos(role_repos)
+        _validate_repo_credentials(clean, actor_user_id=principal.user.id)
         meta = dict(ini.meta or {})
         meta["role_repos"] = {
             slot: [r.model_dump(mode="json") for r in rows] for slot, rows in clean.items()

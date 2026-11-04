@@ -681,7 +681,9 @@ class HarnessStageExecutor:
         data_dir = Path(ctx.data_dir) if ctx.data_dir else settings.data_dir
         worktrees_dir = Path(ctx.worktrees_dir) if ctx.worktrees_dir else settings.worktrees_dir
         workspace = ensure_worktree(data_dir.parent, ctx.initiative_id, worktrees_dir)
-        repo_section, repo_log = await clone_repos(ctx.repos, workspace, ctx.initiative_id)
+        repo_section, repo_log = await clone_repos(
+            ctx.repos, workspace, ctx.initiative_id, actor_user_id=ctx.actor_user_id
+        )
 
         # 产物目录：文档型阶段 cwd 直接指向 artifacts/<stage>（运行期可实时看到真产物），
         # 编码型阶段 cwd 仍是 workspace，产物目录只作为额外可写目录 / 收尾归档目标。

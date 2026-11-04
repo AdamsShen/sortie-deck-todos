@@ -45,7 +45,7 @@ def origin_repo(tmp_path: Path) -> Path:
 
 
 def test_mission_branch_naming():
-    assert mission_branch("ini_1", "repo", multi_repo=False) == "sortie/ini_1"
+    assert mission_branch("ini_1", "repo", multi_repo=False) == "sortie/ini_1-repo"
     assert mission_branch("ini_1", "repo", multi_repo=True) == "sortie/ini_1-repo"
 
 
@@ -60,9 +60,9 @@ async def test_publish_commit_push_and_cleanup(tmp_path: Path, monkeypatch, orig
 
     clone = workspace / "repos" / "repo"
     # 任务分支已创建并被 checkout
-    assert (_git(clone, "rev-parse", "--verify", "sortie/" + ini)).returncode == 0
+    assert (_git(clone, "rev-parse", "--verify", "sortie/" + ini + "-repo")).returncode == 0
     head = _git(clone, "symbolic-ref", "--short", "HEAD").stdout.strip()
-    assert head == f"sortie/{ini}"
+    assert head == f"sortie/{ini}-repo"
 
     # agent 修改代码 → publish
     (clone / "feature.py").write_text("print('x')\n", encoding="utf-8")
@@ -72,12 +72,12 @@ async def test_publish_commit_push_and_cleanup(tmp_path: Path, monkeypatch, orig
     assert len(results) == 1
     r = results[0]
     assert r.error is None and r.committed and r.pushed
-    assert r.branch == f"sortie/{ini}"
+    assert r.branch == f"sortie/{ini}-repo"
     assert r.mr_url is None  # 未配置 GitLab API → 软跳过
     # push 成功后工作副本被回收
     assert not (workspace / "repos").exists()
     # 远端裸仓库上存在任务分支
-    out = _git(origin_repo, "rev-parse", "--verify", f"refs/heads/sortie/{ini}")
+    out = _git(origin_repo, "rev-parse", "--verify", f"refs/heads/sortie/{ini}-repo")
     assert out.returncode == 0
 
 
@@ -120,8 +120,8 @@ def test_is_dirty_states(tmp_path: Path, origin_repo: Path):
     _git(clone, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "wip")
     assert is_dirty(clone) is True
     # push（带 -u）+ 同步远端跟踪引用（生产路径 _push_branch 的行为）→ 干净
-    _git(clone, "push", "-u", str(origin_repo), f"sortie/{ini}:sortie/{ini}")
-    _git(clone, "update-ref", f"refs/remotes/origin/sortie/{ini}", "HEAD")
+    _git(clone, "push", "-u", str(origin_repo), f"sortie/{ini}-repo:sortie/{ini}-repo")
+    _git(clone, "update-ref", f"refs/remotes/origin/sortie/{ini}-repo", "HEAD")
     assert is_dirty(clone) is False
 
 

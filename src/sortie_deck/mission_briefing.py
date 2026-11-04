@@ -606,8 +606,9 @@ class MissionBriefingAgent:
     ) -> BriefingSession:
         """Attach per-slot git repos to the pending draft (UI edit before confirm).
 
-        Each entry: ``{"url": ..., "branch": ..., "name": ..., "token": ...}``.
-        Empty ``url`` rows are dropped; only slots keep non-empty lists.
+        Each entry: ``{"url", "branch", "name", "source", "credential_id"}``。
+        凭据重构后不再接受 ``token``（明文不进草稿）；空 ``url`` 行丢弃，
+        只有非空列表的槽位保留。
         """
         sess = self.store.get(session_id)
         clean: dict[str, list[dict[str, Any]]] = {}
@@ -624,7 +625,9 @@ class MissionBriefingAgent:
                         "url": url,
                         "branch": str(r.get("branch") or "").strip(),
                         "name": str(r.get("name") or "").strip(),
-                        "token": str(r.get("token") or "").strip() or None,
+                        # workspace=管理员仓库（执行期用工作区凭据）；其余按个人凭据解析
+                        "source": "workspace" if r.get("source") == "workspace" else "custom",
+                        "credential_id": str(r.get("credential_id") or "").strip() or None,
                     }
                 )
             if rows:

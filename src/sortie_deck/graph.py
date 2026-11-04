@@ -80,6 +80,7 @@ async def _maybe_publish(
             ctx.initiative_id,
             ctx.repos,
             commit_message=f"sortie: {ctx.initiative_id} stage={stage}",
+            actor_user_id=ctx.actor_user_id,
         )
     except Exception as exc:  # noqa: BLE001 — 回写失败不影响阶段结果
         return {"git_publish_errors": [f"publish_repos 异常: {exc}"]}
@@ -1729,6 +1730,7 @@ def build_graph_from_template(
 
         ctx = StageContext(
             initiative_id=state["initiative_id"],
+            actor_user_id=state.get("actor_user_id") or "",
             thread_id=state["thread_id"],
             stage=stage,
             role=role,

@@ -80,14 +80,14 @@ async def test_clone_creates_task_branch_and_prompt(tmp_path: Path, origin_repo:
     section, log = await clone_repos(repos, workspace, ini)
     clone = workspace / "repos" / "repo"
     # 任务分支存在且已 checkout
-    assert _git(clone, "rev-parse", "--verify", f"sortie/{ini}").returncode == 0
-    assert _git(clone, "symbolic-ref", "--short", "HEAD").stdout.strip() == f"sortie/{ini}"
+    assert _git(clone, "rev-parse", "--verify", f"sortie/{ini}-repo").returncode == 0
+    assert _git(clone, "symbolic-ref", "--short", "HEAD").stdout.strip() == f"sortie/{ini}-repo"
     # prompt 与日志注入了任务分支信息
-    assert f"sortie/{ini}" in section
-    assert any(f"task branch created=sortie/{ini}" in line for line in log)
+    assert f"sortie/{ini}-repo" in section
+    assert any(f"task branch created=sortie/{ini}-repo" in line for line in log)
     # 幂等重试：分支复用
     section2, log2 = await clone_repos(repos, workspace, ini)
-    assert any(f"task branch reused=sortie/{ini}" in line for line in log2)
+    assert any(f"task branch reused=sortie/{ini}-repo" in line for line in log2)
     # 多仓库命名：带仓库名后缀
     repos2 = [
         RepoConfig(url=str(origin_repo), branch="main", name="backend"),
@@ -131,7 +131,7 @@ async def test_maybe_publish_on_stage_success(tmp_path: Path, monkeypatch, origi
     result = StageResult(status="ok", message="done")
     meta = await _maybe_publish({"initiative_id": ini}, ctx, result, "eng_implement")
     assert meta is not None and meta["git_publish_pushed"] == 1
-    assert meta["git_publish"][0]["branch"] == f"sortie/{ini}"
+    assert meta["git_publish"][0]["branch"] == f"sortie/{ini}-repo"
     # push 后副本清理
     assert not (workspace / "repos").exists()
 

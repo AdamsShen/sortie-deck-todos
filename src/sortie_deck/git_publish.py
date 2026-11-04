@@ -9,7 +9,7 @@
 设计要点：
 - 分支权威数据在 GitLab，本地 clone 只是临时工作副本（push 后即可回收）；
 - 任一仓库失败不中断其余仓库（软降级），结果进 StageResult.meta → 事件流；
-- push 使用带 token 的完整 URL（复用 coding._clone_url），不在远端配置里落 token；
+- 凭据经 `GIT_ASKPASS` 环境变量注入（见 git_cred），命令行与远端配置都不落密钥；
 - 幂等可重试：无变更不 commit，MR 按源分支去重复用。
 """
 
@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shutil
 import time
 from dataclasses import asdict, dataclass
@@ -45,22 +46,34 @@ def _sanitize(name: str) -> str:
     return "".join(c if c.isalnum() or c in "-_" else "-" for c in name)[:80]
 
 
-def mission_branch(initiative_id: str, repo_name: str, *, multi_repo: bool) -> str:
-    """任务分支命名：单仓库 ``sortie/<initiative_id>``；多仓库 ``sortie/<id>-<name>``。"""
+def mission_branch(initiative_id: str, repo_name: str, *, multi_repo: bool = True) -> str:
+    """任务分支命名：统一 ``sortie/<initiative_id>-<repo>``（决策 D6）。
+
+    ``multi_repo`` 仅为兼容旧调用点保留：早期单仓用 ``sortie/<id>``、多仓才带
+    仓库后缀，导致任务后期加仓会留下孤儿分支。现在一律带后缀，参数不影响结果。
+    """
     prefix = (settings.git_branch_prefix or "sortie").strip() or "sortie"
-    if multi_repo:
-        return f"{prefix}/{_sanitize(initiative_id)}-{_sanitize(repo_name)}"
-    return f"{prefix}/{_sanitize(initiative_id)}"
+    return f"{prefix}/{_sanitize(initiative_id)}-{_sanitize(repo_name)}"
 
 
-async def _git(args: list[str], cwd: Path, timeout: float = 120.0) -> tuple[int, str, str]:
-    """在指定目录执行 git 子命令，返回 (returncode, stdout, stderr)。"""
+async def _git(
+    args: list[str],
+    cwd: Path,
+    timeout: float = 120.0,
+    *,
+    extra_env: dict[str, str] | None = None,
+) -> tuple[int, str, str]:
+    """在指定目录执行 git 子命令，返回 (returncode, stdout, stderr)。
+
+    ``extra_env`` 用于注入凭据（GIT_ASKPASS），保证密钥不出现在命令行里。
+    """
     proc = await asyncio.create_subprocess_exec(
         "git",
         *args,
         cwd=str(cwd),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=({**os.environ, **(extra_env or {})} if extra_env else None),
     )
     try:
         stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
@@ -122,12 +135,42 @@ async def _commit_all(target: Path, message: str) -> tuple[bool, str | None]:
     return True, None
 
 
-async def _push_branch(target: Path, repo: RepoConfig, branch: str) -> tuple[bool, str | None]:
-    """把任务分支 push 到远端（用带 token 的完整 URL，不在 remote 配置里落 token）。
+async def _push_branch(
+    target: Path,
+    repo: RepoConfig,
+    branch: str,
+    *,
+    actor_user_id: str = "",
+    resolver: Any | None = None,
+) -> tuple[bool, str | None]:
+    """把任务分支 push 到远端（推到**远端同名分支**，不合并、不加 --force）。
 
+    凭据经 askpass env 注入；命令行里始终是裸 URL。
     ``-u`` 建立上游跟踪，供脏状态判定（@{u}..HEAD）使用。
     """
-    code, out, err = await _git(["push", "-u", _clone_url(repo), f"{branch}:{branch}"], target)
+    extra_env: dict[str, str] = {}
+    git_ctx = None
+    if resolver is not None:
+        from sortie_deck.git_cred import build_askpass_env
+
+        try:
+            resolved = resolver.resolve(repo, actor_user_id=actor_user_id)
+        except Exception as exc:  # noqa: BLE001 — 凭据问题属于可读失败原因
+            return False, f"git push 失败: 凭据不可用（{exc}）"
+        if resolved.scheme == "https":
+            git_ctx = build_askpass_env(
+                username=resolved.username, secret=resolved.secret, workdir=target
+            )
+            extra_env = git_ctx.env
+    try:
+        code, out, err = await _git(
+            ["push", "-u", _clone_url(repo), f"{branch}:{branch}"],
+            target,
+            extra_env=extra_env,
+        )
+    finally:
+        if git_ctx is not None:
+            git_ctx.__exit__()
     if code != 0:
         return False, _scrub(f"git push 失败: {(err or out)[:300]}", repo)
     # push 已成功，同步远端跟踪引用（URL push 不会自动更新 refs/remotes），
@@ -174,15 +217,27 @@ async def publish_repos(
     repos: list[RepoConfig],
     *,
     commit_message: str,
+    actor_user_id: str = "",
+    resolver: Any | None = None,
 ) -> list[PublishResult]:
     """逐仓库 commit + push 任务分支 + 建 MR；任一失败不中断其余仓库。
 
     输入输出示例：workspace=data/missions/<id>/workspace，repos=[RepoConfig(url,
-    branch, name)] → [PublishResult(repo_name="repo", branch="sortie/ini_x",
+    branch, name)] → [PublishResult(repo_name="repo", branch="sortie/ini_x-repo",
     committed=True, pushed=True, mr_url="https://gitlab/.../-/merge_requests/1",
     error=None)]。
+
+    ``actor_user_id`` 用于解析 custom 仓库的个人凭据；工作区仓库不受其影响。
     """
     from sortie_deck.plugins.coding import _repo_dirname  # noqa: F401 — 保持一致命名来源
+
+    if resolver is None and actor_user_id:
+        try:
+            from sortie_deck.git_cred import resolver_from_settings
+
+            resolver = resolver_from_settings()
+        except Exception:  # noqa: BLE001 — 凭据库不可用时按无凭据回写（公开仓库）
+            logger.warning("git 凭据库不可用，push 将以无凭据方式执行", exc_info=True)
 
     multi = len(repos) > 1
     results: list[PublishResult] = []
@@ -208,7 +263,9 @@ async def publish_repos(
         error: str | None = None
         committed, error = await _commit_all(target, commit_message)
         if error is None and committed:
-            pushed, error = await _push_branch(target, repo, branch)
+            pushed, error = await _push_branch(
+                target, repo, branch, actor_user_id=actor_user_id, resolver=resolver
+            )
         if error is None and pushed:
             mr_url = _ensure_mr(
                 repo, branch, initiative_id, f"Sortie Deck: {initiative_id} → {repo.branch or 'default'}"

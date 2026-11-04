@@ -354,14 +354,24 @@ def _repo_dirname(repo: RepoConfig) -> str:
 
 
 def _clone_url(repo: RepoConfig) -> str:
-    """Insert the access token into https URLs (never log the result)."""
-    if repo.token and repo.url.startswith("https://"):
-        return repo.url.replace("https://", f"https://{repo.token}@", 1)
+    """@deprecated 返回不带凭据的裸 URL。
+
+    旧实现把 ``RepoConfig.token`` 拼成 ``https://token@host/...``，会让密钥
+    出现在命令行、``ps`` 与 ``process.command`` span 里。凭据改由
+    ``build_askpass_env()`` 经环境变量注入（见 git_cred）。
+    """
+    if repo.token:
+        logger.warning("RepoConfig.token 已废弃，请改用 git 凭据（source/credential_id）")
     return repo.url
 
 
 async def clone_repos(
-    repos: list[RepoConfig], workspace: Path, initiative_id: str = ""
+    repos: list[RepoConfig],
+    workspace: Path,
+    initiative_id: str = "",
+    *,
+    actor_user_id: str = "",
+    resolver: Any | None = None,
 ) -> tuple[str, list[str]]:
     """Clone each mission repo into ``workspace/repos/<name>`` before coding.
 
@@ -370,9 +380,12 @@ async def clone_repos(
     stage — the agent is told which checkouts exist.
 
     任务分支策略：clone 成功后基于目标分支 HEAD 创建任务分支
-    ``sortie/<initiative_id>``（多仓库 ``sortie/<id>-<name>``，见
-    git_publish.mission_branch），agent 在任务分支上迭代，push 后建 MR。
-    分支幂等：已存在则复用（重试场景）。
+    ``sortie/<initiative_id>-<repo>``（见 git_publish.mission_branch），
+    agent 在任务分支上迭代，push 后建 MR。分支幂等：已存在则复用（重试场景）。
+
+    凭据：``resolver`` 按仓库来源解析凭据（工作区仓库→工作区凭据，
+    custom→actor 的个人凭据），HTTPS 走 askpass env 注入，密钥不进命令行。
+    ``actor_user_id`` 为空时视为无需凭据（公开仓库 / 单测），不访问凭据库。
 
     磁盘水位防护：可用空间低于 ``TDT_MIN_DISK_FREE_MB`` 时跳过 clone 并在
     prompt/log 中说明，防止极端并发打爆服务器磁盘。
@@ -416,6 +429,15 @@ async def clone_repos(
         )
         return section, log
 
+    # 未显式传 resolver 时按全局配置构造（actor 为空说明无需个人凭据，避免单测碰到真实库）
+    if resolver is None and actor_user_id:
+        try:
+            from sortie_deck.git_cred import resolver_from_settings
+
+            resolver = resolver_from_settings()
+        except Exception:  # noqa: BLE001 — 凭据库不可用时仍可克隆公开仓库
+            logger.warning("git 凭据库不可用，clone 将以无凭据方式执行", exc_info=True)
+
     entries: list[str] = []
     branch_notes: list[str] = []
     for repo in repos:
@@ -428,7 +450,35 @@ async def clone_repos(
             if repo.branch:
                 args += ["--branch", repo.branch, "--single-branch"]
             args += [_clone_url(repo), str(target)]
-            code, out, err = await _run_cmd(args, cwd=workspace)
+
+            git_ctx = None
+            extra_env: dict[str, str] = {}
+            if resolver is not None:
+                from sortie_deck.git_cred import build_askpass_env
+
+                try:
+                    resolved = resolver.resolve(repo, actor_user_id=actor_user_id)
+                except Exception as exc:  # noqa: BLE001 — 单仓凭据失败不阻断其它仓库
+                    log.append(f"repo {target.name}: credential unavailable ({exc})")
+                    entries.append(
+                        f"- `{target}` — CHECKOUT SKIPPED: git credential unavailable"
+                    )
+                    continue
+                if resolved.scheme == "https":
+                    git_ctx = build_askpass_env(
+                        username=resolved.username,
+                        secret=resolved.secret,
+                        workdir=workspace,
+                    )
+                    extra_env = git_ctx.env
+                else:
+                    # SSH 凭据二期支持；当前依赖 worker 容器内已挂载的密钥
+                    log.append(f"repo {target.name}: ssh scheme (依赖容器内密钥)")
+            try:
+                code, out, err = await _run_cmd(args, cwd=workspace, extra_env=extra_env)
+            finally:
+                if git_ctx is not None:
+                    git_ctx.__exit__()
             log.append(f"repo {target.name}: clone exit={code}")
             if code != 0:
                 log.append(f"clone stderr={(err or out)[:500]}")
@@ -566,7 +616,9 @@ class ClaudeCodeExecutor:
         workspace = ensure_worktree(self.repo_root, ctx.initiative_id, self.worktrees_root)
         artifact_section, brief_log = await _artifact_brief_section(ctx)
         mcp_extra, mcp_log = await _mcp_prompt_and_log(ctx)
-        repo_section, repo_log = await clone_repos(ctx.repos, workspace, ctx.initiative_id)
+        repo_section, repo_log = await clone_repos(
+            ctx.repos, workspace, ctx.initiative_id, actor_user_id=ctx.actor_user_id
+        )
         checklist_section, review_section = _review_sections(ctx, workspace)
         mode = _permission_mode(ctx)
         prompt = (
@@ -733,7 +785,9 @@ class CursorCliExecutor:
         # prd 仅用于知识库检索（检索需要原文），prompt 里走「摘要 + 路径」
         prd = ctx.upstream_artifacts.get("prd.md", ctx.brief)
         artifact_section, brief_log = await _artifact_brief_section(ctx)
-        repo_section, repo_log = await clone_repos(ctx.repos, workspace, ctx.initiative_id)
+        repo_section, repo_log = await clone_repos(
+            ctx.repos, workspace, ctx.initiative_id, actor_user_id=ctx.actor_user_id
+        )
         checklist_section, review_section = _review_sections(ctx, workspace)
         query = f"{ctx.brief}\n{prd}\n{ctx.human_instruction or ''}"
         kb_meta: dict[str, str] = {}

@@ -2129,6 +2129,8 @@ class Orchestrator:
                         self.store.upsert(ini)
                     payload: Any = {
                         "initiative_id": ini.id,
+                        # 个人 git 凭据按任务创建者解析（重跑同样沿用，避免换人跑拿不到 key）
+                        "actor_user_id": ini.created_by or "",
                         "thread_id": ini.thread_id,
                         "brief": ini.brief,
                         "title": ini.title,

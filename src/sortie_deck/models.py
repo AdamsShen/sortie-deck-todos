@@ -171,15 +171,23 @@ class RepoConfig(BaseModel):
     """任务关联的 git 仓库（开发 agent 的迭代目标）。
 
     ``name`` 是 checkout 目录名（默认取 URL basename 去掉 ``.git``）；
-    ``branch`` 是**任务关联的目标分支**——任务分支 ``sortie/<initiative_id>``
+    ``branch`` 是**任务关联的目标分支**——任务分支 ``sortie/<initiative_id>-<repo>``
     基于它创建，编码 agent 在任务分支上迭代，push 后向它发起 MR（人工合并）；
-    空 = 远端默认分支；``token`` 注入 https clone/push URL（日志脱敏，不落远端配置）。
+    空 = 远端默认分支。
+
+    凭据（见 docs/plans/2026-11-03-git-credentials-two-tier.md）：
+    - ``source="workspace"``：仓库来自管理员维护的工作区清单，执行期使用
+      ``credential_id`` 指向的工作区凭据，与操作人无关；
+    - ``source="custom"``：用户自填 URL，执行期按 host 匹配该用户自己的个人凭据。
+    ``token`` 已废弃（仅为兼容历史任务保留读取），新写入一律置空。
     """
 
     url: str
     branch: str = ""
     name: str = ""
-    token: str | None = None
+    source: Literal["workspace", "custom"] = "custom"
+    credential_id: str | None = None
+    token: str | None = None  # @deprecated 旧版明文凭据，仅读不写
 
 
 class RoleAgent(BaseModel):
@@ -365,6 +373,8 @@ class Initiative(BaseModel):
 
 class StageContext(BaseModel):
     initiative_id: str
+    # 任务创建者 user_id：个人 git 凭据按他解析（见 docs/plans/2026-11-03-git-credentials-two-tier.md D1）
+    actor_user_id: str = ""
     thread_id: str
     stage: str
     role: RoleId
