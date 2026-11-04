@@ -153,6 +153,15 @@ class Settings(BaseSettings):
     harness_auto_compact_window: int = 200000
     # 单阶段最大 agent 轮次；0 表示不限制。用于兜住「反复打磨不收敛」的阶段。
     harness_max_turns: int = 0
+    # 各阶段 agent 回合上限：`stage=轮次`，逗号分隔；未列出的阶段回落 harness_max_turns。
+    # 注意这是 SDK 一次 query 内的 assistant turn 数（每次工具调用占 1 个 turn）。
+    # 设太小会把 agent 截断成空回复、阶段直接 fail：实测 intake=2 / 6 都在
+    # 30 秒内被截断（前几轮全是工具调用，没来得及输出文本，2026-11-04）。
+    # 20 ≈ 正常收尾需要的 8-10 轮 + 充分余量，同时封死自由发挥式无限循环。
+    stage_max_turns: str = "intake=20"
+    # 禁止 agent 拉小群的阶段：逗号分隔。集结拉群 = 三队员回复 + 回注 + 收尾轮，
+    # 直接把轮次翻倍；需求对齐最多问一个角色，默认在 intake 禁掉。
+    subroom_disabled_stages: str = "intake"
     # --- 多镜头自审（见 docs/plans/2026-11-02-多镜头自审方案与改动说明.md）---
     # 编码/自测阶段结束后，由编排层在同一 provider 会话里追加 N 轮不同视角的审查；
     # 每轮追加 logs/<stage>/review.jsonl，收尾写 review.json 与 review.md 产物。

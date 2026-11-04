@@ -187,3 +187,38 @@ def reset_harness_registry() -> None:
 
 def is_valid_harness(name: str | None) -> bool:
     return bool(name) and name in HARNESS_NAMES
+
+
+def parse_stage_turns(raw: str) -> dict[str, int]:
+    """解析 `intake=2,eng_backend=0` 形式的阶段回合上限映射，非法项直接丢弃。"""
+    mapping: dict[str, int] = {}
+    for part in str(raw or "").split(","):
+        name, _, value = part.partition("=")
+        key = name.strip().lower()
+        if not key:
+            continue
+        try:
+            turns = int(value.strip())
+        except (TypeError, ValueError):
+            continue
+        if turns >= 0:
+            mapping[key] = turns
+    return mapping
+
+
+def resolve_stage_max_turns(stage: str) -> int:
+    """该阶段允许的 agent 回合上限。
+
+    优先级：``stage_max_turns`` 里列出的阶段值 > 全局 ``harness_max_turns``。
+    返回 0 表示不限制（交给 provider 传 None）。
+
+    为什么要按阶段限：agent loop 的耗时 ≈ 轮次 × 单轮生成时长，而集结
+    （intake）这类纯对齐阶段用不着无限工具循环——实测不封顶时集结要 9 分钟。
+    """
+    from sortie_deck.settings import settings
+
+    mapping = parse_stage_turns(getattr(settings, "stage_max_turns", ""))
+    key = str(stage or "").strip().lower()
+    if key in mapping:
+        return mapping[key]
+    return int(getattr(settings, "harness_max_turns", 0) or 0)

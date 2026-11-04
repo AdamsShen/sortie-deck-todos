@@ -18,7 +18,7 @@ import importlib.util
 import logging
 from typing import Any
 
-from sortie_deck.harness_providers.base import HarnessSession
+from sortie_deck.harness_providers.base import HarnessSession, resolve_stage_max_turns
 from sortie_deck.models import utc_now
 
 logger = logging.getLogger(__name__)
@@ -164,7 +164,8 @@ class ClaudeCodeProvider:
             mcp_servers=dict(pack.get("mcp_servers") or {}),
             strict_mcp_config=strict,
             env=_auto_compact_env(settings.harness_auto_compact_window),
-            max_turns=int(settings.harness_max_turns) or None,
+            # 阶段回合上限：intake 等对齐阶段封顶（stage_max_turns），编码阶段默认不限
+            max_turns=resolve_stage_max_turns(str((session.meta or {}).get("stage", ""))) or None,
         )
         parts: list[str] = []
         native_id = session.native_id

@@ -33,6 +33,23 @@ from sortie_deck.rooms import MAIN_ROOM, RoomStore
 
 logger = logging.getLogger(__name__)
 
+
+def stage_allows_subroom(stage: str) -> bool:
+    """该阶段是否允许执行中的 agent 拉小群。
+
+    ``subroom_disabled_stages`` 列出的阶段直接拒绝。intake 默认禁止：
+    集结是需求对齐，实测拉群把耗时翻倍（三队员回复 + 回注 + 再跑一轮收尾），
+    而对齐口径最多问一个角色，用房间频道 @ 就够了。
+    """
+    from sortie_deck.settings import settings
+
+    disabled = {
+        part.strip().lower()
+        for part in str(getattr(settings, "subroom_disabled_stages", "") or "").split(",")
+        if part.strip()
+    }
+    return str(stage or "").strip().lower() not in disabled
+
 ReplyFn = Callable[[str, str], Awaitable[str]]
 # Sub-room state/turn fan-out. Synchronous on purpose: turns are appended from
 # inside the discussion coroutine, and the sink (orchestrator) schedules the

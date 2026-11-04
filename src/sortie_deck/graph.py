@@ -1315,8 +1315,13 @@ def build_graph_from_template(
     ) -> Any | None:
         """Host handed to session-capable executors so they can open a sub-room."""
         from sortie_deck.settings import settings as _settings
+        from sortie_deck.subroom import stage_allows_subroom
 
         if not bool(getattr(_settings, "subroom_enabled", False)):
+            return None
+        # 阶段级禁拉群（默认含 intake）：host 为 None 时执行器不会注入
+        # subroom 协议，agent 即使声明了拉群意图也不会被兑现。
+        if not stage_allows_subroom(stage):
             return None
         try:
             from sortie_deck.orchestrator import get_orchestrator
