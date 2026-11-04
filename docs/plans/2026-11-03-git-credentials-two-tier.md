@@ -10,6 +10,8 @@
 
 1. **工作区仓库（管理员配置）**：管理员维护「可操作仓库清单」及其凭据；**所有登录用户都能看到并选用**这些仓库，执行时统一使用管理员配置的凭据。
 2. **个人凭据（用户自配）**：用户在个人设置里自行填写 git 地址与对应密钥；**只有本人可见可改**，其他人（含管理员）无权查看和修改。
+3. **仓库按角色选择**：任务里按角色槽位下拉选择仓库（工作区仓库 / 我的私有仓库）+ 填分支，可多选；**凭据不在此处填写**，全部在全局配置中预置，执行期由后端解析。
+4. **分支只推不合并**：编码产出推送到远端独立任务分支（`sortie/<initiative_id>[-<repo>]`），不合并回目标分支，合并由人工通过 MR 完成。
 
 不做第三级（仓库级 deploy token 独立成一级）。
 
@@ -138,6 +140,17 @@ CREATE TABLE workspace_repos (
   created_at     REAL NOT NULL,
   updated_at     REAL NOT NULL
 );
+
+-- 个人登记的私有仓库清单：供选择器「我的私有仓库」下拉使用（凭据按 host 匹配，不在此表）
+CREATE TABLE user_git_repos (
+  id             TEXT PRIMARY KEY,          -- urp_xxx
+  owner_id       TEXT NOT NULL,             -- user_id，仅本人可见
+  name           TEXT NOT NULL,
+  url            TEXT NOT NULL,
+  default_branch TEXT NOT NULL DEFAULT '',
+  created_at     REAL NOT NULL
+);
+CREATE UNIQUE INDEX ux_user_repo ON user_git_repos(owner_id, url);
 ```
 
 `RepoConfig` 变更（`/Library/git-root/sortie-deck-todos/src/sortie_deck/models.py:170`）：
@@ -168,6 +181,9 @@ class RepoConfig(BaseModel):
 | DELETE | `/api/me/git-credentials/{id}` | 本人 | 删除 |
 | POST | `/api/me/git-credentials/{id}/verify` | 本人 | `git ls-remote` 探活，返回 ok/原因 |
 | POST | `/api/admin/git/credentials/{id}/disable` | admin | 安全处置：禁用某条个人凭据（决策项 D3） |
+| GET | `/api/me/git/repos` | 本人 | 列出自己登记的私有仓库（选择器「我的私有仓库」数据源） |
+| POST | `/api/me/git/repos` | 本人 | 登记一条私有仓库（name/url/默认分支） |
+| DELETE | `/api/me/git/repos/{id}` | 本人 | 删除登记 |
 | POST | `/api/git/preflight` | 登录用户 | 传 `{url, branch}` → 返回将使用的凭据来源 + `ls-remote` 结果（不返回密钥） |
 
 统一约定：任何响应、错误信息、事件流都**不得**包含密钥明文；错误信息只允许出现 host、username、fingerprint。
@@ -189,7 +205,25 @@ class RepoConfig(BaseModel):
 | `src/sortie_deck/models.py:170` | `RepoConfig` 新增 `source` / `credential_id`，`token` 标 deprecated |
 | `pyproject.toml` | 显式声明 `cryptography>=43`（当前是传递依赖，不能依赖它一直存在） |
 
-### 执行期身份（默认值，见决策项 D1）
+### 7.1 分支语义与回写行为（现状确认，本次不改）
+
+任务分支由执行器创建与回写，**全过程不会合并回目标分支**，合并只能人工在平台上完成：
+
+| 环节 | 位置 | 行为 |
+|---|---|---|
+| 建任务分支 | `/Library/git-root/sortie-deck-todos/src/sortie_deck/plugins/coding.py:443-457` | 基于绑定时指定的目标分支 HEAD，新建/复用 `sortie/<initiative_id>`（多仓为 `sortie/<id>-<repo_name>`） |
+| 提交 | `/Library/git-root/sortie-deck-todos/src/sortie_deck/git_publish.py:97-122` | `git add -A` + commit；**无变更不提交**（幂等） |
+| 推远端 | `/Library/git-root/sortie-deck-todos/src/sortie_deck/git_publish.py:130` | `git push -u <url> <branch>:<branch>`，把任务分支推到**远端同名新分支**；**不加 `--force`**，非快进直接失败并软降级，不丢提交 |
+| 建 MR | `/Library/git-root/sortie-deck-todos/src/sortie_deck/git_publish.py:158-164` | `source=任务分支`，`target=绑定时指定的目标分支`，描述注明「请人工审核合并」 |
+
+分支命名与唯一性：
+
+- 分支名取 `mission_branch()`（`/Library/git-root/sortie-deck-todos/src/sortie_deck/git_publish.py:48-53`），是 `sortie/<initiative_id>`，**不是任务标题**——标题可重复、含中文空格，不适合做分支名。
+- **任务之间天然唯一**：`initiative_id` 全局唯一（`ini_` + 随机），不会与其他任务撞名。
+- **边界 1（多仓切换）**：绑 1 个仓时是 `sortie/<id>`，加成 2 个仓后变为 `sortie/<id>-<repo>`，旧分支会成为孤儿分支 → 见决策项 **D6**。
+- **边界 2（重跑复用）**：同一任务重入编码阶段复用同名分支并追加提交（幂等，避免分支爆炸），不是覆盖；若要「每次执行一条新分支」需引入执行序号 → 见决策项 **D7**。
+
+### 7.2 执行期身份（默认值，见决策项 D1）
 
 - 任务创建时快照 `created_by`；worker 执行时按该用户解析个人凭据。
 - 凭据在执行前被删除/禁用 → 该阶段**硬失败**，事件流提示「重新绑定仓库或更新凭据」（决策项 D2）。
@@ -200,10 +234,41 @@ class RepoConfig(BaseModel):
 
 | 页面 | 改动 |
 |---|---|
-| 设置页 | 新增「Git 凭据」区块：列表（label/host/指纹/到期）、新建（host + 类型 + 密钥 + 可选用户名）、删除、探活按钮；密钥输入框只写不读 |
+| 设置页 | 新增「Git 凭据」区块：列表（label/host/指纹/到期）、新建（host + 类型 + 密钥 + 可选用户名）、删除、探活按钮；密钥输入框只写不读。**凭据只在这里配**，其他页面不再出现密钥输入 |
 | 管理页 | 新增「工作区仓库」区块：仓库列表、增删改、注入/覆盖凭据、启用开关 |
-| 任务规划（绑仓库） | `/Library/git-root/sortie-deck-todos/apps/web/src/components/MissionBriefingChat.tsx:203-231` 的 `{url, branch}` 行改为：仓库选择器（工作区仓库下拉）+ 「自定义 URL」入口；每行显示凭据来源徽标（`工作区凭据` / `个人凭据` / `缺少凭据`） |
+| 任务规划（绑仓库） | `/Library/git-root/sortie-deck-todos/apps/web/src/components/MissionBriefingChat.tsx:203-231` 的 `{url, branch}` 行改为角色级仓库选择器，详见 §8.1 |
 | 全局 | 预检失败的红色提示复用现有 `error` bar；凭据缺失时禁用「确认」按钮 |
+
+### 8.1 仓库选择器（角色级，不含任何凭据输入）
+
+**落点**：仓库绑定仍按**角色槽位**存储（`role_repos: {slot: [RepoConfig]}`），因为克隆、回写、MR 全链路都按槽位工作（`/Library/git-root/sortie-deck-todos/src/sortie_deck/orchestrator.py:801`）。同一角色的多个节点共用同一份仓库配置，界面上需明确标注。
+
+**交互**：
+
+```text
+角色：eng_backend
+┌ 代码仓库 ─────────────────────────────┐
+│ ① [工作区仓库 ▾]  platform-server      │
+│    分支 [main        ]  凭据：工作区凭据 ✓
+│ ② [我的私有仓库 ▾] my-tools            │
+│    分支 [dev         ]  凭据：个人凭据(sk-…a1b2) ✓
+│ ③ [自定义 URL…]                        │
+└────────────────────────────────────────┘
+```
+
+规则：
+
+1. **只选仓库 + 填分支，不出现凭据输入框**；凭据在全局配置里预先配好，执行期由后端按仓库来源解析。
+2. 下拉分两组：`工作区仓库`（管理员配置，全员可见）与 `我的私有仓库`（仅本人可见）。
+3. 每行独立填分支，留空 = 远端默认分支，占位提示显示该仓库的默认分支。
+4. 每行显示**只读**凭据徽标：`工作区凭据` / `个人凭据(<指纹>)` / `缺少凭据`；`缺少凭据` 的行置灰不可提交，并给「去设置」链接。
+5. 支持多选，建议上限 **3 个仓库**（克隆串行 + `--depth 50`，仓库过多会显著拖慢 coding 阶段启动，另有磁盘水位保护见 `coding.py:409-417`）。
+6. 保存时即时预检（`git ls-remote`）：鉴权失败 / 网络不可达 / 仓库不存在，当场标红，不放行到 coding 阶段。
+7. 校验：同名仓库不同 URL、同一仓库挂两个分支，保存直接拒绝。
+
+**「我的私有仓库」列表来源**：只配 host + 密钥无法枚举仓库，因此个人设置页除密钥外可登记「我的仓库」（name + url + 默认分支）；未登记的可在选择器里走「自定义 URL」，后端按 host 匹配个人凭据。
+
+**v1 不做 per-node 覆盖**：若后续确有「某节点只读某仓」的需求，再引入 `stage_repos: {stage_id: [repos]}` 覆盖层，解析优先于 `role_repos`，并将克隆目录隔离为 `repos/<stage_id>/<name>` 以防同仓不同分支互相覆盖。
 
 ---
 
@@ -222,7 +287,8 @@ class RepoConfig(BaseModel):
   - 解析规则：workspace 用工作区凭据 / custom 用本人凭据 / 无匹配返回明确错误。
 - 单测 `tests/test_workspace_git_repos.py`（新增）：可见性（他人 404）、admin 无明文读取路径。
 - 集成：`bind_repos` 预检失败即 400；clone 成功后 `process.command` span 中不含 secret（断言）。
-- 端到端（手工）：admin 配工作区仓库 → 普通用户建任务选中 → 克隆成功；普通用户自建个人凭据 → 另一个用户看不到、API 404。
+- 集成（分支语义）：单仓 → `sortie/<id>`、多仓 → `sortie/<id>-<repo>`；push 只创建远端同名分支、`git push` 参数中**不含 `--force`**；目标分支 HEAD 始终不被修改。
+- 端到端（手工）：admin 配工作区仓库 → 普通用户建任务选中 → 克隆成功；普通用户自建个人凭据 → 另一个用户看不到、API 404；仓库选择面板全程无凭据输入项。
 
 ---
 
@@ -233,6 +299,8 @@ class RepoConfig(BaseModel):
 3. 凭据缺失、鉴权失败、网络不可达三种情况，在**绑定阶段**即给出明确原因，不进入 coding 阶段。
 4. 日志、事件流、OTel span 中不出现任何密钥明文（含 `process.command`）。
 5. 仓库 URL / 分支的绑定语义与原行为一致，历史任务不受影响。
+6. **分支语义不变**：编码产出只推送到远端 `sortie/<id>[-<repo>]` 分支，全程不 merge 回目标分支；远端同名分支已存在且非本任务创建时，push 失败并给出可读原因，不覆盖他人提交。
+7. 仓库选择面板中**不出现任何凭据输入**；凭据缺失只给引导链接。
 
 ---
 
@@ -253,6 +321,8 @@ class RepoConfig(BaseModel):
 | D3 | 管理员可否禁用他人的个人凭据（不可读、不可改）？ | 保留禁用能力，记审计 |
 | D4 | 删除工作区仓库：软删（保留历史任务引用）还是硬删？ | 软删（`enabled=0`） |
 | D5 | 是否允许用户填全权限个人 PAT？ | 允许但保存时 `ls-remote` 探活；提示建议用最小权限 token |
+| D6 | 多仓任务的分支名：单仓 `sortie/<id>` 与多仓 `sortie/<id>-<repo>` 不一致，后期加仓会留孤儿分支。是否统一为**始终带 repo 后缀**？ | 统一为 `sortie/<id>-<repo>`（单仓也带），绑定阶段锁定仓库数量不变更 |
+| D7 | 同一任务重跑：复用同名分支追加提交（现状，幂等），还是每次执行新建 `sortie/<id>-r2`？ | 复用同名分支；如需追溯跑次，用 MR 描述/提交信息里的 run id，不额外建分支 |
 
 ---
 
@@ -269,3 +339,5 @@ class RepoConfig(BaseModel):
 ## 15. 状态
 
 **待确认**。确认后按 §7 文件清单落地，先做 HTTPS token 链路，SSH 二期。
+
+分步执行计划（含每步测试与验收标准）见 [`docs/plans/2026-11-04-git-credentials-execution-plan.md`](./2026-11-04-git-credentials-execution-plan.md)。
