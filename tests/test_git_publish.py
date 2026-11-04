@@ -125,6 +125,34 @@ def test_is_dirty_states(tmp_path: Path, origin_repo: Path):
     assert is_dirty(clone) is False
 
 
+def test_sweep_archives_unbound_before_cleanup(tmp_path: Path):
+    """未绑定仓库任务被 TTL 回收前，产出代码先归档进 artifacts/code-archive/。"""
+    import os
+    import time as _time
+
+    from sortie_deck.plugins.coding import ensure_worktree
+
+    ini = "ini_unbound"
+    ws = ensure_worktree(tmp_path, ini, tmp_path)
+    (ws / "repos").mkdir(parents=True)
+    (ws / "repos" / "app.py").write_text("x = 1\n", encoding="utf-8")
+    old = _time.time() - 25 * 3600
+    os.utime(ws, (old, old))
+
+    cleaned = sweep_worktrees(
+        tmp_path,
+        active_ids=set(),
+        ttl_seconds=24 * 3600,
+        dirty_ttl_seconds=7 * 24 * 3600,
+        bound_ids=set(),
+    )
+    assert ini in cleaned
+    assert ws.exists() is False
+    # 归档发生在清理之前：zip 已落 artifacts/code-archive/
+    zips = list((tmp_path / ini / "artifacts" / "code-archive").glob("*.zip"))
+    assert len(zips) == 1
+
+
 def test_sweep_respects_ttl_and_dirty_state(tmp_path: Path, origin_repo: Path):
     import asyncio
     import time as _time

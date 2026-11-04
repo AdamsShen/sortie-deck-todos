@@ -211,3 +211,85 @@ def test_archive_repos_snapshot_no_workspace(tmp_path: Path):
         tmp_path / "missions" / "ini_x" / "artifacts",
     )
     assert result is None
+
+
+# --- 终态清理触发归档（orchestrator 集成） -----------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cleanup_mission_workspace_archives_unbound(tmp_path):
+    """终态清理链路：未绑定任务回收 workspace 前产出代码已归档。"""
+    import zipfile as _zipfile
+
+    from sortie_deck.models import Initiative
+    from sortie_deck.orchestrator import Orchestrator
+    from sortie_deck.settings import Settings
+
+    cfg = Settings(
+        data_dir=tmp_path / "data",
+        deploy_executor="mock",
+        kb_backend="local",
+        pipeline_llm=False,
+        room_llm=False,
+    )
+    orch = Orchestrator(cfg)
+    ini = "ini_arc_e2e"
+    orch.store.upsert(Initiative(id=ini, title="t", brief="b"))
+
+    ws = cfg.missions_dir / ini / "workspace"
+    (ws / "repos").mkdir(parents=True)
+    (ws / "repos" / "app.py").write_text("x = 1\n", encoding="utf-8")
+    (ws / "README.md").write_text("# sandbox\n", encoding="utf-8")
+
+    orch._cleanup_mission_workspace(ini)
+
+    assert not ws.exists()
+    zips = list((cfg.missions_dir / ini / "artifacts" / "code-archive").glob("*.zip"))
+    assert len(zips) == 1
+    with _zipfile.ZipFile(zips[0]) as zf:
+        assert "repos/app.py" in zf.namelist()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_mission_workspace_skips_bound(tmp_path):
+    """终态清理链路：绑定仓库任务（角色带 repos）不归档，直接回收。"""
+    from sortie_deck.models import Initiative, RepoConfig, RoleAgent, RoleId
+    from sortie_deck.orchestrator import Orchestrator
+    from sortie_deck.settings import Settings
+
+    cfg = Settings(
+        data_dir=tmp_path / "data",
+        deploy_executor="mock",
+        kb_backend="local",
+        pipeline_llm=False,
+        room_llm=False,
+    )
+    orch = Orchestrator(cfg)
+    ini = "ini_bound_e2e"
+    orch.store.upsert(
+        Initiative(
+            id=ini,
+            title="t",
+            brief="b",
+            roles=[
+                RoleAgent(
+                    id="eng1",
+                    role=RoleId.ENG,
+                    title="Dev",
+                    persona="p",
+                    executor="mock",
+                    repos=[RepoConfig(url="https://gitlab.example.com/acme/web.git")],
+                )
+            ],
+        )
+    )
+
+    ws = cfg.missions_dir / ini / "workspace"
+    (ws / "repos").mkdir(parents=True)
+    (ws / "repos" / "app.py").write_text("x = 1\n", encoding="utf-8")
+
+    orch._cleanup_mission_workspace(ini)
+
+    assert not ws.exists()
+    code_dir = cfg.missions_dir / ini / "artifacts" / "code-archive"
+    assert not code_dir.exists()
