@@ -1664,6 +1664,23 @@ class Orchestrator:
     def get(self, initiative_id: str) -> Initiative | None:
         return self.store.get(initiative_id)
 
+    def mark_stage_started(self, initiative_id: str, stage: str) -> str:
+        """阶段入口记录开始时刻并落库，返回 ISO 时间串（失败返回空串）。
+
+        前端「执行中 Ns」的计时锚点必须来自服务端：只存在 SSE 内存里的话，
+        刷新页面后锚点丢失，计时会被重置成 0（用户实际等了几分钟却显示 15s）。
+        这里只写时间戳，不改 ``current_stage``——它的推进仍由阶段结束时的
+        状态迁移负责，避免影响航线判定。
+        """
+        ini = self.store.get(initiative_id)
+        if ini is None:
+            logger.debug("阶段开始时间落库跳过：任务不存在 initiative=%s", initiative_id)
+            return ""
+        ini.stage_started_at = utc_now()
+        ini.stage_started_stage = stage
+        self.store.upsert(ini)
+        return ini.stage_started_at.isoformat()
+
     def set_materials(
         self, initiative_id: str, materials: list[ExternalMaterial]
     ) -> Initiative:

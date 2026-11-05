@@ -1497,24 +1497,39 @@ def build_graph_from_template(
         stage_role = _role_id(str(stage_cfg.get("role", "product")))
         # 阶段入口立刻通知前端（harness / mock / coding CLI 共用）：
         # 只靠 current_stage 落库要等阶段结束，运行中界面会长时间没有反馈。
+        initiative_id = str(state.get("initiative_id") or "")
+        started_at = ""
         try:
             from sortie_deck.orchestrator import get_orchestrator
 
-            await get_orchestrator()._emit(
-                str(state.get("initiative_id") or ""),
+            orch = get_orchestrator()
+            # 先落库再推送：刷新页面后前端用这个时间戳续算已等待时长，
+            # 只放 SSE 事件里会随刷新丢失，计时又从 0 开始。
+            try:
+                started_at = orch.mark_stage_started(initiative_id, stage)
+            except Exception:  # noqa: BLE001 — 时间戳落库失败不影响阶段执行
+                logging.getLogger(__name__).debug(
+                    "stage_started_at 落库失败: initiative=%s stage=%s",
+                    initiative_id,
+                    stage,
+                    exc_info=True,
+                )
+            await orch._emit(
+                initiative_id,
                 {
                     "type": "stage_progress",
-                    "initiative_id": str(state.get("initiative_id") or ""),
+                    "initiative_id": initiative_id,
                     "stage": stage,
                     "role": stage_role.value,
                     "phase": "stage_start",
+                    "started_at": started_at,
                     "executor": _executor_name(stage, stage_role.value, state, stage_cfg),
                 },
             )
         except Exception:  # noqa: BLE001 — 进度推送失败不影响阶段执行
             logging.getLogger(__name__).debug(
                 "stage_start 推送失败: initiative=%s stage=%s",
-                state.get("initiative_id"),
+                initiative_id,
                 stage,
                 exc_info=True,
             )

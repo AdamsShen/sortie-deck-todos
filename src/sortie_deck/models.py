@@ -345,6 +345,11 @@ class Initiative(BaseModel):
     template: str = "default"
     status: InitiativeStatus = InitiativeStatus.DRAFT
     current_stage: str = "intake"
+    # 当前阶段真正开始执行的时刻（阶段入口落库）。前端用它算「执行中 Ns」，
+    # 否则页面一刷新只能从 0 重新计时，看不出这个阶段到底等了多久。
+    # 并行波次下由最后进入的成员覆盖，仅作刷新后的兜底锚点。
+    stage_started_at: datetime | None = None
+    stage_started_stage: str = ""
     thread_id: str = Field(default_factory=lambda: new_id("thr_"))
     room_id: str = Field(default_factory=lambda: new_id("squad_"))
     # Agent harness this mission runs on (claude_code | opencode | codex | cursor | mock).
