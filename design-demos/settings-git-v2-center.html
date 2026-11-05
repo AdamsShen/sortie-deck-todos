@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>设置 · v2 设置中心</title>
+<!-- huashu-design · 逻辑三（最佳设计师：Dieter Rams 式的系统化设置中心）
+     概念：设置是一个独立的「工作台」，不是附在页面上的抽屉。左轨目录 + 宽内容区；
+     Git 页双栏（左只读、右可编辑），底部一条「仓库 → 凭据」匹配预览。
+     示意数据；工作区凭据只回元信息，个人凭据可增删改查。 -->
+<style>
+  :root, [data-theme="paper"] {
+    --void: #eaeef4; --panel: #fff; --panel-2: #f6f8fb; --panel-3: #edf1f6;
+    --line: #e0e6ee; --line-2: #cfd8e4; --ink: #17233a; --muted: #66738a; --faint: #8e9bad;
+    --navy: #17233a; --copper: #3b5bdb; --green: #0e8f63; --green-soft: #e7f4ee;
+    --amber: #9a6b12; --danger: #bf3b2b;
+    --serif: "Songti SC", "Noto Serif SC", Georgia, serif;
+    --font: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  [data-theme="ink"] {
+    --void: #12161c; --panel: #1c222b; --panel-2: #232a34; --panel-3: #2a323e;
+    --line: #333c49; --line-2: #424d5d; --ink: #e8e5dd; --muted: #9ba4b1; --faint: #7b8593;
+    --navy: #e8e5dd; --copper: #8aa2f0; --green: #4bd39a; --green-soft: #1b3a2d;
+    --amber: #e2b455; --danger: #e57760;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; }
+  body {
+    background: var(--void); color: var(--ink); font-family: var(--font);
+    font-size: 14px; line-height: 1.55; -webkit-font-smoothing: antialiased; overflow: hidden;
+  }
+  button, input, select { font: inherit; color: inherit; }
+  button { cursor: pointer; background: none; border: 0; }
+  :focus-visible { outline: 2px solid var(--copper); outline-offset: 2px; }
+
+  /* 产品外壳 */
+  .deck-header {
+    display: flex; align-items: center; gap: 20px; padding: 11px 22px;
+    background: var(--panel); border-bottom: 1px solid var(--line);
+  }
+  .brand { display: flex; align-items: center; gap: 9px; flex: none; }
+  .brand img { width: 26px; height: 26px; display: block; }
+  .brand b { display: block; font-size: 13.5px; }
+  .brand span { display: block; font-size: 9px; color: var(--faint); }
+  .nav { display: flex; gap: 2px; flex: 1; flex-wrap: wrap; }
+  .nav a { font-size: 11.5px; color: var(--muted); text-decoration: none; padding: 6px 8px; border-radius: 4px; white-space: nowrap; }
+  .nav a:hover { color: var(--ink); background: var(--panel-2); }
+  .nav a.on { color: var(--green); background: var(--green-soft); font-weight: 600; }
+  .meta { display: flex; align-items: center; gap: 7px; flex: none; }
+  .who { font-family: var(--mono); font-size: 10px; color: var(--muted); text-align: right; margin-right: 4px; }
+  .who b { display: block; color: var(--ink); font-size: 10.5px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line);
+    border-radius: 4px; padding: 5px 9px; font-family: var(--mono); font-size: 10px; color: var(--muted);
+  }
+  .chip:hover { border-color: var(--line-2); color: var(--ink); }
+  .chip.on { border-color: var(--green); color: var(--green); background: var(--green-soft); }
+
+  .stage { height: calc(100% - 49px); overflow: auto; background:
+    radial-gradient(900px 420px at 12% -10%, rgba(14,143,99,.05), transparent 70%),
+    radial-gradient(700px 380px at 96% 0%, rgba(59,91,219,.05), transparent 70%), var(--void); }
+  .page { max-width: 880px; margin: 0 auto; padding: 58px 30px 90px; }
+  .page .kick { font-family: var(--mono); font-size: 10px; letter-spacing: .18em; color: var(--faint); }
+  .page h1 { font-family: var(--serif); font-size: 35px; font-weight: 600; margin-top: 8px; }
+  .page .lede { color: var(--muted); font-size: 13px; margin-top: 9px; max-width: 50ch; }
+  .page .demo-note { margin-top: 30px; border-top: 1px solid var(--line-2); padding-top: 16px; font-size: 12px; color: var(--faint); max-width: 620px; line-height: 1.75; }
+  .page .demo-note b { color: var(--muted); }
+
+  /* 设置中心 */
+  .center {
+    /* 留出产品头：设置入口与当前身份始终可见，避免全屏遮罩失去上下文 */
+    position: fixed; inset: 62px 18px 18px; z-index: 40; display: flex; overflow: hidden;
+    background: var(--panel); border: 1px solid var(--line-2); border-radius: 10px;
+    box-shadow: 0 30px 80px -40px rgba(12,22,38,.55), 0 2px 6px rgba(12,22,38,.06);
+    opacity: 0; pointer-events: none; transform: translateY(10px) scale(.995);
+    transition: opacity .22s ease, transform .22s ease;
+  }
+  .center.on { opacity: 1; pointer-events: auto; transform: none; }
+
+  .rail { width: 244px; flex: none; background: var(--panel-2); border-right: 1px solid var(--line); display: flex; flex-direction: column; }
+  .rail-user { padding: 20px 18px 16px; border-bottom: 1px solid var(--line); }
+  .rail-user .av { width: 34px; height: 34px; border-radius: 50%; background: var(--navy); color: var(--panel); display: grid; place-items: center; font-family: var(--serif); font-size: 15px; font-weight: 600; }
+  [data-theme="ink"] .rail-user .av { color: #161a21; }
+  .rail-user b { display: block; font-size: 13px; margin-top: 9px; }
+  .rail-user span { display: block; font-family: var(--mono); font-size: 9.5px; color: var(--faint); margin-top: 2px; }
+  .rail-nav { padding: 14px 10px; flex: 1; overflow: auto; }
+  .rail-group { margin-bottom: 16px; }
+  .rail-group .cap { font-family: var(--mono); font-size: 9px; letter-spacing: .16em; color: var(--faint); padding: 0 10px 6px; }
+  .rail-group button { width: 100%; display: flex; align-items: center; gap: 9px; text-align: left; padding: 7px 10px; border-radius: 5px; font-size: 12.5px; color: var(--muted); }
+  .rail-group button:hover { background: var(--panel-3); color: var(--ink); }
+  .rail-group button.on { background: var(--navy); color: var(--panel); font-weight: 600; }
+  [data-theme="ink"] .rail-group button.on { color: #161a21; }
+  .rail-group button .num { margin-left: auto; font-family: var(--mono); font-size: 9.5px; color: var(--faint); }
+  .rail-group button.on .num { color: color-mix(in srgb, var(--panel) 65%, transparent); }
+  .rail-foot { padding: 14px 18px; border-top: 1px solid var(--line); }
+  .rail-foot button { font-size: 11.5px; color: var(--muted); }
+  .rail-foot button:hover { color: var(--ink); }
+
+  .pane { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .pane-bar { display: flex; align-items: center; gap: 10px; padding: 12px 26px; border-bottom: 1px solid var(--line); flex: none; }
+  .crumb { font-family: var(--mono); font-size: 10px; color: var(--faint); }
+  .crumb b { color: var(--muted); font-weight: 500; }
+  .pane-bar .sp { flex: 1; }
+  .pane-close { width: 26px; height: 26px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); display: grid; place-items: center; }
+  .pane-close:hover { border-color: var(--line-2); color: var(--ink); }
+  .pane-body { flex: 1; overflow: auto; padding: 30px 34px 70px; }
+
+  .ph { display: flex; align-items: flex-start; gap: 24px; flex-wrap: wrap; }
+  .ph h2 { font-family: var(--serif); font-size: 28px; font-weight: 600; }
+  .ph p { font-size: 12.5px; color: var(--muted); margin-top: 6px; max-width: 52ch; }
+  .ph .sp { flex: 1; }
+  .primary { background: var(--navy); color: var(--panel); border-radius: 5px; padding: 8px 16px; font-size: 12.5px; font-weight: 600; flex: none; }
+  [data-theme="ink"] .primary { color: #161a21; }
+  .primary:hover { filter: brightness(1.12); }
+  .quiet { font-size: 12px; color: var(--muted); padding: 7px 8px; }
+  .quiet:hover { color: var(--ink); }
+
+  .readout { display: flex; margin-top: 24px; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; background: var(--panel); }
+  .readout .seg { flex: 1; padding: 12px 16px; border-right: 1px solid var(--line); }
+  .readout .seg:last-child { border-right: 0; }
+  .readout .v { font-family: var(--mono); font-size: 20px; letter-spacing: -.03em; line-height: 1.2; }
+  .readout .k { font-size: 10.5px; color: var(--faint); margin-top: 2px; }
+  .readout .seg.attn .v { color: var(--amber); }
+
+  .cols { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 18px; margin-top: 20px; align-items: start; }
+  .col-head { display: flex; align-items: baseline; gap: 8px; padding-bottom: 9px; border-bottom: 1px solid var(--line-2); }
+  .col-head h3 { font-size: 12.5px; font-weight: 600; }
+  .col-head .n { font-family: var(--mono); font-size: 9.5px; color: var(--faint); }
+  .col-head .sp { flex: 1; }
+  .col-head .ro { font-family: var(--mono); font-size: 9px; color: var(--muted); }
+
+  /* 只读卡：斜纹 + READ ONLY 轮廓签，没有按钮 */
+  .sealed { position: relative; margin-top: 10px; border: 1px solid var(--line); border-radius: 6px; padding: 14px 14px 12px; overflow: hidden;
+    background: repeating-linear-gradient(-45deg, transparent 0 7px, color-mix(in srgb, var(--line) 48%, transparent) 7px 8px), var(--panel); }
+  .sealed .stamp { position: absolute; right: 10px; top: 9px; font-family: var(--mono); font-size: 8px; letter-spacing: .14em; color: var(--faint); border: 1px solid var(--line-2); border-radius: 3px; padding: 2px 5px; background: var(--panel); }
+  .sealed .label { font-size: 13px; font-weight: 600; padding-right: 74px; }
+  .sealed .host { font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-top: 3px; }
+  .sealed .facts { margin-top: 11px; display: grid; grid-template-columns: 1fr 1fr; gap: 7px 10px; }
+  .sealed .facts .k { display: block; font-family: var(--mono); font-size: 8.5px; letter-spacing: .1em; color: var(--faint); }
+  .sealed .facts .v { display: block; font-family: var(--mono); font-size: 10.5px; color: var(--ink); margin-top: 1px; word-break: break-all; }
+
+  .mine-row { display: flex; gap: 12px; align-items: flex-start; padding: 13px 2px 13px 0; border-bottom: 1px solid var(--line); }
+  .mine-row .body { flex: 1; min-width: 0; }
+  .mine-row .name { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 7px; }
+  .mine-row .host { font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-top: 2px; word-break: break-all; }
+  .mine-row .facts { display: flex; gap: 15px; flex-wrap: wrap; margin-top: 6px; font-family: var(--mono); font-size: 9.5px; color: var(--faint); }
+  .mine-row .facts b { color: var(--muted); font-weight: 500; }
+  .mine-row .ops { display: flex; gap: 9px; flex: none; padding-top: 1px; }
+  .mine-row .ops button { font-size: 11.5px; color: var(--muted); }
+  .mine-row .ops button:hover { color: var(--ink); }
+  .mine-row .ops button.danger:hover { color: var(--danger); }
+  .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--green); display: inline-block; flex: none; }
+  .dot.stale { background: var(--amber); }
+  .empty { margin-top: 10px; border: 1px dashed var(--line-2); border-radius: 6px; padding: 22px 16px; font-size: 12px; color: var(--faint); }
+
+  .match { margin-top: 30px; }
+  .match-head { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; }
+  .match-head h3 { font-size: 13px; font-weight: 600; }
+  .match-head p { font-size: 11px; color: var(--faint); }
+  table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+  th { text-align: left; font-family: var(--mono); font-size: 8.5px; letter-spacing: .12em; color: var(--faint); font-weight: 500; padding: 7px 10px; border-bottom: 1px solid var(--line-2); white-space: nowrap; }
+  td { padding: 10px; border-bottom: 1px solid var(--line); font-size: 12px; vertical-align: middle; }
+  td.mono { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+  td .repo { font-weight: 600; }
+  td .src { font-family: var(--mono); font-size: 8.5px; letter-spacing: .06em; border: 1px solid var(--line); border-radius: 3px; padding: 1px 5px; color: var(--muted); margin-left: 7px; vertical-align: 1px; }
+  .state { display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: 9.5px; }
+  .state.ok { color: var(--green); }
+  .state.warn { color: var(--amber); }
+  .state.miss { color: var(--danger); }
+
+  /* 弹层表单 */
+  .modal { position: absolute; inset: 0; background: rgba(14,24,38,.38); display: none; align-items: center; justify-content: center; padding: 24px; z-index: 5; }
+  .modal.on { display: flex; }
+  .sheet { width: min(560px, 100%); background: var(--panel); border: 1px solid var(--line-2); border-radius: 9px; box-shadow: 0 28px 70px -30px rgba(10,20,35,.5); overflow: hidden; }
+  .sheet-head { display: flex; align-items: flex-start; gap: 12px; padding: 18px 20px 0; }
+  .sheet-head h3 { font-family: var(--serif); font-size: 20px; font-weight: 600; }
+  .sheet-head p { font-size: 11px; color: var(--faint); margin-top: 3px; }
+  .sheet-head .sp { flex: 1; }
+  .sheet-head .x { font-size: 17px; color: var(--muted); line-height: 1; padding: 2px 6px; }
+  .sheet form { padding: 16px 20px 0; }
+  .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .fields .full { grid-column: 1 / -1; }
+  .field label { display: block; font-family: var(--mono); font-size: 9px; letter-spacing: .1em; color: var(--faint); margin-bottom: 4px; }
+  .field input, .field select { width: 100%; border: 1px solid var(--line-2); border-radius: 4px; background: var(--panel); padding: 7px 9px; font-size: 12.5px; outline: none; }
+  .field input:focus, .field select:focus { border-color: var(--copper); box-shadow: 0 0 0 3px color-mix(in srgb, var(--copper) 12%, transparent); }
+  .field input:disabled, .field select:disabled { background: var(--panel-3); color: var(--faint); }
+  .field .hint { font-size: 10px; color: var(--faint); margin-top: 3px; }
+  .sheet-foot { display: flex; align-items: center; gap: 10px; padding: 16px 20px; border-top: 1px solid var(--line); margin-top: 18px; }
+  .sheet-foot .note { font-size: 10px; color: var(--faint); }
+  .sheet-foot .sp { flex: 1; }
+
+  .toast { position: absolute; left: 50%; bottom: 22px; transform: translate(-50%, 10px); background: var(--navy); color: var(--panel); font-size: 12px; padding: 8px 16px; border-radius: 5px; opacity: 0; pointer-events: none; transition: all .2s; z-index: 6; }
+  [data-theme="ink"] .toast { color: #161a21; }
+  .toast.on { opacity: 1; transform: translate(-50%, 0); }
+
+  .form-block { margin-top: 18px; max-width: 680px; }
+  .srow { display: flex; align-items: center; gap: 18px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+  .srow .t { flex: 1; }
+  .srow .t b { display: block; font-size: 12.5px; font-weight: 600; }
+  .srow .t span { display: block; font-size: 11px; color: var(--faint); margin-top: 2px; }
+  .seg2 { display: flex; border: 1px solid var(--line-2); border-radius: 4px; overflow: hidden; }
+  .seg2 button { padding: 5px 11px; font-size: 11px; color: var(--muted); background: var(--panel); }
+  .seg2 button.on { background: var(--navy); color: var(--panel); }
+  [data-theme="ink"] .seg2 button.on { color: #161a21; }
+  .switch { width: 33px; height: 18px; border-radius: 99px; background: var(--line-2); position: relative; border: 0; flex: none; }
+  .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: transform .15s; }
+  .switch.on { background: var(--green); }
+  .switch.on::after { transform: translateX(15px); }
+
+  @media (max-width: 1080px) { .cols { grid-template-columns: 1fr; } .nav { display: none; } }
+  @media (max-width: 820px) {
+    .center { inset: 49px 0 0; border-radius: 0; flex-direction: column; }
+    /* 左轨在手机上变成横向目录，保留 tab 能力 */
+    .rail { width: 100%; flex: none; border-right: 0; border-bottom: 1px solid var(--line); }
+    .rail-user, .rail-foot { display: none; }
+    .rail-nav { display: flex; gap: 4px; padding: 6px 8px; overflow-x: auto; }
+    .rail-group { display: flex; margin: 0; }
+    .rail-group .cap { display: none; }
+    .rail-group button { width: auto; white-space: nowrap; padding: 6px 10px; }
+    .rail-group button .num { margin-left: 5px; }
+    .pane { min-height: 0; }
+    .pane-body { padding: 20px 14px 60px; }
+    .readout { flex-wrap: wrap; }
+    .readout .seg { flex: 1 1 45%; }
+    .fields { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 720px) {
+    .deck-header { padding: 10px 12px; gap: 10px; }
+    .brand span { display: none; }
+    .meta .who, .meta .chip { display: none; }
+    .meta #themeBtn, .meta .chip.gear { display: inline-flex; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<header class="deck-header">
+  <div class="brand">
+    <img src="../logo.png" alt="">
+    <div><b>Sortie Deck</b><span>前线小队 · 共交付，无传话</span></div>
+  </div>
+  <nav class="nav">
+    <a href="#">作战图</a><a href="#">任务</a><a href="#">知识库</a><a href="#">记忆</a>
+    <a href="#">角色工坊</a><a href="#">工具箱</a><a href="#">角色锻造</a><a href="#">小群</a>
+    <a href="#">决策中心</a><a href="#">密钥</a><a href="#">管理</a>
+  </nav>
+  <div class="meta">
+    <div class="who"><b>沈思</b>管理员</div>
+    <button class="chip" type="button" id="themeBtn">墨</button>
+    <button class="chip" type="button">文</button>
+    <button class="chip" type="button">⇩ 导出数据</button>
+    <button class="chip on" id="gearBtn" type="button" aria-expanded="true" aria-controls="center">
+      <svg viewBox="0 0 20 20" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+        <circle cx="10" cy="10" r="2.4"/>
+        <path d="M10 2.6v1.7M10 15.7v1.7M2.6 10h1.7M15.7 10h1.7M4.8 4.8l1.2 1.2M14 14l1.2 1.2M15.2 4.8L14 6M6 14l-1.2 1.2"/>
+      </svg>
+      设置
+    </button>
+    <button class="chip" type="button">退出</button>
+  </div>
+</header>
+
+<main class="stage">
+  <div class="page">
+    <div class="kick">SETTINGS CENTER / 设置中心</div>
+    <h1>把设置当成一间控制室</h1>
+    <p class="lede">左侧是目录，右侧是工作面。Git 凭据页把「只读的工作区凭据」和「可编辑的个人凭据」并排放，下面一条表说明每个仓库到底用了哪把钥匙。</p>
+    <div class="demo-note">
+      <b>设计取向：</b>不是所有设置都值得占用整屏，但凭据、权限、仓库这类需要横向比较的内容值得。只读卡用斜纹和 READ ONLY 轮廓字表达权限，不靠一把把锁图标；匹配预览是这版多出来的真实信息。
+    </div>
+  </div>
+</main>
+
+<div class="center on" id="center" role="dialog" aria-modal="true" aria-label="设置中心">
+  <aside class="rail">
+    <div class="rail-user">
+      <div class="av">沈</div>
+      <b>沈思</b>
+      <span>ADMIN · SI.SHEN</span>
+    </div>
+    <div class="rail-nav">
+      <div class="rail-group">
+        <div class="cap">个人</div>
+        <button type="button" data-tab="account">账号</button>
+        <button type="button" data-tab="appearance">外观</button>
+        <button type="button" data-tab="notify">通知</button>
+      </div>
+      <div class="rail-group">
+        <div class="cap">接入</div>
+        <button type="button" data-tab="git" class="on">Git 凭据<span class="num" id="railGitNum">5</span></button>
+        <button type="button" data-tab="api">API 密钥<span class="num">2</span></button>
+      </div>
+      <div class="rail-group">
+        <div class="cap">数据</div>
+        <button type="button" data-tab="data">导出与删除</button>
+      </div>
+    </div>
+    <div class="rail-foot"><button type="button" id="backBtn">← 返回应用</button></div>
+  </aside>
+
+  <div class="pane">
+    <div class="pane-bar">
+      <div class="crumb">设置 / <b id="crumbNow">Git 凭据</b></div>
+      <span class="sp"></span>
+      <button class="pane-close" id="closeBtn" type="button" aria-label="关闭设置">×</button>
+    </div>
+
+    <div class="pane-body">
+      <section data-pane="git">
+        <div class="ph">
+          <div>
+            <h2>Git 凭据</h2>
+            <p>两套凭据，两种权限：工作区凭据由管理员维护、全员可用，你只能看；个人凭据只属于你，可增删改。</p>
+          </div>
+          <span class="sp"></span>
+          <button class="primary" type="button" id="addCred">＋ 添加我的凭据</button>
+        </div>
+
+        <div class="readout">
+          <div class="seg"><div class="v" id="roWs">2</div><div class="k">工作区凭据 · 只读</div></div>
+          <div class="seg"><div class="v" id="roMine">3</div><div class="k">我的凭据</div></div>
+          <div class="seg"><div class="v" id="roRepos">6</div><div class="k">可用仓库</div></div>
+          <div class="seg attn"><div class="v" id="roWarn">1</div><div class="k">需要处理</div></div>
+        </div>
+
+        <div class="cols">
+          <div>
+            <div class="col-head"><h3>工作区凭据</h3><span class="n">ADMIN MANAGED</span><span class="sp"></span><span class="ro">只读</span></div>
+            <div id="wsList"></div>
+            <p style="font-size:10.5px;color:var(--faint);margin-top:10px;line-height:1.65">密钥写入后不可读回；这里只有主机、账号、指纹与最近使用。要更换请到「管理 › 仓库」。</p>
+          </div>
+          <div>
+            <div class="col-head"><h3>我的凭据</h3><span class="n">OWNER ONLY</span><span class="sp"></span><span class="ro" id="mineCount">3 条</span></div>
+            <div id="myList"></div>
+            <p style="font-size:10.5px;color:var(--faint);margin-top:10px;line-height:1.65">按「主机 + 协议 + 用户名」匹配私有仓库；改这三项等于新建一条。明文只写不读。</p>
+          </div>
+        </div>
+
+        <div class="match">
+          <div class="match-head"><h3>仓库匹配预览</h3><p>执行前按这张表解析凭据；匹配不到会在绑定阶段直接拒绝。</p></div>
+          <table>
+            <thead><tr><th>仓库</th><th>来源</th><th>主机</th><th>将使用的凭据</th><th>状态</th></tr></thead>
+            <tbody id="matchBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section data-pane="account" hidden>
+        <div class="ph"><div><h2>账号</h2><p>登录名与角色由管理员分配；显示名会出现在任务署名和消息里。</p></div></div>
+        <div class="form-block">
+          <div class="fields">
+            <div class="field"><label>显示名</label><input value="沈思" autocomplete="off"></div>
+            <div class="field"><label>登录名</label><input value="admin" disabled></div>
+            <div class="field"><label>角色</label><input value="管理员" disabled></div>
+            <div class="field"><label>加入时间</label><input value="2026-03-18" disabled></div>
+          </div>
+          <div class="srow" style="margin-top:8px">
+            <div class="t"><b>密码</b><span>上次修改：2026-09-12。改密链接会发到账号邮箱。</span></div>
+            <button class="quiet" type="button" data-toast="改密链接已发送">发送改密链接</button>
+          </div>
+          <div style="display:flex;justify-content:flex-end;margin-top:18px"><button class="primary" type="button" data-toast="显示名已保存">保存</button></div>
+        </div>
+      </section>
+
+      <section data-pane="appearance" hidden>
+        <div class="ph"><div><h2>外观</h2><p>纸与墨共用同一套版式。切主题只换色，不改变信息密度。</p></div></div>
+        <div class="form-block">
+          <div class="srow"><div class="t"><b>主题</b><span>默认「纸」；「墨」适合夜间与投屏</span></div>
+            <div class="seg2" id="themeSeg"><button type="button" class="on" data-set-theme="paper">纸</button><button type="button" data-set-theme="ink">墨</button></div>
+          </div>
+          <div class="srow"><div class="t"><b>界面语言</b><span>只影响本机，不同步给其他成员</span></div>
+            <div class="seg2"><button type="button" class="on">中文</button><button type="button">EN</button></div>
+          </div>
+          <div class="srow"><div class="t"><b>界面音效</b><span>切页与提交时的短音</span></div><button class="switch" type="button" aria-pressed="false" aria-label="界面音效"></button></div>
+          <div class="srow"><div class="t"><b>背景图</b><span>当前未设置；支持外链图片</span></div><button class="quiet" type="button">设置地址</button></div>
+        </div>
+      </section>
+
+      <section data-pane="notify" hidden>
+        <div class="ph"><div><h2>通知</h2><p>只保留三类真正需要你知道的事，其余进消息流。</p></div></div>
+        <div class="form-block">
+          <div class="srow"><div class="t"><b>任务完成</b><span>你创建或参与的任务进入「待验收」</span></div><button class="switch on" type="button" aria-pressed="true" aria-label="任务完成通知"></button></div>
+          <div class="srow"><div class="t"><b>需要你决策</b><span>审批、卡点、需要拍板的方案</span></div><button class="switch on" type="button" aria-pressed="true" aria-label="决策通知"></button></div>
+          <div class="srow"><div class="t"><b>小群 @ 我</b><span>独立小群里被点名时提醒</span></div><button class="switch" type="button" aria-pressed="false" aria-label="小群提及通知"></button></div>
+        </div>
+      </section>
+
+      <section data-pane="api" hidden>
+        <div class="ph"><div><h2>API 密钥</h2><p>给本地 agent 的通行证，有期限、可作废。完整管理在「密钥」页。</p></div><span class="sp"></span><button class="primary" type="button" data-toast="已跳转到密钥页">打开密钥页</button></div>
+        <div class="form-block">
+          <div class="srow"><div class="t"><b>MacBook · Claude Code</b><span>sk_sortie_UsbbWYCt… · 剩 27 天 · 2 小时前用过</span></div><button class="quiet" type="button">查看</button></div>
+          <div class="srow"><div class="t"><b>CI Runner · Codex</b><span>sk_sortie_gXiGdPyl… · 剩 43 天 · 3 小时前用过</span></div><button class="quiet" type="button">查看</button></div>
+        </div>
+      </section>
+
+      <section data-pane="data" hidden>
+        <div class="ph"><div><h2>数据与账号</h2><p>带走你的东西，或者彻底离开。两件事都要二次确认。</p></div></div>
+        <div class="form-block">
+          <div class="srow"><div class="t"><b>导出我的数据</b><span>任务、消息、记忆、凭据元信息，JSON 打包</span></div><button class="quiet" type="button" data-toast="正在打包，完成后自动下载">导出</button></div>
+          <div class="srow"><div class="t"><b>退出登录</b><span>只清本机会话</span></div><button class="quiet" type="button">退出</button></div>
+          <div class="srow"><div class="t"><b style="color:var(--danger)">删除账号</b><span>历史消息署名保留为「已注销用户」，不可恢复</span></div><button class="quiet" style="color:var(--danger)" type="button" id="delAcc">删除</button></div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <div class="modal" id="modal">
+    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+      <div class="sheet-head">
+        <div><h3 id="sheetTitle">添加我的凭据</h3><p id="sheetSub">加密落库，保存后不再回显明文</p></div>
+        <span class="sp"></span>
+        <button class="x" type="button" id="modalX" aria-label="关闭">×</button>
+      </div>
+      <form id="credForm" novalidate>
+        <div class="fields">
+          <div class="field"><label>名称</label><input name="label" placeholder="例如：我的 GitLab" autocomplete="off"></div>
+          <div class="field"><label>主机</label><input name="host" placeholder="gitlab.example.com" autocomplete="off"><div class="hint" id="hostHint" hidden>主机是匹配键，不可修改</div></div>
+          <div class="field"><label>协议</label><select name="scheme"><option value="https">https</option><option value="ssh">ssh</option></select></div>
+          <div class="field"><label>用户名</label><input name="username" placeholder="git 账号名" autocomplete="off"><div class="hint" id="userHint" hidden>用户名同属匹配键</div></div>
+          <div class="field full"><label>Token / 密码</label><input name="secret" type="password" placeholder="只写不读" autocomplete="new-password"></div>
+        </div>
+        <div class="sheet-foot">
+          <span class="note" id="formNote">保存后仅显示指纹末四位</span>
+          <span class="sp"></span>
+          <button class="quiet" type="button" id="formCancel">取消</button>
+          <button class="primary" type="submit">保存</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status"></div>
+</div>
+
+<script>
+  /* 示意数据：字段与 /api/me/git-credentials、/api/git/workspace-repos 的公开视图一致 */
+  const workspaceCreds = [
+    { id: "crd_ws_gitlab", label: "GitLab 服务账号", host: "gitlab.whsaihui.cn", scheme: "https", username: "ci-svc", fingerprint: "…9f2c", lastUsed: "11-04 21:10", repos: 2 },
+    { id: "crd_ws_github", label: "GitHub Org Bot", host: "github.com", scheme: "https", username: "sortie-bot", fingerprint: "…41ae", lastUsed: "11-05 09:42", repos: 1 },
+  ];
+
+  let myCreds = [
+    { id: "crd_u_7b31", label: "我的 GitLab", host: "gitlab.whsaihui.cn", scheme: "https", username: "si.shen", fingerprint: "…7b31", lastUsed: "2 小时前", state: "ok" },
+    { id: "crd_u_c08d", label: "GitHub 个人", host: "github.com", scheme: "https", username: "AdamsShen", fingerprint: "…c08d", lastUsed: "昨天 18:04", state: "ok" },
+    { id: "crd_u_2a6f", label: "旧 Gitea", host: "git.example.internal", scheme: "https", username: "shensi", fingerprint: "…2a6f", lastUsed: "从未使用", state: "stale" },
+  ];
+
+  const repos = [
+    { name: "sortie-cloud", source: "workspace", host: "gitlab.whsaihui.cn", cred: "GitLab 服务账号", state: "ok" },
+    { name: "design-system", source: "workspace", host: "github.com", cred: "GitHub Org Bot", state: "ok" },
+    { name: "sortie-deck-todos", source: "custom", host: "github.com", cred: "GitHub 个人", state: "ok" },
+    { name: "xinyu-agents", source: "custom", host: "gitlab.whsaihui.cn", cred: "我的 GitLab", state: "ok" },
+    { name: "notes-lab", source: "custom", host: "git.example.internal", cred: "旧 Gitea", state: "warn" },
+    { name: "infra-playbook", source: "custom", host: "git.company.cn", cred: "", state: "miss" },
+  ];
+
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  function renderWorkspace() {
+    document.getElementById("wsList").innerHTML = workspaceCreds.map((c) => `
+      <div class="sealed">
+        <span class="stamp">READ ONLY</span>
+        <div class="label">${esc(c.label)}</div>
+        <div class="host">${esc(c.scheme)}://${esc(c.host)}</div>
+        <div class="facts">
+          <div><span class="k">账号</span><span class="v">${esc(c.username)}</span></div>
+          <div><span class="k">指纹</span><span class="v">${esc(c.fingerprint)}</span></div>
+          <div><span class="k">最近使用</span><span class="v">${esc(c.lastUsed)}</span></div>
+          <div><span class="k">绑定仓库</span><span class="v">${c.repos} 个</span></div>
+        </div>
+      </div>`).join("");
+    document.getElementById("roWs").textContent = workspaceCreds.length;
+  }
+
+  function renderMine() {
+    const host = document.getElementById("myList");
+    host.innerHTML = myCreds.length
+      ? myCreds.map((c) => `
+        <div class="mine-row">
+          <div class="body">
+            <div class="name"><span class="dot ${c.state === "stale" ? "stale" : ""}"></span>${esc(c.label)}</div>
+            <div class="host">${esc(c.scheme)}://${esc(c.host)}</div>
+            <div class="facts">
+              <span>账号 <b>${esc(c.username)}</b></span>
+              <span>指纹 <b>${esc(c.fingerprint)}</b></span>
+              <span>最近 <b>${esc(c.lastUsed)}</b></span>
+            </div>
+          </div>
+          <div class="ops">
+            <button type="button" data-edit="${c.id}">编辑</button>
+            <button type="button" class="danger" data-del="${c.id}">删除</button>
+          </div>
+        </div>`).join("")
+      : `<div class="empty">没有个人凭据。自定义私有仓库会因匹配不到凭据而无法拉取。</div>`;
+    document.getElementById("mineCount").textContent = `${myCreds.length} 条`;
+    document.getElementById("roMine").textContent = myCreds.length;
+    document.getElementById("railGitNum").textContent = workspaceCreds.length + myCreds.length;
+  }
+
+  function renderMatch() {
+    document.getElementById("matchBody").innerHTML = repos.map((r) => {
+      const cls = r.state === "ok" ? "ok" : r.state === "warn" ? "warn" : "miss";
+      const txt = r.state === "ok" ? "已匹配" : r.state === "warn" ? "凭据待验证" : "缺少凭据";
+      return `<tr>
+        <td><span class="repo">${esc(r.name)}</span><span class="src">${r.source}</span></td>
+        <td class="mono">${r.source === "workspace" ? "工作区" : "自定义"}</td>
+        <td class="mono">${esc(r.host)}</td>
+        <td class="mono">${esc(r.cred || "—")}</td>
+        <td><span class="state ${cls}"><span class="dot ${cls === "ok" ? "" : "stale"}"></span>${txt}</span></td>
+      </tr>`;
+    }).join("");
+    document.getElementById("roRepos").textContent = repos.length;
+    document.getElementById("roWarn").textContent = repos.filter((r) => r.state !== "ok").length;
+  }
+
+  /* 提示条 */
+  let toastTimer = null;
+  function toast(msg) {
+    const el = document.getElementById("toast");
+    el.textContent = msg;
+    el.classList.add("on");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove("on"), 1800);
+  }
+
+  /* 设置弹层开关 */
+  const center = document.getElementById("center");
+  const gear = document.getElementById("gearBtn");
+  function setCenter(open) {
+    center.classList.toggle("on", open);
+    gear.classList.toggle("on", open);
+    gear.setAttribute("aria-expanded", String(open));
+  }
+  gear.addEventListener("click", () => setCenter(!center.classList.contains("on")));
+  document.getElementById("closeBtn").addEventListener("click", () => setCenter(false));
+  document.getElementById("backBtn").addEventListener("click", () => setCenter(false));
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    if (document.getElementById("modal").classList.contains("on")) closeModal();
+    else if (center.classList.contains("on")) setCenter(false);
+  });
+
+  /* 左轨切换 */
+  const TAB_LABEL = { git: "Git 凭据", account: "账号", appearance: "外观", notify: "通知", api: "API 密钥", data: "导出与删除" };
+  document.querySelector(".rail-nav").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-tab]");
+    if (!btn) return;
+    document.querySelectorAll(".rail-group button").forEach((b) => b.classList.toggle("on", b === btn));
+    document.querySelectorAll("[data-pane]").forEach((p) => { p.hidden = p.dataset.pane !== btn.dataset.tab; });
+    document.getElementById("crumbNow").textContent = TAB_LABEL[btn.dataset.tab] || "";
+    document.querySelector(".pane-body").scrollTop = 0;
+  });
+
+  /* 凭据表单弹层 */
+  const modal = document.getElementById("modal");
+  const form = document.getElementById("credForm");
+  let editId = null;
+
+  function openModal(cred) {
+    editId = cred ? cred.id : null;
+    document.getElementById("sheetTitle").textContent = cred ? "编辑凭据" : "添加我的凭据";
+    document.getElementById("sheetSub").textContent = cred ? "只改名称或替换 Token；匹配键保持不变" : "加密落库，保存后不再回显明文";
+    form.reset();
+    form.elements.label.value = cred ? cred.label : "";
+    form.elements.host.value = cred ? cred.host : "";
+    form.elements.scheme.value = cred ? cred.scheme : "https";
+    form.elements.username.value = cred ? cred.username : "";
+    // 主机 / 协议 / 用户名是唯一键，编辑时锁定，避免静默新建第二条
+    form.elements.host.disabled = Boolean(cred);
+    form.elements.scheme.disabled = Boolean(cred);
+    form.elements.username.disabled = Boolean(cred);
+    document.getElementById("hostHint").hidden = !cred;
+    document.getElementById("userHint").hidden = !cred;
+    form.elements.secret.placeholder = cred ? "留空则不修改" : "只写不读";
+    document.getElementById("formNote").textContent = cred ? "替换 Token 后旧值立即失效" : "保存后仅显示指纹末四位";
+    modal.classList.add("on");
+    setTimeout(() => form.elements.label.focus(), 40);
+  }
+  function closeModal() { modal.classList.remove("on"); editId = null; }
+
+  document.getElementById("addCred").addEventListener("click", () => openModal(null));
+  document.getElementById("modalX").addEventListener("click", closeModal);
+  document.getElementById("formCancel").addEventListener("click", closeModal);
+  modal.addEventListener("mousedown", (e) => { if (e.target === modal) closeModal(); });
+
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const label = form.elements.label.value.trim();
+    const host = form.elements.host.value.trim();
+    const scheme = form.elements.scheme.value;
+    const username = form.elements.username.value.trim();
+    const secret = form.elements.secret.value;
+    if (!host || (!editId && !secret)) return toast("主机与 Token 必填");
+    if (editId) {
+      const c = myCreds.find((x) => x.id === editId);
+      if (!c) return;
+      c.label = label || c.label;
+      if (secret) c.fingerprint = "…" + secret.slice(-4);
+      c.state = "ok";
+      toast("修改已保存");
+    } else {
+      if (myCreds.some((c) => c.host === host && c.scheme === scheme && c.username === username)) return toast("同主机、同用户名已有凭据");
+      myCreds.unshift({ id: "crd_u_" + Math.random().toString(16).slice(2, 6), label: label || host, host, scheme, username, fingerprint: "…" + secret.slice(-4), lastUsed: "从未使用", state: "ok" });
+      toast("凭据已保存（明文不再显示）");
+    }
+    closeModal();
+    renderMine();
+  });
+
+  document.getElementById("myList").addEventListener("click", (e) => {
+    const edit = e.target.closest("[data-edit]");
+    if (edit) return openModal(myCreds.find((c) => c.id === edit.dataset.edit));
+    const del = e.target.closest("[data-del]");
+    if (!del) return;
+    const c = myCreds.find((x) => x.id === del.dataset.del);
+    if (c && confirm(`删除「${c.label}」？\n\n使用它的私有仓库会立刻失去访问权限；已开始的拉取不受影响。`)) {
+      myCreds = myCreds.filter((x) => x.id !== c.id);
+      renderMine();
+      toast("凭据已删除");
+    }
+  });
+
+  /* 主题：头部与外观页共用 */
+  function setTheme(next) {
+    document.documentElement.dataset.theme = next;
+    document.getElementById("themeBtn").textContent = next === "paper" ? "墨" : "纸";
+    document.querySelectorAll("[data-set-theme]").forEach((b) => b.classList.toggle("on", b.dataset.setTheme === next));
+  }
+  document.getElementById("themeBtn").addEventListener("click", () => {
+    setTheme(document.documentElement.dataset.theme === "paper" ? "ink" : "paper");
+  });
+  document.getElementById("themeSeg").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-set-theme]");
+    if (b) setTheme(b.dataset.setTheme);
+  });
+
+  /* 开关与轻提示 */
+  document.querySelectorAll(".switch").forEach((s) => {
+    s.addEventListener("click", () => {
+      s.classList.toggle("on");
+      s.setAttribute("aria-pressed", String(s.classList.contains("on")));
+    });
+  });
+  document.addEventListener("click", (e) => {
+    const t = e.target.closest("[data-toast]");
+    if (t) toast(t.dataset.toast);
+  });
+  document.getElementById("delAcc").addEventListener("click", () => {
+    if (confirm("删除账号后无法恢复：\n\n· 个人 Git 凭据会一并删除\n· 历史消息署名保留为「已注销用户」\n\n确定继续？")) toast("已发送最终确认邮件");
+  });
+
+  renderWorkspace();
+  renderMine();
+  renderMatch();
+
+  /* 直接查看「关设置」状态：在地址后加 #closed */
+  if (location.hash === "#closed") setCenter(false);
+</script>
+</body>
+</html>

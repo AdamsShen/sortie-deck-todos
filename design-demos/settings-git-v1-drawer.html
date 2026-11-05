@@ -1,0 +1,792 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>设置 · v1 抽屉实用派</title>
+<!-- huashu-design · 逻辑二（现实参照：Stripe / Linear 的右侧设置抽屉）
+     概念：设置不是新页面，而是一个不打断当前工作的右侧抽屉。
+     顶部横排 tab，Git 页把「工作区凭据（只读）」和「我的凭据（可增删改）」分成两组行。
+     示意数据；字段与接口 /api/me/git-credentials、/api/git/workspace-repos 对齐。 -->
+<style>
+  :root, [data-theme="paper"] {
+    --void: #f3f6fa; --panel: #ffffff; --panel-2: #f7f9fc; --panel-3: #eef2f7;
+    --line: #e3e8ee; --line-2: #d2dae5; --line-3: #bcc7d6;
+    --ink: #1a1f36; --muted: #697386; --faint: #93a0b1;
+    --navy: #16263c; --navy-2: #27466b;
+    --green: #0e9f6e; --green-soft: #e8f6f0; --green-line: #b9dfcf;
+    --danger: #bf3b2b; --danger-soft: #fbeeeb;
+    --serif: "Songti SC", "Noto Serif SC", Georgia, serif;
+    --font: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --shadow: 0 1px 2px rgba(22,38,60,.05), 0 10px 30px -18px rgba(22,38,60,.35);
+  }
+  [data-theme="ink"] {
+    --void: #161a21; --panel: #1e232b; --panel-2: #242a34; --panel-3: #2a313c;
+    --line: #333a46; --line-2: #414a58; --line-3: #566173;
+    --ink: #e9e6de; --muted: #9aa2ad; --faint: #78818e;
+    --navy: #e9e6de; --navy-2: #b9c9dc;
+    --green: #4bd39a; --green-soft: #1c3a2d; --green-line: #2f6249;
+    --danger: #e57760; --danger-soft: #3a2320;
+    --serif: "Songti SC", "Noto Serif SC", Georgia, serif;
+    --font: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --shadow: 0 1px 0 rgba(0,0,0,.35), 0 24px 50px -30px #000;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; }
+  body {
+    background: var(--void); color: var(--ink); font-family: var(--font);
+    font-size: 14px; line-height: 1.55; -webkit-font-smoothing: antialiased; overflow: hidden;
+  }
+  button, input, select { font: inherit; color: inherit; }
+  button { cursor: pointer; background: none; border: 0; }
+  :focus-visible { outline: 2px solid var(--navy-2); outline-offset: 2px; }
+  .mono { font-family: var(--mono); }
+
+  /* ---------- 产品外壳 ---------- */
+  .deck { height: 100%; display: flex; flex-direction: column; }
+  .deck-header {
+    display: flex; align-items: center; gap: 22px; padding: 12px 24px;
+    background: var(--panel); border-bottom: 1px solid var(--line); flex: none;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; flex: none; }
+  .brand img { width: 28px; height: 28px; display: block; }
+  .brand b { display: block; font-size: 14px; letter-spacing: .01em; }
+  .brand span { display: block; font-size: 9.5px; color: var(--faint); letter-spacing: .04em; margin-top: 1px; }
+  .nav { display: flex; gap: 1px; flex: 1; flex-wrap: wrap; }
+  .nav a {
+    font-size: 12px; color: var(--muted); text-decoration: none; padding: 6px 9px; border-radius: 5px;
+    white-space: nowrap;
+  }
+  .nav a:hover { color: var(--ink); background: var(--panel-2); }
+  .nav a.on { color: var(--green); background: var(--green-soft); font-weight: 600; }
+  .meta { display: flex; align-items: center; gap: 7px; flex: none; }
+  .who { font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-right: 3px; text-align: right; }
+  .who b { display: block; color: var(--ink); font-size: 11px; font-weight: 600; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line);
+    border-radius: 5px; padding: 5px 9px; font-family: var(--mono); font-size: 10.5px; color: var(--muted);
+  }
+  .chip:hover { border-color: var(--line-2); color: var(--ink); }
+  .chip.gear { border-color: var(--line-2); color: var(--ink); background: var(--panel-2); }
+  .chip.gear.on { border-color: var(--green); color: var(--green); background: var(--green-soft); }
+  .chip svg { display: block; }
+
+  .stage { flex: 1; overflow: auto; }
+  .page { max-width: 940px; margin: 0 auto; padding: 46px 28px 90px; }
+  .page-kicker { font-family: var(--mono); font-size: 10px; letter-spacing: .16em; color: var(--faint); }
+  .page h1 { font-family: var(--serif); font-size: 34px; font-weight: 600; margin-top: 7px; letter-spacing: .01em; }
+  .page p.lede { color: var(--muted); font-size: 13px; margin-top: 8px; max-width: 52ch; }
+  .page-hint {
+    margin-top: 26px; border: 1px dashed var(--line-2); border-radius: 9px; padding: 14px 16px;
+    font-size: 12.5px; color: var(--muted); max-width: 560px;
+  }
+  .page-hint b { color: var(--ink); }
+
+  /* ---------- 遮罩 + 抽屉 ---------- */
+  .scrim {
+    position: fixed; inset: 0; background: rgba(16, 28, 44, .34); backdrop-filter: blur(1.5px);
+    opacity: 0; pointer-events: none; transition: opacity .22s ease; z-index: 30;
+  }
+  .scrim.on { opacity: 1; pointer-events: auto; }
+  .drawer {
+    position: fixed; top: 0; right: 0; height: 100%; width: min(552px, 100vw);
+    background: var(--panel); border-left: 1px solid var(--line); box-shadow: -30px 0 60px -40px rgba(10,20,35,.5);
+    transform: translateX(102%); transition: transform .28s cubic-bezier(.22,.8,.3,1);
+    z-index: 31; display: flex; flex-direction: column;
+  }
+  .drawer.on { transform: none; }
+
+  .dw-head {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
+    padding: 20px 22px 0;
+  }
+  .dw-head h2 { font-family: var(--serif); font-size: 24px; font-weight: 600; letter-spacing: .01em; }
+  .dw-head .sub { font-family: var(--mono); font-size: 10.5px; color: var(--faint); margin-top: 4px; }
+  .dw-close {
+    width: 28px; height: 28px; border: 1px solid var(--line); border-radius: 5px;
+    color: var(--muted); display: grid; place-items: center; font-size: 15px; flex: none;
+  }
+  .dw-close:hover { border-color: var(--line-2); color: var(--ink); background: var(--panel-2); }
+
+  .dw-tabs { display: flex; gap: 4px; padding: 18px 22px 0; border-bottom: 1px solid var(--line); flex: none; }
+  .dw-tabs button {
+    position: relative; padding: 8px 2px 11px; margin-right: 18px;
+    font-size: 13px; color: var(--muted);
+  }
+  .dw-tabs button::after {
+    content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: transparent;
+  }
+  .dw-tabs button:hover { color: var(--ink); }
+  .dw-tabs button.on { color: var(--ink); font-weight: 600; }
+  .dw-tabs button.on::after { background: var(--green); }
+  .dw-tabs .count {
+    font-family: var(--mono); font-size: 9.5px; color: var(--faint); margin-left: 5px;
+    border: 1px solid var(--line); border-radius: 99px; padding: 0 5px; vertical-align: 1px;
+  }
+
+  .dw-body { flex: 1; overflow: auto; padding: 20px 22px 40px; }
+
+  /* ---------- 分组 ---------- */
+  .grp + .grp { margin-top: 30px; }
+  .grp-head { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; }
+  .grp-head h3 { font-size: 13.5px; font-weight: 600; letter-spacing: .01em; }
+  .grp-head .meta { font-family: var(--mono); font-size: 10px; color: var(--faint); letter-spacing: .05em; }
+  .grp-head .sp { flex: 1; }
+  .grp-note { font-size: 11.5px; color: var(--faint); margin-top: 5px; line-height: 1.6; }
+  .grp-body { margin-top: 12px; border-top: 1px solid var(--line); }
+
+  .row {
+    display: flex; align-items: flex-start; gap: 14px; padding: 14px 2px;
+    border-bottom: 1px solid var(--line);
+  }
+  .row .main { flex: 1; min-width: 0; }
+  .row .name { font-size: 13.5px; font-weight: 600; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .row .host { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 3px; word-break: break-all; }
+  .row .facts {
+    display: flex; gap: 16px; flex-wrap: wrap; margin-top: 7px;
+    font-family: var(--mono); font-size: 10px; color: var(--faint);
+  }
+  .row .facts b { color: var(--muted); font-weight: 500; }
+  .row .acts { display: flex; align-items: center; gap: 10px; flex: none; padding-top: 2px; }
+  .row .acts button { font-size: 11.5px; color: var(--muted); padding: 3px 1px; }
+  .row .acts button:hover { color: var(--ink); }
+  .row .acts button.danger:hover { color: var(--danger); }
+
+  /* 只读行：唯一视觉差异是右侧「只读」签，不加锁图标雨 */
+  .row.ro { background: linear-gradient(90deg, transparent 0 0); }
+  .ro-tag {
+    display: inline-flex; align-items: center; gap: 5px; flex: none;
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: .05em;
+    color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 3px 7px;
+    background: var(--panel-2);
+  }
+  .ro-tag svg { opacity: .75; }
+  .row .main .subnote { font-size: 10.5px; color: var(--faint); margin-top: 5px; }
+  .dot { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--green); vertical-align: 1px; }
+  .dot.warn { background: #c99324; }
+  .dot.dead { background: var(--line-3); }
+
+  /* ---------- 表单 ---------- */
+  .add-btn {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600;
+    color: var(--navy); border: 1px solid var(--line-2); border-radius: 5px; padding: 5px 10px;
+    background: var(--panel);
+  }
+  [data-theme="ink"] .add-btn { color: var(--ink); }
+  .add-btn:hover { border-color: var(--navy); }
+  .form {
+    margin: 14px 0 4px; border: 1px solid var(--line-2); border-radius: 8px; padding: 16px;
+    background: var(--panel-2);
+  }
+  .form h4 { font-size: 12.5px; font-weight: 600; margin-bottom: 12px; }
+  .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 11px 12px; }
+  .fields .full { grid-column: 1 / -1; }
+  .field label {
+    display: block; font-family: var(--mono); font-size: 9.5px; letter-spacing: .1em;
+    color: var(--faint); margin-bottom: 4px;
+  }
+  .field input, .field select {
+    width: 100%; border: 1px solid var(--line-2); border-radius: 5px; background: var(--panel);
+    padding: 7px 9px; font-size: 12.5px; outline: none;
+  }
+  .field input:focus, .field select:focus { border-color: var(--navy-2); box-shadow: 0 0 0 3px color-mix(in srgb, var(--navy-2) 12%, transparent); }
+  .field input::placeholder { color: var(--faint); }
+  .field input:disabled { background: var(--panel-3); color: var(--faint); cursor: not-allowed; }
+  .field .hint { font-size: 10.5px; color: var(--faint); margin-top: 3px; }
+  .form-foot { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+  .form-foot .sp { flex: 1; }
+  .form-foot .note { font-size: 10.5px; color: var(--faint); }
+  .btn-primary {
+    background: var(--navy); color: var(--panel); border-radius: 5px; padding: 7px 15px;
+    font-size: 12.5px; font-weight: 600;
+  }
+  [data-theme="ink"] .btn-primary { background: var(--ink); color: #161a21; }
+  .btn-primary:hover { filter: brightness(1.12); }
+  .btn-primary:disabled { opacity: .45; cursor: not-allowed; filter: none; }
+  .btn-quiet { font-size: 12.5px; color: var(--muted); padding: 7px 6px; }
+  .btn-quiet:hover { color: var(--ink); }
+  .empty-line { padding: 16px 2px; font-size: 12px; color: var(--faint); border-bottom: 1px solid var(--line); }
+
+  /* ---------- 其他 tab 的轻内容 ---------- */
+  .pane-title { font-family: var(--serif); font-size: 19px; font-weight: 600; }
+  .pane-lede { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .setting-row {
+    display: flex; align-items: center; gap: 16px; padding: 15px 2px; border-bottom: 1px solid var(--line);
+  }
+  .setting-row .txt { flex: 1; }
+  .setting-row .txt b { display: block; font-size: 13px; font-weight: 600; }
+  .setting-row .txt span { display: block; font-size: 11px; color: var(--faint); margin-top: 2px; }
+  .seg { display: flex; border: 1px solid var(--line-2); border-radius: 5px; overflow: hidden; }
+  .seg button { padding: 5px 11px; font-size: 11.5px; color: var(--muted); background: var(--panel); }
+  .seg button.on { background: var(--navy); color: var(--panel); }
+  [data-theme="ink"] .seg button.on { background: var(--ink); color: #161a21; }
+  .switch {
+    width: 34px; height: 19px; border-radius: 99px; background: var(--line-2); position: relative; flex: none;
+    border: 0; transition: background .15s;
+  }
+  .switch::after {
+    content: ""; position: absolute; top: 2px; left: 2px; width: 15px; height: 15px; border-radius: 50%;
+    background: #fff; transition: transform .15s;
+  }
+  .switch.on { background: var(--green); }
+  .switch.on::after { transform: translateX(15px); }
+
+  /* ---------- 提示条 ---------- */
+  .toast {
+    position: absolute; left: 50%; bottom: 24px; transform: translate(-50%, 12px);
+    background: var(--navy); color: var(--panel); font-size: 12px; padding: 8px 16px; border-radius: 6px;
+    opacity: 0; pointer-events: none; transition: all .2s ease; white-space: nowrap; z-index: 5;
+  }
+  [data-theme="ink"] .toast { background: var(--ink); color: #161a21; }
+  .toast.on { opacity: 1; transform: translate(-50%, 0); }
+
+  @media (max-width: 900px) {
+    .nav { display: none; }
+    .page { padding: 28px 16px 60px; }
+    .drawer { width: 100vw; }
+    .fields { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 720px) {
+    .deck-header { padding: 10px 12px; gap: 10px; }
+    .brand span { display: none; }
+    /* 手机只保留设置入口，避免头部操作区把页面撑宽 */
+    .meta .who, .meta .chip { display: none; }
+    .meta .chip.gear { display: inline-flex; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="deck">
+  <header class="deck-header">
+    <div class="brand">
+      <img src="../logo.png" alt="">
+      <div><b>Sortie Deck</b><span>前线小队 · 共交付，无传话</span></div>
+    </div>
+    <nav class="nav">
+      <a href="#">作战图</a><a href="#">任务</a><a href="#">知识库</a><a href="#">记忆</a>
+      <a href="#">角色工坊</a><a href="#">工具箱</a><a href="#">角色锻造</a><a href="#">小群</a>
+      <a href="#">决策中心</a><a href="#">密钥</a><a href="#">管理</a>
+    </nav>
+    <div class="meta">
+      <div class="who"><b>沈思</b>管理员</div>
+      <button class="chip" type="button">文</button>
+      <button class="chip" type="button">⇩ 导出数据</button>
+      <button class="chip gear on" id="gearBtn" type="button" aria-expanded="true" aria-controls="drawer">
+        <svg viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+          <circle cx="10" cy="10" r="2.4"/>
+          <path d="M10 2.6v1.7M10 15.7v1.7M2.6 10h1.7M15.7 10h1.7M4.8 4.8l1.2 1.2M14 14l1.2 1.2M15.2 4.8L14 6M6 14l-1.2 1.2"/>
+        </svg>
+        设置
+      </button>
+      <button class="chip" type="button">退出</button>
+    </div>
+  </header>
+
+  <main class="stage">
+    <div class="page">
+      <div class="page-kicker">SETTINGS ENTRY / 设置入口</div>
+      <h1>设置不打断手头的事</h1>
+      <p class="lede">右上角齿轮打开右侧抽屉，当前页面留在背后。Git 凭据、外观、账号、数据都在同一个抽屉里切换。</p>
+      <div class="page-hint">
+        <b>设计取向：</b>抽屉是 Stripe / Linear 这类工具里最常见、也最不容易出错的做法。层级只靠细线与字级，不加卡片和阴影；工作区凭据用右侧「只读」签区分，不加锁图标雨。
+      </div>
+    </div>
+  </main>
+</div>
+
+<div class="scrim on" id="scrim"></div>
+
+<aside class="drawer on" id="drawer" role="dialog" aria-modal="true" aria-labelledby="dwTitle">
+  <div class="dw-head">
+    <div>
+      <h2 id="dwTitle">设置</h2>
+      <div class="sub">SHEN SI · ADMIN · WORKSPACE / SORTIE-DECK</div>
+    </div>
+    <button class="dw-close" id="closeBtn" type="button" aria-label="关闭设置">×</button>
+  </div>
+
+  <div class="dw-tabs" role="tablist" aria-label="设置分类">
+    <button type="button" role="tab" data-tab="git" class="on" aria-selected="true">Git 凭据<span class="count" id="tabGitCount">5</span></button>
+    <button type="button" role="tab" data-tab="account" aria-selected="false">账号</button>
+    <button type="button" role="tab" data-tab="appearance" aria-selected="false">外观</button>
+    <button type="button" role="tab" data-tab="data" aria-selected="false">数据</button>
+  </div>
+
+  <div class="dw-body" id="dwBody">
+    <!-- ================= Git 凭据 ================= -->
+    <section data-pane="git">
+      <div class="grp">
+        <div class="grp-head">
+          <h3>工作区凭据</h3>
+          <span class="meta" id="wsMeta">2 条 · 只读</span>
+          <span class="sp"></span>
+        </div>
+        <p class="grp-note">管理员配置，全员可用。密钥写入后不可读回，这里只显示元信息；如需更换，请走「管理 › 仓库」。</p>
+        <div class="grp-body" id="wsList"></div>
+      </div>
+
+      <div class="grp">
+        <div class="grp-head">
+          <h3>我的凭据</h3>
+          <span class="meta" id="myMeta">3 条</span>
+          <span class="sp"></span>
+          <button class="add-btn" id="addCredBtn" type="button">＋ 添加</button>
+        </div>
+        <p class="grp-note">只影响你自己的任务。按「主机 + 协议 + 用户名」匹配私有仓库，改这三项等于新建一条。</p>
+        <div id="credFormHost"></div>
+        <div class="grp-body" id="myList"></div>
+      </div>
+
+      <div class="grp">
+        <div class="grp-head">
+          <h3>我的私有仓库</h3>
+          <span class="meta" id="repoMeta">3 个</span>
+          <span class="sp"></span>
+          <button class="add-btn" id="addRepoBtn" type="button">＋ 登记</button>
+        </div>
+        <p class="grp-note">登记后出现在任务仓库选择器的下拉里；执行时按上面的凭据自动匹配。</p>
+        <div id="repoFormHost"></div>
+        <div class="grp-body" id="repoList"></div>
+      </div>
+    </section>
+
+    <!-- ================= 账号 ================= -->
+    <section data-pane="account" hidden>
+      <h3 class="pane-title">账号</h3>
+      <p class="pane-lede">登录名不可改；显示名会出现在任务署名与消息里。</p>
+      <div class="form" style="margin-top:16px">
+        <div class="fields">
+          <div class="field"><label>显示名</label><input value="沈思" autocomplete="off"></div>
+          <div class="field"><label>登录名</label><input value="admin" disabled></div>
+          <div class="field"><label>角色</label><input value="管理员 · 可配置工作区仓库" disabled></div>
+          <div class="field"><label>加入时间</label><input value="2026-03-18" disabled></div>
+        </div>
+        <div class="form-foot">
+          <span class="note">修改密码会用邮件发送一次验证链接。</span>
+          <span class="sp"></span>
+          <button class="btn-quiet" type="button">发送改密链接</button>
+          <button class="btn-primary" type="button" data-toast="显示名已保存">保存</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= 外观 ================= -->
+    <section data-pane="appearance" hidden>
+      <h3 class="pane-title">外观</h3>
+      <p class="pane-lede">纸与墨两套主题共用同一套版式，切主题不改变信息密度。</p>
+      <div style="margin-top:8px">
+        <div class="setting-row">
+          <div class="txt"><b>主题</b><span>「纸」是默认；「墨」适合夜间与投屏</span></div>
+          <div class="seg" id="themeSeg">
+            <button type="button" class="on" data-set-theme="paper">纸</button>
+            <button type="button" data-set-theme="ink">墨</button>
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="txt"><b>界面语言</b><span>只影响本机，不同步给其他成员</span></div>
+          <div class="seg"><button type="button" class="on">中文</button><button type="button">EN</button></div>
+        </div>
+        <div class="setting-row">
+          <div class="txt"><b>界面音效</b><span>切页与提交时的短音，默认关闭</span></div>
+          <button class="switch" type="button" aria-pressed="false" aria-label="界面音效"></button>
+        </div>
+        <div class="setting-row">
+          <div class="txt"><b>背景图</b><span>当前未设置。支持外链图片，按主题自动压暗</span></div>
+          <button class="btn-quiet" type="button">设置地址</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= 数据 ================= -->
+    <section data-pane="data" hidden>
+      <h3 class="pane-title">数据与账号</h3>
+      <p class="pane-lede">带走你的东西，或者彻底离开。两件事都需要二次确认。</p>
+      <div style="margin-top:8px">
+        <div class="setting-row">
+          <div class="txt"><b>导出我的数据</b><span>任务、消息、记忆、凭据元信息，JSON 打包下载</span></div>
+          <button class="add-btn" type="button" data-toast="正在打包，完成后自动下载">导出</button>
+        </div>
+        <div class="setting-row">
+          <div class="txt"><b>退出登录</b><span>只清本机会话，不影响其他设备</span></div>
+          <button class="btn-quiet" type="button">退出</button>
+        </div>
+        <div class="setting-row">
+          <div class="txt"><b style="color:var(--danger)">删除账号</b><span>历史消息署名会保留为「已注销用户」，不可恢复</span></div>
+          <button class="btn-quiet" style="color:var(--danger)" type="button" id="deleteAccBtn">删除</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="toast" id="toast" role="status"></div>
+</aside>
+
+<script>
+  const DAY = 86400000;
+  const NOW = new Date("2026-11-05T10:20:00");
+
+  /* 工作区凭据：管理员维护，页面只读。真实接口只返回这些字段，永远没有 secret。 */
+  const workspaceCreds = [
+    { id: "crd_ws_gitlab", label: "GitLab 服务账号", host: "gitlab.whsaihui.cn", scheme: "https", username: "ci-svc",
+      fingerprint: "…9f2c", lastUsed: "2026-11-04 21:10", repos: 2 },
+    { id: "crd_ws_github", label: "GitHub Org Bot", host: "github.com", scheme: "https", username: "sortie-bot",
+      fingerprint: "…41ae", lastUsed: "2026-11-05 09:42", repos: 1 },
+  ];
+
+  /* 个人凭据：本人增删改查。fingerprint 只留末四位。 */
+  let myCreds = [
+    { id: "crd_u_7b31", label: "我的 GitLab", host: "gitlab.whsaihui.cn", scheme: "https", username: "si.shen",
+      fingerprint: "…7b31", lastUsed: "2 小时前", repos: 1, state: "ok" },
+    { id: "crd_u_c08d", label: "GitHub 个人", host: "github.com", scheme: "https", username: "AdamsShen",
+      fingerprint: "…c08d", lastUsed: "昨天 18:04", repos: 2, state: "ok" },
+    { id: "crd_u_2a6f", label: "旧 Gitea", host: "git.example.internal", scheme: "https", username: "shensi",
+      fingerprint: "…2a6f", lastUsed: "从未使用", repos: 0, state: "stale" },
+  ];
+
+  let myRepos = [
+    { id: "repo_1", name: "sortie-deck-todos", url: "github.com/AdamsShen/sortie-deck-todos.git", branch: "dev", cred: "crd_u_c08d" },
+    { id: "repo_2", name: "xinyu-agents", url: "gitlab.whsaihui.cn/xinyu/xinyu-agents.git", branch: "main", cred: "crd_u_7b31" },
+    { id: "repo_3", name: "notes-lab", url: "git.example.internal/lab/notes.git", branch: "master", cred: "crd_u_2a6f" },
+  ];
+
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const lockSvg = `<svg viewBox="0 0 16 16" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3.2" y="7" width="9.6" height="6.6" rx="1.4"/><path d="M5.6 7V5.1a2.4 2.4 0 0 1 4.8 0V7"/></svg>`;
+
+  /* ---------------- 渲染：工作区（只读） ---------------- */
+  function renderWorkspace() {
+    const host = document.getElementById("wsList");
+    host.innerHTML = workspaceCreds.map((c) => `
+      <div class="row ro">
+        <div class="main">
+          <div class="name">${esc(c.label)}</div>
+          <div class="host">${esc(c.scheme)}://${esc(c.host)}</div>
+          <div class="facts">
+            <span>账号 <b>${esc(c.username)}</b></span>
+            <span>指纹 <b>${esc(c.fingerprint)}</b></span>
+            <span>最近使用 <b>${esc(c.lastUsed)}</b></span>
+            <span>绑定 <b>${c.repos}</b> 个仓库</span>
+          </div>
+        </div>
+        <span class="ro-tag" title="工作区凭据由管理员维护，此处不可修改">${lockSvg}只读</span>
+      </div>`).join("");
+    document.getElementById("wsMeta").textContent = `${workspaceCreds.length} 条 · 只读`;
+  }
+
+  /* ---------------- 渲染：我的凭据 ---------------- */
+  let editingId = null;
+
+  function renderMine() {
+    const host = document.getElementById("myList");
+    if (!myCreds.length) {
+      host.innerHTML = `<div class="empty-line">还没有个人凭据。自定义私有仓库会因匹配不到凭据而无法拉取。</div>`;
+    } else {
+      host.innerHTML = myCreds.map((c) => `
+        <div class="row" data-cred="${c.id}">
+          <div class="main">
+            <div class="name">${esc(c.label)}
+              ${c.state === "stale" ? `<span class="dot warn" title="长期未使用，可能已失效"></span>` : `<span class="dot"></span>`}
+            </div>
+            <div class="host">${esc(c.scheme)}://${esc(c.host)}</div>
+            <div class="facts">
+              <span>账号 <b>${esc(c.username)}</b></span>
+              <span>指纹 <b>${esc(c.fingerprint)}</b></span>
+              <span>最近使用 <b>${esc(c.lastUsed)}</b></span>
+              <span>匹配 <b>${c.repos}</b> 个仓库</span>
+            </div>
+            ${c.state === "stale" ? `<div class="subnote">超过 90 天未使用；仓库预检可能失败，建议重新验证或删除。</div>` : ""}
+          </div>
+          <div class="acts">
+            <button type="button" data-edit="${c.id}">编辑</button>
+            <button type="button" class="danger" data-del-cred="${c.id}">删除</button>
+          </div>
+        </div>
+        ${editingId === c.id ? credForm(c, true) : ""}`).join("");
+    }
+    document.getElementById("myMeta").textContent = `${myCreds.length} 条`;
+    document.getElementById("tabGitCount").textContent = workspaceCreds.length + myCreds.length;
+  }
+
+  /* ---------------- 凭据表单（新增 / 编辑共用） ---------------- */
+  function credForm(cred, isEdit) {
+    const v = cred || { label: "", host: "", scheme: "https", username: "", expires: "" };
+    return `
+      <form class="form" data-form="${isEdit ? "edit" : "add"}" data-id="${isEdit ? cred.id : ""}" novalidate>
+        <h4>${isEdit ? "编辑凭据" : "添加个人凭据"}</h4>
+        <div class="fields">
+          <div class="field">
+            <label>名称</label>
+            <input name="label" value="${esc(v.label)}" placeholder="例如：我的 GitLab" autocomplete="off">
+          </div>
+          <div class="field">
+            <label>主机</label>
+            <input name="host" value="${esc(v.host)}" placeholder="gitlab.example.com" ${isEdit ? "disabled" : ""} autocomplete="off">
+            ${isEdit ? `<div class="hint">主机是匹配键，不可修改；要换主机请新建。</div>` : ""}
+          </div>
+          <div class="field">
+            <label>协议</label>
+            <select name="scheme" ${isEdit ? "disabled" : ""}>
+              <option value="https"${v.scheme === "https" ? " selected" : ""}>https</option>
+              <option value="ssh"${v.scheme === "ssh" ? " selected" : ""}>ssh</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>用户名</label>
+            <input name="username" value="${esc(v.username)}" placeholder="git 账号名" ${isEdit ? "disabled" : ""} autocomplete="off">
+            ${isEdit ? `<div class="hint">用户名同属匹配键。</div>` : ""}
+          </div>
+          <div class="field full">
+            <label>Token / 密码</label>
+            <input name="secret" type="password" placeholder="${isEdit ? "留空则不修改" : "只写不读，保存后不再显示"}" autocomplete="new-password">
+          </div>
+        </div>
+        <div class="form-foot">
+          <span class="note">加密后落库；页面永远不回显明文。</span>
+          <span class="sp"></span>
+          <button class="btn-quiet" type="button" data-cancel-form>取消</button>
+          <button class="btn-primary" type="submit" data-submit-form>${isEdit ? "保存修改" : "保存凭据"}</button>
+        </div>
+      </form>`;
+  }
+
+  /* ---------------- 渲染：私有仓库 ---------------- */
+  let repoFormOpen = false;
+
+  function renderRepos() {
+    const host = document.getElementById("repoList");
+    if (!myRepos.length) {
+      host.innerHTML = `<div class="empty-line">还没有登记私有仓库。</div>`;
+    } else {
+      host.innerHTML = myRepos.map((r) => {
+        const matched = myCreds.find((c) => c.id === r.cred);
+        const bad = !matched || matched.state === "stale";
+        return `
+        <div class="row" data-repo="${r.id}">
+          <div class="main">
+            <div class="name">${esc(r.name)}</div>
+            <div class="host">${esc(r.url)}</div>
+            <div class="facts">
+              <span>分支 <b>${esc(r.branch)}</b></span>
+              <span>匹配凭据 <b>${esc(matched ? matched.label : "未匹配")}</b></span>
+              <span>${bad ? `<span class="dot warn"></span> 预检可能失败` : `<span class="dot"></span> 可拉取`}</span>
+            </div>
+          </div>
+          <div class="acts"><button type="button" class="danger" data-del-repo="${r.id}">移除</button></div>
+        </div>`;
+      }).join("");
+    }
+    document.getElementById("repoMeta").textContent = `${myRepos.length} 个`;
+  }
+
+  function repoForm() {
+    return `
+      <form class="form" data-form="repo" novalidate>
+        <h4>登记私有仓库</h4>
+        <div class="fields">
+          <div class="field"><label>目录名</label><input name="name" placeholder="sortie-deck-todos" autocomplete="off"></div>
+          <div class="field"><label>默认分支</label><input name="branch" placeholder="main" autocomplete="off"></div>
+          <div class="field full"><label>仓库地址</label><input name="url" placeholder="https://github.com/you/repo.git" autocomplete="off"></div>
+        </div>
+        <div class="form-foot">
+          <span class="note">按主机自动匹配上面的个人凭据。</span>
+          <span class="sp"></span>
+          <button class="btn-quiet" type="button" data-cancel-form>取消</button>
+          <button class="btn-primary" type="submit" data-submit-form>登记</button>
+        </div>
+      </form>`;
+  }
+
+  /* ---------------- 提示 ---------------- */
+  let toastTimer = null;
+  function toast(msg) {
+    const el = document.getElementById("toast");
+    el.textContent = msg;
+    el.classList.add("on");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove("on"), 1800);
+  }
+
+  /* ---------------- 事件 ---------------- */
+  const drawer = document.getElementById("drawer");
+  const scrim = document.getElementById("scrim");
+  const gear = document.getElementById("gearBtn");
+
+  function setDrawer(open) {
+    drawer.classList.toggle("on", open);
+    scrim.classList.toggle("on", open);
+    gear.classList.toggle("on", open);
+    gear.setAttribute("aria-expanded", String(open));
+  }
+  gear.addEventListener("click", () => setDrawer(!drawer.classList.contains("on")));
+  scrim.addEventListener("click", () => setDrawer(false));
+  document.getElementById("closeBtn").addEventListener("click", () => setDrawer(false));
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && drawer.classList.contains("on")) setDrawer(false);
+  });
+
+  /* tab */
+  document.querySelector(".dw-tabs").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-tab]");
+    if (!btn) return;
+    document.querySelectorAll(".dw-tabs button").forEach((b) => {
+      const on = b === btn;
+      b.classList.toggle("on", on);
+      b.setAttribute("aria-selected", String(on));
+    });
+    document.querySelectorAll("[data-pane]").forEach((p) => {
+      p.hidden = p.dataset.pane !== btn.dataset.tab;
+    });
+    document.getElementById("dwBody").scrollTop = 0;
+  });
+
+  /* 我的凭据列表 */
+  document.getElementById("myList").addEventListener("click", (e) => {
+    const edit = e.target.closest("[data-edit]");
+    if (edit) {
+      editingId = editingId === edit.dataset.edit ? null : edit.dataset.edit;
+      renderMine();
+      const form = document.querySelector('[data-form="edit"]');
+      if (form) form.scrollIntoView({ block: "nearest" });
+      return;
+    }
+    const del = e.target.closest("[data-del-cred]");
+    if (del) {
+      const c = myCreds.find((x) => x.id === del.dataset.delCred);
+      if (!c) return;
+      const ok = confirm(`删除「${c.label}」？\n\n使用它的私有仓库会立刻失去访问权限，已开始的拉取不受影响。`);
+      if (!ok) return;
+      myCreds = myCreds.filter((x) => x.id !== c.id);
+      myRepos.forEach((r) => { if (r.cred === c.id) r.cred = ""; });
+      renderMine(); renderRepos();
+      toast("凭据已删除");
+    }
+  });
+
+  /* 添加凭据 */
+  document.getElementById("addCredBtn").addEventListener("click", () => {
+    const host = document.getElementById("credFormHost");
+    if (host.firstElementChild) { host.innerHTML = ""; return; }
+    editingId = null;
+    renderMine();
+    host.innerHTML = credForm(null, false);
+    host.querySelector("input[name=label]").focus();
+  });
+
+  /* 登记仓库 */
+  document.getElementById("addRepoBtn").addEventListener("click", () => {
+    const host = document.getElementById("repoFormHost");
+    if (host.firstElementChild) { host.innerHTML = ""; return; }
+    host.innerHTML = repoForm();
+    host.querySelector("input[name=name]").focus();
+  });
+
+  /* 表单提交（新增 / 编辑 / 仓库） */
+  document.addEventListener("submit", (e) => {
+    const form = e.target.closest("form[data-form]");
+    if (!form) return;
+    e.preventDefault();
+    const fd = new FormData(form);
+    if (form.dataset.form === "repo") {
+      const url = String(fd.get("url") || "").trim();
+      if (!url) return toast("仓库地址必填");
+      const name = String(fd.get("name") || "").trim() || url.split("/").pop().replace(/\.git$/, "");
+      myRepos.unshift({
+        id: "repo_" + Date.now(), name, url,
+        branch: String(fd.get("branch") || "").trim() || "main", cred: "",
+      });
+      document.getElementById("repoFormHost").innerHTML = "";
+      renderRepos();
+      toast("仓库已登记");
+      return;
+    }
+
+    const label = String(fd.get("label") || "").trim();
+    const hostVal = String(fd.get("host") || "").trim();
+    const scheme = String(fd.get("scheme") || "https");
+    const username = String(fd.get("username") || "").trim();
+    const secret = String(fd.get("secret") || "");
+
+    if (form.dataset.form === "add") {
+      if (!hostVal || !secret) return toast("主机与 Token 必填");
+      if (myCreds.some((c) => c.host === hostVal && c.username === username && c.scheme === scheme)) {
+        return toast("同主机、同用户名已有凭据");
+      }
+      myCreds.unshift({
+        id: "crd_u_" + Math.random().toString(16).slice(2, 6),
+        label: label || hostVal, host: hostVal, scheme, username,
+        fingerprint: "…" + secret.slice(-4), lastUsed: "从未使用", repos: 0, state: "ok",
+      });
+      document.getElementById("credFormHost").innerHTML = "";
+      renderMine();
+      toast("凭据已保存（明文不再显示）");
+      return;
+    }
+
+    const c = myCreds.find((x) => x.id === form.dataset.id);
+    if (!c) return;
+    c.label = label || c.label;
+    if (secret) c.fingerprint = "…" + secret.slice(-4);
+    c.state = "ok";
+    editingId = null;
+    renderMine();
+    toast("修改已保存");
+  });
+
+  /* 取消表单 */
+  document.addEventListener("click", (e) => {
+    if (e.target.closest("[data-cancel-form]")) {
+      const form = e.target.closest("form");
+      if (form.dataset.form === "repo") document.getElementById("repoFormHost").innerHTML = "";
+      else if (form.dataset.form === "add") document.getElementById("credFormHost").innerHTML = "";
+      else { editingId = null; renderMine(); }
+    }
+    const delRepo = e.target.closest("[data-del-repo]");
+    if (delRepo) {
+      const r = myRepos.find((x) => x.id === delRepo.dataset.delRepo);
+      if (r && confirm(`从下拉列表移除「${r.name}」？\n\n不会删除远端仓库。`)) {
+        myRepos = myRepos.filter((x) => x.id !== r.id);
+        renderRepos();
+        toast("已移除");
+      }
+    }
+    const t = e.target.closest("[data-toast]");
+    if (t) toast(t.dataset.toast);
+  });
+
+  /* 外观：主题切换 */
+  document.getElementById("themeSeg").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-set-theme]");
+    if (!b) return;
+    document.documentElement.dataset.theme = b.dataset.setTheme;
+    document.querySelectorAll("#themeSeg button").forEach((x) => x.classList.toggle("on", x === b));
+  });
+
+  /* 开关 */
+  document.querySelectorAll(".switch").forEach((s) => {
+    s.addEventListener("click", () => {
+      s.classList.toggle("on");
+      s.setAttribute("aria-pressed", String(s.classList.contains("on")));
+    });
+  });
+
+  /* 删除账号二次确认 */
+  document.getElementById("deleteAccBtn").addEventListener("click", () => {
+    if (confirm("删除账号后无法恢复：\n\n· 个人 Git 凭据会一并删除\n· 历史消息署名保留为「已注销用户」\n\n确定继续？")) {
+      toast("已发送最终确认邮件");
+    }
+  });
+
+  renderWorkspace();
+  renderMine();
+  renderRepos();
+
+  /* 直接查看「关抽屉」状态：在地址后加 #closed */
+  if (location.hash === "#closed") setDrawer(false);
+</script>
+</body>
+</html>

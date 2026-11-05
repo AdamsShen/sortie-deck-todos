@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>设置入口 · Git 凭据 · 三个设计方向</title>
+<style>
+  :root {
+    --bg: #eef1f6; --card: #fff; --ink: #17233a; --muted: #697386; --faint: #93a0b1;
+    --line: #e0e6ee; --line-2: #cfd8e4; --green: #0e8f63;
+    --serif: "Songti SC", "Noto Serif SC", Georgia, serif;
+    --font: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--ink); font-family: var(--font); font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 56px 32px 96px; }
+  a { color: inherit; }
+
+  .hero { border-bottom: 1px solid var(--line-2); padding-bottom: 26px; }
+  .kick { font-family: var(--mono); font-size: 10px; letter-spacing: .2em; color: var(--faint); }
+  h1 { font-family: var(--serif); font-size: clamp(34px, 4.4vw, 52px); font-weight: 600; letter-spacing: .01em; margin-top: 12px; line-height: 1.18; }
+  .lede { margin-top: 14px; color: var(--muted); font-size: 13.5px; max-width: 68ch; }
+  .lede b { color: var(--ink); font-weight: 600; }
+
+  .brief { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-top: 26px; }
+  .brief div { background: var(--card); padding: 13px 15px; }
+  .brief .k { font-family: var(--mono); font-size: 8.5px; letter-spacing: .14em; color: var(--faint); }
+  .brief .v { font-size: 12px; margin-top: 4px; }
+  .brief .v b { font-weight: 600; }
+
+  .ver { padding: 38px 0; border-bottom: 1px solid var(--line-2); }
+  .ver:last-of-type { border-bottom: 0; }
+  .ver-head { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 30px; align-items: start; }
+  .ver-title .no { font-family: var(--mono); font-size: 10px; letter-spacing: .16em; color: var(--green); }
+  .ver-title h2 { font-family: var(--serif); font-size: 26px; font-weight: 600; margin-top: 6px; letter-spacing: .01em; }
+  .ver-title .tag { display: inline-block; margin-top: 8px; font-family: var(--mono); font-size: 8.5px; letter-spacing: .1em; color: var(--muted); border: 1px solid var(--line-2); padding: 3px 7px; }
+  .ver-copy p { color: var(--muted); font-size: 12.5px; line-height: 1.8; max-width: 76ch; }
+  .ver-copy p b { color: var(--ink); font-weight: 600; }
+  .metrics { display: grid; grid-template-columns: repeat(4, 1fr); margin-top: 14px; border-top: 1px solid var(--line-2); border-bottom: 1px solid var(--line); }
+  .metrics div { padding: 8px 12px 8px 0; border-right: 1px solid var(--line); }
+  .metrics div:last-child { border-right: 0; }
+  .metrics .k { display: block; font-family: var(--mono); font-size: 8.5px; letter-spacing: .1em; color: var(--faint); }
+  .metrics .v { display: block; color: var(--ink); font-size: 11.5px; margin-top: 2px; }
+  .links { display: flex; gap: 16px; margin-top: 14px; flex-wrap: wrap; }
+  .links a { font-size: 12.5px; font-weight: 600; color: var(--green); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--green) 35%, transparent); padding-bottom: 1px; }
+  .links a:hover { border-bottom-color: var(--green); }
+
+  /* 截图按满宽单列排，保证字段可读；评审时不靠放大也能看清结构 */
+  .shots { display: grid; grid-template-columns: 1fr; gap: 14px; margin-top: 20px; align-content: start; }
+  .shots figure { border: 1px solid var(--line-2); background: var(--card); overflow: hidden; }
+  .shots img { width: 100%; display: block; }
+  .shots figcaption { font-size: 11px; color: var(--muted); padding: 7px 11px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; gap: 10px; }
+  .shots figcaption span { font-family: var(--mono); font-size: 8.5px; letter-spacing: .08em; color: var(--faint); }
+
+  .pick { margin-top: 40px; }
+  .pick h2 { font-family: var(--serif); font-size: 24px; font-weight: 600; }
+  .pick .sub { color: var(--muted); font-size: 12.5px; margin-top: 5px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 12.5px; background: var(--card); border: 1px solid var(--line); }
+  th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-family: var(--mono); font-size: 9px; letter-spacing: .12em; color: var(--faint); font-weight: 500; background: #fafbfd; }
+  tr:last-child td { border-bottom: 0; }
+  td:first-child { font-family: var(--mono); font-size: 9.5px; letter-spacing: .06em; color: var(--faint); white-space: nowrap; }
+  td b { font-weight: 600; }
+
+  .shared { margin-top: 34px; border: 1px dashed var(--line-2); padding: 16px 18px; background: rgba(255,255,255,.55); }
+  .shared h3 { font-size: 12.5px; font-weight: 600; }
+  .shared ul { margin-top: 8px; padding-left: 17px; color: var(--muted); font-size: 12px; line-height: 1.8; }
+  .shared b { color: var(--ink); }
+  .foot { margin-top: 26px; font-size: 11px; color: var(--faint); line-height: 1.8; }
+
+  @media (max-width: 980px) {
+    .brief { grid-template-columns: 1fr 1fr; }
+    .ver-head { grid-template-columns: 1fr; gap: 14px; }
+    .shots { grid-template-columns: 1fr; }
+    .metrics { grid-template-columns: 1fr 1fr; }
+    .metrics div:nth-child(2) { border-right: 0; }
+  }
+  @media (max-width: 560px) { .wrap { padding: 34px 16px 70px; } .brief { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="hero">
+    <div class="kick">DESIGN REVIEW / 2026-11-05 / SETTINGS &amp; GIT CREDENTIALS</div>
+    <h1>设置不该另开一页</h1>
+    <p class="lede">
+      同一个需求，三种打开方式：右上角齿轮进入，右侧多个 tab，其中一页是 Git 凭据。
+      <b>管理员配置的工作区凭据只读</b>，<b>自己的凭据可增删改查</b>，密钥一律只写不读。
+      三版共用同一份内容与同一套交互约束，只换设计逻辑，方便横向比较。
+    </p>
+    <div class="brief">
+      <div><div class="k">ENTRY</div><div class="v"><b>右上角齿轮</b><br>不新增一级导航</div></div>
+      <div><div class="k">TABS</div><div class="v"><b>4–6 个</b><br>账号 / 外观 / Git / 数据</div></div>
+      <div><div class="k">PERMISSION</div><div class="v"><b>工作区只读</b><br>个人凭据可增删改</div></div>
+      <div><div class="k">SECRET</div><div class="v"><b>只写不读</b><br>仅回显指纹末四位</div></div>
+    </div>
+  </header>
+
+  <section class="ver">
+    <div class="ver-head">
+      <div class="ver-title">
+        <div class="no">01 / DRAWER</div>
+        <h2>抽屉实用派</h2>
+        <div class="tag">现实参照 · STRIPE / LINEAR SETTINGS</div>
+      </div>
+      <div class="ver-copy">
+        <p>
+          把设置做成一个<b>不打断工作的右侧抽屉</b>。顶部横排 tab，Git 页用两组行：
+          工作区凭据右侧一枚「只读」签，个人凭据行尾直接「编辑 / 删除」。
+          不靠卡片和阴影建立层级，<b>最贴近现有产品</b>。
+        </p>
+        <div class="metrics">
+          <div><span class="k">OPEN</span><span class="v">右侧抽屉 · 552px</span></div>
+          <div><span class="k">DENSITY</span><span class="v">中</span></div>
+          <div><span class="k">COST</span><span class="v">低 · 单组件即可</span></div>
+          <div><span class="k">MEMORY</span><span class="v">弱 · 稳</span></div>
+        </div>
+        <div class="links">
+          <a href="settings-git-v1-drawer.html" target="_blank">打开交互版 →</a>
+          <a href="settings-git-v1-drawer.html#closed" target="_blank">看关闭态 →</a>
+        </div>
+      </div>
+    </div>
+    <div class="shots">
+      <figure><img src="settings-git-v1.png" alt="v1 主视图" loading="lazy"><figcaption>主视图：工作区只读 + 我的凭据 + 私有仓库<span>MAIN</span></figcaption></figure>
+      <figure><img src="settings-git-v1-form.png" alt="v1 新增表单" loading="lazy"><figcaption>添加个人凭据：行内表单，主机与用户名是匹配键<span>FORM</span></figcaption></figure>
+    </div>
+  </section>
+
+  <section class="ver">
+    <div class="ver-head">
+      <div class="ver-title">
+        <div class="no">02 / CENTER</div>
+        <h2>设置中心</h2>
+        <div class="tag">最佳设计师 · RAMS 式系统化工作台</div>
+      </div>
+      <div class="ver-copy">
+        <p>
+          设置值得占用一整块工作面。左轨是目录，右侧是宽内容：
+          Git 页<b>双栏并排</b>——左只读、右可编辑，底部一条
+          <b>「仓库 → 凭据」匹配预览</b>，直接回答「这个仓库到底用了哪把钥匙」。
+          信息密度最高，适合重度用户。
+        </p>
+        <div class="metrics">
+          <div><span class="k">OPEN</span><span class="v">全屏面板 · 左轨 + 双栏</span></div>
+          <div><span class="k">DENSITY</span><span class="v">高</span></div>
+          <div><span class="k">COST</span><span class="v">高 · 新路由/布局</span></div>
+          <div><span class="k">MEMORY</span><span class="v">中 · 专业</span></div>
+        </div>
+        <div class="links">
+          <a href="settings-git-v2-center.html" target="_blank">打开交互版 →</a>
+          <a href="settings-git-v2-center.html#closed" target="_blank">看关闭态 →</a>
+        </div>
+      </div>
+    </div>
+    <div class="shots">
+      <figure><img src="settings-git-v2.png" alt="v2 主视图" loading="lazy"><figcaption>主视图：读数条 + 只读/可编辑双栏 + 匹配预览<span>MAIN</span></figcaption></figure>
+      <figure><img src="settings-git-v2-form.png" alt="v2 新增弹层" loading="lazy"><figcaption>弹层新增：编辑时锁定主机/协议/用户名<span>FORM</span></figcaption></figure>
+    </div>
+  </section>
+
+  <section class="ver">
+    <div class="ver-head">
+      <div class="ver-title">
+        <div class="no">03 / VAULT</div>
+        <h2>钥匙柜</h2>
+        <div class="tag">轮盘 17 号 · 档案 / 保险库质感</div>
+      </div>
+      <div class="ver-copy">
+        <p>
+          把权限差异做成<b>材质差异</b>：工作区凭据封在带蜡印的保险格里，只能看；
+          个人凭据是带齿纹的钥匙，可以改配、可以熔断。右侧宽抽屉，内部<b>竖排 tab</b>，
+          最像编辑部档案室，也最容易截图被记住。
+        </p>
+        <div class="metrics">
+          <div><span class="k">OPEN</span><span class="v">右侧宽抽屉 · 780px</span></div>
+          <div><span class="k">DENSITY</span><span class="v">中高</span></div>
+          <div><span class="k">COST</span><span class="v">中高 · 需要定制卡片</span></div>
+          <div><span class="k">MEMORY</span><span class="v">强 · 有签名</span></div>
+        </div>
+        <div class="links">
+          <a href="settings-git-v3-vault.html" target="_blank">打开交互版 →</a>
+          <a href="settings-git-v3-vault.html#closed" target="_blank">看关闭态 →</a>
+        </div>
+      </div>
+    </div>
+    <div class="shots">
+      <figure><img src="settings-git-v3.png" alt="v3 主视图" loading="lazy"><figcaption>主视图：竖排目录 + 封存的保险格 + 钥匙齿纹<span>MAIN</span></figcaption></figure>
+      <figure><img src="settings-git-v3-form.png" alt="v3 配制单" loading="lazy"><figcaption>配制单：新钥匙/改齿，右侧说明匹配规则<span>FORM</span></figcaption></figure>
+    </div>
+  </section>
+
+  <section class="pick">
+    <h2>怎么选</h2>
+    <p class="sub">三版都能直接用；差别在「占用多少屏幕」与「权限差异说得多重」。</p>
+    <table>
+      <thead><tr><th>维度</th><th>v1 抽屉实用派</th><th>v2 设置中心</th><th>v3 钥匙柜</th></tr></thead>
+      <tbody>
+        <tr><td>最适合</td><td>想稳、想和现有页面统一</td><td>重度用户，经常核对仓库与凭据</td><td>想让人记住，愿意为设置页做一点“作品感”</td></tr>
+        <tr><td>只读表达</td><td>行尾「只读」签，最轻</td><td>斜纹 + READ ONLY，清楚但不抢戏</td><td>封条 + 蜡印，权限差异最直观</td></tr>
+        <tr><td>增改体验</td><td>行内展开，改完即走</td><td>居中弹层，字段最完整</td><td>二级“配制单”，有仪式感</td></tr>
+        <tr><td>额外信息</td><td>私有仓库匹配状态</td><td>仓库 → 凭据匹配预览表</td><td>钥匙孔（每个仓库插了哪把钥匙）</td></tr>
+        <tr><td>主要风险</td><td>容易“太普通”</td><td>全屏设置可能压过任务本身</td><td>档案隐喻需要团队接受，卡片实现成本较高</td></tr>
+        <tr><td>建议</td><td><b>默认选它</b>，改造成本最低</td><td>如果凭据/仓库是高频操作，选它</td><td>如果这页会对外演示，选它</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <div class="shared">
+    <h3>三版共同遵守的产品约束</h3>
+    <ul>
+      <li><b>工作区凭据只读</b>：所有版本都不提供编辑/删除入口；管理员同样只在此查看，维护走「管理 › 仓库」。</li>
+      <li><b>个人凭据可增删改查</b>：新增、编辑、删除都有；删除必须二次确认，并提示会影响哪些仓库。</li>
+      <li><b>主机 / 协议 / 用户名是匹配键</b>：编辑时锁定，改这三项等于新建一条，避免静默产生重复凭据。</li>
+      <li><b>密钥只写不读</b>：保存后只显示指纹末四位；编辑时 Token 留空表示不修改。</li>
+      <li><b>两套凭据不互相覆盖</b>：工作区仓库永远用管理员凭据；自定义仓库只按 host 匹配个人凭据。</li>
+    </ul>
+  </div>
+
+  <p class="foot">
+    设计稿数据为示意，字段与现有接口对齐（/api/me/git-credentials、/api/me/git/repos、/api/git/workspace-repos）。
+    三版均支持「纸 / 墨」双主题，可直接在页面右上角切换。选定方向后再落生产代码。
+  </p>
+</div>
+</body>
+</html>

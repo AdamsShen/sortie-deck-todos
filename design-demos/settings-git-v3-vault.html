@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>设置 · v3 钥匙柜</title>
+<!-- huashu-design · 逻辑一（轮盘 17 号 → 档案 / 保险库质感）
+     概念：Git 凭据是「钥匙」。工作区的是封存在保险格里的公用钥匙（只看不碰），
+     个人的是可以自己配、自己熔断的私钥。右侧宽抽屉，内部竖排 tab。
+     示意数据；工作区凭据只回元信息，个人凭据可增删改查。 -->
+<style>
+  :root, [data-theme="paper"] {
+    --void: #e9e8e2; --paper: #f8f7f2; --paper-2: #f1efe7; --paper-3: #e8e5da;
+    --line: #ddd9cc; --line-2: #cbc6b6; --line-3: #b3ac98;
+    --ink: #1e2a24; --muted: #6b6a5e; --faint: #969181;
+    --green: #1f5d47; --green-2: #2c7a5c; --green-soft: #e4eee8;
+    --brass: #a1793a; --brass-soft: #f3ead8; --brass-line: #dcc9a4;
+    --danger: #a8402c;
+    --serif: "Songti SC", "Noto Serif SC", Georgia, serif;
+    --font: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  [data-theme="ink"] {
+    --void: #101311; --paper: #181c19; --paper-2: #1e231f; --paper-3: #252b26;
+    --line: #303730; --line-2: #414a41; --line-3: #5a6459;
+    --ink: #e9e5d8; --muted: #a3a294; --faint: #7b7c70;
+    --green: #6fbf9a; --green-2: #8ed3b1; --green-soft: #1e352a;
+    --brass: #d0a765; --brass-soft: #322918; --brass-line: #5c4a2a;
+    --danger: #e07b62;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; }
+  body {
+    background: var(--void); color: var(--ink); font-family: var(--font);
+    font-size: 14px; line-height: 1.55; -webkit-font-smoothing: antialiased; overflow: hidden;
+  }
+  button, input, select { font: inherit; color: inherit; }
+  button { cursor: pointer; background: none; border: 0; }
+  :focus-visible { outline: 2px solid var(--green-2); outline-offset: 2px; }
+
+  /* 产品外壳 */
+  .deck-header {
+    display: flex; align-items: center; gap: 20px; padding: 11px 22px;
+    background: #fff; border-bottom: 1px solid #e3e8ee;
+  }
+  [data-theme="ink"] .deck-header { background: #1c222b; border-bottom-color: #333c49; }
+  .brand { display: flex; align-items: center; gap: 9px; flex: none; }
+  .brand img { width: 26px; height: 26px; display: block; }
+  .brand b { display: block; font-size: 13.5px; color: #1a1f36; }
+  .brand span { display: block; font-size: 9px; color: #93a0b1; }
+  [data-theme="ink"] .brand b { color: #e8e5dd; }
+  .nav { display: flex; gap: 2px; flex: 1; flex-wrap: wrap; }
+  .nav a { font-size: 11.5px; color: #697386; text-decoration: none; padding: 6px 8px; border-radius: 4px; white-space: nowrap; }
+  .nav a:hover { color: #1a1f36; background: #f7f9fc; }
+  .nav a.on { color: #0e9f6e; background: #e8f6f0; font-weight: 600; }
+  [data-theme="ink"] .nav a { color: #9ba4b1; }
+  [data-theme="ink"] .nav a:hover { color: #e8e5dd; background: #262b35; }
+  [data-theme="ink"] .nav a.on { color: #4bd39a; background: #1b3a2d; }
+  .meta { display: flex; align-items: center; gap: 7px; flex: none; }
+  .who { font-family: var(--mono); font-size: 10px; color: #697386; text-align: right; margin-right: 4px; }
+  .who b { display: block; color: #1a1f36; font-size: 10.5px; }
+  [data-theme="ink"] .who { color: #9ba4b1; }
+  [data-theme="ink"] .who b { color: #e8e5dd; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px; border: 1px solid #e3e8ee;
+    border-radius: 4px; padding: 5px 9px; font-family: var(--mono); font-size: 10px; color: #697386;
+  }
+  .chip:hover { border-color: #cbd2dc; color: #1a1f36; }
+  .chip.on { border-color: var(--green); color: var(--green); background: var(--green-soft); }
+  [data-theme="ink"] .chip { border-color: #333c49; color: #9ba4b1; }
+  [data-theme="ink"] .chip:hover { border-color: #454a55; color: #e8e5dd; }
+
+  .stage { height: calc(100% - 49px); overflow: auto; }
+  .page { max-width: 900px; margin: 0 auto; padding: 56px 30px 90px; }
+  .page .kick { font-family: var(--mono); font-size: 10px; letter-spacing: .18em; color: #93a0b1; }
+  .page h1 { font-family: var(--serif); font-size: 35px; font-weight: 600; margin-top: 8px; color: #1a1f36; }
+  .page .lede { font-size: 13px; color: #697386; margin-top: 9px; max-width: 52ch; }
+  .page .demo-note {
+    margin-top: 30px; border-top: 1px solid #dfe4ec; padding-top: 16px;
+    font-size: 12px; color: #8c98a8; max-width: 620px; line-height: 1.75;
+  }
+  .page .demo-note b { color: #697386; }
+  [data-theme="ink"] .page h1 { color: #e8e5dd; }
+  [data-theme="ink"] .page .lede, [data-theme="ink"] .page .demo-note { color: #9ba4b1; }
+
+  .scrim { position: fixed; inset: 0; background: rgba(20,26,22,.34); opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 30; }
+  .scrim.on { opacity: 1; pointer-events: auto; }
+
+  /* 抽屉：左侧竖排目录 + 右侧档案 */
+  .drawer {
+    position: fixed; top: 0; right: 0; height: 100%; width: min(780px, 100vw);
+    background: var(--paper); border-left: 1px solid var(--line-2);
+    box-shadow: -34px 0 70px -44px rgba(10,16,12,.55);
+    transform: translateX(102%); transition: transform .28s cubic-bezier(.22,.8,.3,1);
+    z-index: 31; display: flex; overflow: hidden;
+  }
+  .drawer.on { transform: none; }
+
+  .vrail {
+    width: 86px; flex: none; background: var(--paper-2); border-right: 1px solid var(--line);
+    display: flex; flex-direction: column; align-items: stretch;
+  }
+  .vrail .brandmark {
+    height: 84px; display: grid; place-items: center; border-bottom: 1px solid var(--line);
+    font-family: var(--serif); font-size: 18px; color: var(--brass); letter-spacing: .05em;
+  }
+  .vrail .tabs { flex: 1; }
+  .vrail button {
+    width: 100%; padding: 18px 0; border-bottom: 1px solid var(--line); position: relative;
+    writing-mode: vertical-rl; text-orientation: upright; letter-spacing: .22em;
+    font-size: 11.5px; color: var(--muted); display: grid; place-items: center; min-height: 92px;
+  }
+  .vrail button:hover { color: var(--ink); background: var(--paper-3); }
+  .vrail button.on { color: var(--green); background: var(--paper); }
+  .vrail button.on::after {
+    content: ""; position: absolute; right: -1px; top: 0; bottom: 0; width: 2px; background: var(--green);
+  }
+  .vrail .foot { padding: 14px 0 18px; text-align: center; }
+  .vrail .foot button { writing-mode: horizontal-tb; padding: 0; border: 0; min-height: 0; font-size: 10px; color: var(--faint); }
+
+  .vmain { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
+  .vhead {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 14px;
+    padding: 22px 28px 16px; border-bottom: 1px solid var(--line); flex: none;
+  }
+  .vhead .cap { font-family: var(--mono); font-size: 9px; letter-spacing: .2em; color: var(--faint); }
+  .vhead h2 { font-family: var(--serif); font-size: 27px; font-weight: 600; margin-top: 3px; }
+  .vhead .x { width: 27px; height: 27px; border: 1px solid var(--line-2); border-radius: 3px; color: var(--muted); display: grid; place-items: center; font-size: 15px; flex: none; }
+  .vhead .x:hover { color: var(--ink); border-color: var(--line-3); }
+  .vbody { flex: 1; overflow: auto; padding: 24px 28px 60px; }
+
+  /* Git 页头 */
+  .gh { display: flex; align-items: flex-start; gap: 20px; flex-wrap: wrap; }
+  .gh h3 { font-family: var(--serif); font-size: 23px; font-weight: 600; }
+  .gh p { font-size: 11.5px; color: var(--muted); margin-top: 5px; max-width: 46ch; line-height: 1.7; }
+  .gh .sp { flex: 1; }
+  .key-btn {
+    display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--green);
+    color: var(--green); border-radius: 3px; padding: 7px 13px; font-size: 12px; font-weight: 600;
+    background: var(--paper); flex: none;
+  }
+  .key-btn:hover { background: var(--green); color: var(--paper); }
+  [data-theme="ink"] .key-btn:hover { color: #181c19; }
+
+  .sec { margin-top: 28px; }
+  .sec-head { display: flex; align-items: baseline; gap: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--line-2); }
+  .sec-head h4 { font-size: 12.5px; font-weight: 600; letter-spacing: .02em; }
+  .sec-head .n { font-family: var(--mono); font-size: 9px; letter-spacing: .08em; color: var(--faint); }
+  .sec-head .sp { flex: 1; }
+  .sec-head .tag { font-family: var(--mono); font-size: 8.5px; letter-spacing: .1em; color: var(--brass); border: 1px solid var(--brass-line); background: var(--brass-soft); border-radius: 2px; padding: 2px 6px; }
+  .sec-note { font-size: 10.5px; color: var(--faint); margin-top: 7px; line-height: 1.65; }
+
+  /* 封存的保险格 */
+  .vault {
+    position: relative; margin-top: 12px; border: 1px solid var(--line-2); border-radius: 3px;
+    background: var(--paper); overflow: hidden;
+  }
+  .vault .band {
+    display: flex; align-items: center; gap: 12px; padding: 7px 14px;
+    background: repeating-linear-gradient(-45deg, var(--paper-2) 0 6px, var(--paper-3) 6px 7px);
+    border-bottom: 1px solid var(--line);
+  }
+  .vault .band .seal { font-family: var(--mono); font-size: 8px; letter-spacing: .16em; color: var(--brass); }
+  .vault .band .serial { font-family: var(--mono); font-size: 8.5px; letter-spacing: .08em; color: var(--faint); }
+  .vault .band .sp { flex: 1; }
+  .vault .wax {
+    width: 26px; height: 26px; border-radius: 50%; background: var(--brass); color: var(--paper);
+    display: grid; place-items: center; font-family: var(--serif); font-size: 9px; letter-spacing: .04em;
+    box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--paper) 40%, transparent);
+  }
+  .vault .vbody2 { padding: 14px 16px 13px; }
+  .vault .host { font-family: var(--serif); font-size: 19px; font-weight: 600; letter-spacing: .01em; }
+  .vault .label { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+  .vault .facts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 13px; }
+  .vault .facts .k { display: block; font-family: var(--mono); font-size: 8px; letter-spacing: .1em; color: var(--faint); }
+  .vault .facts .v { display: block; font-family: var(--mono); font-size: 10.5px; margin-top: 2px; word-break: break-all; }
+  .vault .foot {
+    display: flex; align-items: center; gap: 8px; padding: 8px 16px;
+    border-top: 1px dashed var(--line-2); font-family: var(--mono); font-size: 8.5px;
+    letter-spacing: .06em; color: var(--faint);
+  }
+  .vault .foot .sp { flex: 1; }
+  .vault .foot .ro { color: var(--brass); }
+
+  /* 我的钥匙 */
+  .keys { margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .key {
+    display: flex; align-items: stretch; border: 1px solid var(--line-2); border-radius: 3px;
+    background: var(--paper); overflow: hidden;
+  }
+  .key:hover { border-color: var(--line-3); }
+  .key .kb { flex: 1; min-width: 0; padding: 13px 16px 12px; }
+  .key .top { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; }
+  .key .top b { font-family: var(--serif); font-size: 17px; font-weight: 600; }
+  .key .top .id { font-family: var(--mono); font-size: 8.5px; letter-spacing: .08em; color: var(--faint); }
+  .key .host { font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-top: 2px; }
+  .key .facts { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 8px; font-family: var(--mono); font-size: 9.5px; color: var(--faint); }
+  .key .facts b { color: var(--muted); font-weight: 500; }
+  .key .ops { display: flex; align-items: center; gap: 12px; padding: 0 16px; }
+  .key .ops button { font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+  .key .ops button:hover { color: var(--ink); }
+  .key .ops button.danger:hover { color: var(--danger); }
+  /* 钥匙齿纹：8 根刻度，由指纹派生，纯装饰但每把不同 */
+  .teeth { width: 54px; flex: none; display: flex; align-items: flex-end; justify-content: center; gap: 3px; padding: 0 8px 14px; border-left: 1px dashed var(--line); }
+  .teeth i { width: 3px; background: var(--brass); border-radius: 1px 1px 0 0; opacity: .55; }
+  .key:hover .teeth i { opacity: .9; }
+  .key.stale { background: color-mix(in srgb, var(--brass-soft) 40%, var(--paper)); }
+  .key.stale .teeth i { background: var(--line-3); }
+  .stale-note { font-size: 10.5px; color: var(--brass); margin-top: 5px; }
+
+  .key-add {
+    margin-top: 10px; width: 100%; border: 1px dashed var(--line-3); border-radius: 3px;
+    padding: 15px; text-align: center; font-size: 12px; color: var(--muted);
+  }
+  .key-add:hover { border-color: var(--green); color: var(--green); background: var(--green-soft); }
+
+  /* 钥匙孔（仓库匹配） */
+  .holes { margin-top: 12px; }
+  .hole {
+    display: flex; align-items: center; gap: 12px; padding: 10px 2px; border-bottom: 1px solid var(--line);
+  }
+  .hole .nm { font-size: 12px; font-weight: 600; min-width: 150px; }
+  .hole .src { font-family: var(--mono); font-size: 8.5px; letter-spacing: .06em; color: var(--faint); border: 1px solid var(--line); padding: 1px 5px; }
+  .hole .host { font-family: var(--mono); font-size: 10px; color: var(--muted); flex: 1; min-width: 0; word-break: break-all; }
+  .hole .use { font-family: var(--mono); font-size: 9.5px; color: var(--muted); white-space: nowrap; }
+  .hole .ok { color: var(--green); font-family: var(--mono); font-size: 9.5px; white-space: nowrap; }
+  .hole .bad { color: var(--brass); font-family: var(--mono); font-size: 9.5px; white-space: nowrap; }
+
+  /* 其它 tab */
+  .pane-h { font-family: var(--serif); font-size: 21px; font-weight: 600; }
+  .pane-p { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
+  .frow { display: flex; align-items: center; gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+  .frow .t { flex: 1; }
+  .frow .t b { display: block; font-size: 12.5px; font-weight: 600; }
+  .frow .t span { display: block; font-size: 10.5px; color: var(--faint); margin-top: 2px; }
+  .flds { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
+  .fld label { display: block; font-family: var(--mono); font-size: 8.5px; letter-spacing: .1em; color: var(--faint); margin-bottom: 4px; }
+  .fld input, .fld select { width: 100%; border: 1px solid var(--line-2); border-radius: 3px; background: var(--paper); padding: 8px 9px; font-size: 12.5px; outline: none; }
+  .fld input:focus, .fld select:focus { border-color: var(--green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 12%, transparent); }
+  .fld input:disabled, .fld select:disabled { background: var(--paper-2); color: var(--faint); }
+  .seg { display: flex; border: 1px solid var(--line-2); border-radius: 3px; overflow: hidden; }
+  .seg button { padding: 5px 11px; font-size: 11px; color: var(--muted); background: var(--paper); }
+  .seg button.on { background: var(--green); color: var(--paper); }
+  [data-theme="ink"] .seg button.on { color: #181c19; }
+  .sw { width: 33px; height: 18px; border-radius: 99px; background: var(--line-2); position: relative; border: 0; flex: none; }
+  .sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: transform .15s; }
+  .sw.on { background: var(--green); }
+  .sw.on::after { transform: translateX(15px); }
+
+  /* 配制单（二级面板） */
+  .cfg {
+    position: absolute; inset: 0; background: var(--paper); display: flex; flex-direction: column;
+    transform: translateX(101%); transition: transform .26s cubic-bezier(.22,.8,.3,1); z-index: 4;
+  }
+  .cfg.on { transform: none; }
+  .cfg-head { display: flex; align-items: flex-start; gap: 14px; padding: 22px 28px 14px; border-bottom: 1px solid var(--line-2); }
+  .cfg-head .cap { font-family: var(--mono); font-size: 8.5px; letter-spacing: .18em; color: var(--brass); }
+  .cfg-head h3 { font-family: var(--serif); font-size: 21px; font-weight: 600; margin-top: 2px; }
+  .cfg-head .sp { flex: 1; }
+  .cfg-head .x { width: 26px; height: 26px; border: 1px solid var(--line-2); color: var(--muted); display: grid; place-items: center; }
+  .cfg-body { flex: 1; overflow: auto; padding: 20px 28px 40px; }
+  .cfg-lede { font-size: 11px; color: var(--muted); line-height: 1.7; max-width: 48ch; }
+  .cfg .flds { grid-template-columns: 1fr 1fr; margin-top: 18px; }
+  .cfg .fld.full { grid-column: 1 / -1; }
+  .cfg .fld .hint { font-size: 10px; color: var(--faint); margin-top: 3px; }
+  .cfg-help { margin-top: 26px; border-top: 1px dashed var(--line-2); padding-top: 14px; }
+  .cfg-help .k { font-family: var(--mono); font-size: 8.5px; letter-spacing: .14em; color: var(--faint); }
+  .cfg-help p { font-size: 10.5px; color: var(--muted); line-height: 1.75; margin-top: 5px; max-width: 46ch; }
+  .cfg-help code { font-family: var(--mono); font-size: 10px; color: var(--ink); background: var(--paper-2); padding: 1px 4px; border-radius: 2px; }
+  .cfg-foot {
+    display: flex; align-items: center; gap: 12px; padding: 14px 28px; border-top: 1px solid var(--line-2);
+    background: var(--paper-2);
+  }
+  .cfg-foot .note { font-size: 9.5px; color: var(--faint); }
+  .cfg-foot .sp { flex: 1; }
+  .btn-line { border: 1px solid var(--line-2); border-radius: 3px; padding: 7px 14px; font-size: 12px; color: var(--muted); }
+  .btn-line:hover { color: var(--ink); border-color: var(--line-3); }
+  .btn-solid { background: var(--green); color: var(--paper); border-radius: 3px; padding: 8px 18px; font-size: 12px; font-weight: 600; }
+  [data-theme="ink"] .btn-solid { color: #181c19; }
+  .btn-solid:hover { filter: brightness(1.1); }
+
+  .toast {
+    position: absolute; left: 50%; bottom: 22px; transform: translate(-50%, 10px);
+    background: var(--green); color: var(--paper); font-size: 12px; padding: 8px 16px; border-radius: 3px;
+    opacity: 0; pointer-events: none; transition: all .2s; z-index: 6;
+  }
+  [data-theme="ink"] .toast { color: #181c19; }
+  .toast.on { opacity: 1; transform: translate(-50%, 0); }
+
+  @media (max-width: 860px) {
+    .nav { display: none; }
+    .drawer { width: 100vw; }
+    .vrail { width: 66px; }
+    .vhead, .vbody, .cfg-head, .cfg-body, .cfg-foot { padding-left: 18px; padding-right: 18px; }
+    .vault .facts { grid-template-columns: 1fr 1fr; }
+    .key .ops { flex-direction: column; align-items: flex-end; gap: 4px; }
+    .cfg .flds { grid-template-columns: 1fr; }
+    .hole { flex-wrap: wrap; gap: 4px 10px; }
+    .hole .nm { flex: 1 1 100%; min-width: 0; }
+    .hole .host { display: none; }
+  }
+  @media (max-width: 720px) {
+    .deck-header { padding: 10px 12px; gap: 10px; }
+    .brand span { display: none; }
+    .meta .who, .meta .chip { display: none; }
+    .meta #themeBtn, .meta .chip.gear { display: inline-flex; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<header class="deck-header">
+  <div class="brand">
+    <img src="../logo.png" alt="">
+    <div><b>Sortie Deck</b><span>前线小队 · 共交付，无传话</span></div>
+  </div>
+  <nav class="nav">
+    <a href="#">作战图</a><a href="#">任务</a><a href="#">知识库</a><a href="#">记忆</a>
+    <a href="#">角色工坊</a><a href="#">工具箱</a><a href="#">角色锻造</a><a href="#">小群</a>
+    <a href="#">决策中心</a><a href="#">密钥</a><a href="#">管理</a>
+  </nav>
+  <div class="meta">
+    <div class="who"><b>沈思</b>管理员</div>
+    <button class="chip" type="button" id="themeBtn">墨</button>
+    <button class="chip" type="button">文</button>
+    <button class="chip" type="button">⇩ 导出数据</button>
+    <button class="chip on" id="gearBtn" type="button" aria-expanded="true" aria-controls="drawer">
+      <svg viewBox="0 0 20 20" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+        <circle cx="10" cy="10" r="2.4"/>
+        <path d="M10 2.6v1.7M10 15.7v1.7M2.6 10h1.7M15.7 10h1.7M4.8 4.8l1.2 1.2M14 14l1.2 1.2M15.2 4.8L14 6M6 14l-1.2 1.2"/>
+      </svg>
+      设置
+    </button>
+    <button class="chip" type="button">退出</button>
+  </div>
+</header>
+
+<main class="stage">
+  <div class="page">
+    <div class="kick">KEY CABINET / 钥匙柜</div>
+    <h1>公用钥匙封存，私钥自己配</h1>
+    <p class="lede">工作区凭据是封在保险格里的公用钥匙，只能看；个人凭据是你自己配的钥匙，可以改、可以熔断。右侧抽屉里用一个竖排目录切换。</p>
+    <div class="demo-note">
+      <b>设计取向：</b>把权限差异做成材质差异——封条、蜡印、斜纹代表「不可动」，钥匙齿纹代表「这是我的」。信息结构不变，但这一版最容易被记住，也最适合截图传播。
+    </div>
+  </div>
+</main>
+
+<div class="scrim on" id="scrim"></div>
+
+<aside class="drawer on" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle">
+  <div class="vrail">
+    <div class="brandmark" aria-hidden="true">鑰</div>
+    <div class="tabs">
+      <button type="button" data-tab="git" class="on">凭据</button>
+      <button type="button" data-tab="account">账号</button>
+      <button type="button" data-tab="appearance">外观</button>
+      <button type="button" data-tab="data">数据</button>
+    </div>
+    <div class="foot"><button type="button" id="backBtn">返回</button></div>
+  </div>
+
+  <div class="vmain">
+    <div class="vhead">
+      <div>
+        <div class="cap">SETTINGS / ARCHIVE</div>
+        <h2 id="drawerTitle">设置</h2>
+      </div>
+      <button class="x" id="closeBtn" type="button" aria-label="关闭设置">×</button>
+    </div>
+
+    <div class="vbody" id="vbody">
+      <!-- ============ 凭据 ============ -->
+      <section data-pane="git">
+        <div class="gh">
+          <div>
+            <h3>Git 凭据</h3>
+            <p>公用钥匙由管理员封存，打开任务时自动取用；私钥只影响你自己的私有仓库。</p>
+          </div>
+          <span class="sp"></span>
+          <button class="key-btn" type="button" id="addKey">＋ 配制新钥匙</button>
+        </div>
+
+        <div class="sec">
+          <div class="sec-head">
+            <h4>工作区保险格</h4><span class="n" id="wsCount">2 格</span><span class="sp"></span>
+            <span class="tag">SEALED · 只读</span>
+          </div>
+          <p class="sec-note">管理员维护，全员可用。密钥写入后不可读回；要更换请走「管理 › 仓库」。</p>
+          <div id="vaultList"></div>
+        </div>
+
+        <div class="sec">
+          <div class="sec-head">
+            <h4>我的钥匙</h4><span class="n" id="myCount">3 把</span><span class="sp"></span>
+            <span class="tag">OWNER ONLY</span>
+          </div>
+          <p class="sec-note">按「主机 + 协议 + 用户名」匹配私有仓库；这三项是钥匙的齿形，改了就换了一把。</p>
+          <div class="keys" id="keyList"></div>
+          <button class="key-add" type="button" id="addKey2">＋ 配制新钥匙</button>
+        </div>
+
+        <div class="sec">
+          <div class="sec-head"><h4>钥匙孔</h4><span class="n">仓库 → 凭据</span></div>
+          <div class="holes" id="holeList"></div>
+        </div>
+      </section>
+
+      <!-- ============ 账号 ============ -->
+      <section data-pane="account" hidden>
+        <h3 class="pane-h">账号</h3>
+        <p class="pane-p">登录名与角色由管理员分配；显示名会出现在任务署名和消息里。</p>
+        <div class="flds">
+          <div class="fld"><label>显示名</label><input value="沈思" autocomplete="off"></div>
+          <div class="fld"><label>登录名</label><input value="admin" disabled></div>
+          <div class="fld"><label>角色</label><input value="管理员" disabled></div>
+          <div class="fld"><label>加入时间</label><input value="2026-03-18" disabled></div>
+        </div>
+        <div class="frow" style="margin-top:10px">
+          <div class="t"><b>密码</b><span>上次修改：2026-09-12，改密链接发到账号邮箱</span></div>
+          <button class="btn-line" type="button" data-toast="改密链接已发送">发送改密链接</button>
+        </div>
+        <div style="display:flex;justify-content:flex-end;margin-top:18px"><button class="btn-solid" type="button" data-toast="显示名已保存">保存</button></div>
+      </section>
+
+      <!-- ============ 外观 ============ -->
+      <section data-pane="appearance" hidden>
+        <h3 class="pane-h">外观</h3>
+        <p class="pane-p">纸与墨共用同一套版式，切主题只换色。</p>
+        <div class="frow" style="margin-top:10px">
+          <div class="t"><b>主题</b><span>默认「纸」；「墨」适合夜间与投屏</span></div>
+          <div class="seg" id="themeSeg"><button type="button" class="on" data-set-theme="paper">纸</button><button type="button" data-set-theme="ink">墨</button></div>
+        </div>
+        <div class="frow"><div class="t"><b>界面语言</b><span>只影响本机</span></div><div class="seg"><button type="button" class="on">中文</button><button type="button">EN</button></div></div>
+        <div class="frow"><div class="t"><b>界面音效</b><span>切页与提交时的短音</span></div><button class="sw" type="button" aria-pressed="false" aria-label="界面音效"></button></div>
+        <div class="frow"><div class="t"><b>背景图</b><span>当前未设置；支持外链图片</span></div><button class="btn-line" type="button">设置地址</button></div>
+      </section>
+
+      <!-- ============ 数据 ============ -->
+      <section data-pane="data" hidden>
+        <h3 class="pane-h">数据与账号</h3>
+        <p class="pane-p">带走你的东西，或者彻底离开。两件事都要二次确认。</p>
+        <div class="frow" style="margin-top:10px"><div class="t"><b>导出我的数据</b><span>任务、消息、记忆、凭据元信息，JSON 打包</span></div><button class="btn-line" type="button" data-toast="正在打包，完成后自动下载">导出</button></div>
+        <div class="frow"><div class="t"><b>退出登录</b><span>只清本机会话</span></div><button class="btn-line" type="button">退出</button></div>
+        <div class="frow"><div class="t"><b style="color:var(--danger)">删除账号</b><span>历史消息署名保留为「已注销用户」，不可恢复</span></div><button class="btn-line" style="color:var(--danger)" type="button" id="delAcc">删除</button></div>
+      </section>
+    </div>
+
+    <!-- 配制单 -->
+    <div class="cfg" id="cfg">
+      <div class="cfg-head">
+        <div>
+          <div class="cap" id="cfgCap">KEY BLANK / 配制单</div>
+          <h3 id="cfgTitle">配制新钥匙</h3>
+        </div>
+        <span class="sp"></span>
+        <button class="x" type="button" id="cfgX" aria-label="关闭配制单">×</button>
+      </div>
+      <div class="cfg-body">
+        <p class="cfg-lede">填主机与 Token，落锁后只保留指纹末四位。主机、协议、用户名是钥匙齿形，保存后不可改。</p>
+        <form id="cfgForm" novalidate>
+          <div class="flds">
+            <div class="fld"><label>名称</label><input name="label" placeholder="例如：我的 GitLab" autocomplete="off"></div>
+            <div class="fld"><label>主机</label><input name="host" placeholder="gitlab.example.com" autocomplete="off"><div class="hint" id="hostHint" hidden>匹配键，保存后不可改</div></div>
+            <div class="fld"><label>协议</label><select name="scheme"><option value="https">https</option><option value="ssh">ssh</option></select></div>
+            <div class="fld"><label>用户名</label><input name="username" placeholder="git 账号名" autocomplete="off"><div class="hint" id="userHint" hidden>同属匹配键</div></div>
+            <div class="fld full"><label>Token / 密码</label><input name="secret" type="password" placeholder="只写不读" autocomplete="new-password"></div>
+          </div>
+        </form>
+        <div class="cfg-help">
+          <div class="k">MATCHING RULE / 匹配规则</div>
+          <p>执行自定义仓库任务时，后端按 <code>host + scheme + username</code> 找到这把钥匙；工作区仓库永远走管理员凭据，私钥不会覆盖它。</p>
+        </div>
+      </div>
+      <div class="cfg-foot">
+        <span class="note" id="cfgNote">加密落库 · 保存后仅显示指纹末四位</span>
+        <span class="sp"></span>
+        <button class="btn-line" type="button" id="cfgCancel">取消</button>
+        <button class="btn-solid" type="button" id="cfgSave">落锁保存</button>
+      </div>
+    </div>
+
+    <div class="toast" id="toast" role="status"></div>
+  </div>
+</aside>
+
+<script>
+  /* 示意数据；真实接口不含 secret，工作区凭据连写回都不经过这里 */
+  const workspaceCreds = [
+    { id: "crd_ws_gitlab", serial: "SD·GIT·WS·01", label: "GitLab 服务账号", host: "gitlab.whsaihui.cn", scheme: "https", username: "ci-svc", fingerprint: "…9f2c", lastUsed: "11-04 21:10", repos: 2 },
+    { id: "crd_ws_github", serial: "SD·GIT·WS·02", label: "GitHub Org Bot", host: "github.com", scheme: "https", username: "sortie-bot", fingerprint: "…41ae", lastUsed: "11-05 09:42", repos: 1 },
+  ];
+
+  let myCreds = [
+    { id: "crd_u_7b31", label: "我的 GitLab", host: "gitlab.whsaihui.cn", scheme: "https", username: "si.shen", fingerprint: "…7b31", lastUsed: "2 小时前", state: "ok" },
+    { id: "crd_u_c08d", label: "GitHub 个人", host: "github.com", scheme: "https", username: "AdamsShen", fingerprint: "…c08d", lastUsed: "昨天 18:04", state: "ok" },
+    { id: "crd_u_2a6f", label: "旧 Gitea", host: "git.example.internal", scheme: "https", username: "shensi", fingerprint: "…2a6f", lastUsed: "从未使用", state: "stale" },
+  ];
+
+  const repos = [
+    { name: "sortie-cloud", source: "workspace", host: "gitlab.whsaihui.cn", cred: "GitLab 服务账号", state: "ok" },
+    { name: "design-system", source: "workspace", host: "github.com", cred: "GitHub Org Bot", state: "ok" },
+    { name: "sortie-deck-todos", source: "custom", host: "github.com", cred: "GitHub 个人", state: "ok" },
+    { name: "xinyu-agents", source: "custom", host: "gitlab.whsaihui.cn", cred: "我的 GitLab", state: "ok" },
+    { name: "notes-lab", source: "custom", host: "git.example.internal", cred: "旧 Gitea", state: "warn" },
+    { name: "infra-playbook", source: "custom", host: "git.company.cn", cred: "", state: "miss" },
+  ];
+
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  /** 由指纹生成 8 根齿高，保证同一把钥匙每次渲染一致（纯装饰，不参与逻辑） */
+  function teeth(fingerprint) {
+    const seed = [...fingerprint].reduce((a, ch) => a + ch.charCodeAt(0), 0);
+    return Array.from({ length: 8 }, (_, i) => 4 + ((seed * (i + 3) + i * 7) % 15)).map((h) => `<i style="height:${h}px"></i>`).join("");
+  }
+
+  function renderVault() {
+    document.getElementById("vaultList").innerHTML = workspaceCreds.map((c) => `
+      <article class="vault">
+        <div class="band">
+          <span class="seal">SEALED</span>
+          <span class="serial">${esc(c.serial)}</span>
+          <span class="sp"></span>
+          <span class="wax" aria-hidden="true">鑰</span>
+        </div>
+        <div class="vbody2">
+          <div class="host">${esc(c.host)}</div>
+          <div class="label">${esc(c.label)}</div>
+          <div class="facts">
+            <div><span class="k">协议</span><span class="v">${esc(c.scheme)}</span></div>
+            <div><span class="k">账号</span><span class="v">${esc(c.username)}</span></div>
+            <div><span class="k">指纹</span><span class="v">${esc(c.fingerprint)}</span></div>
+            <div><span class="k">最近使用</span><span class="v">${esc(c.lastUsed)}</span></div>
+          </div>
+        </div>
+        <div class="foot"><span>管理员维护 · 密钥不可读回</span><span class="sp"></span><span class="ro">只读 · 绑定 ${c.repos} 个仓库</span></div>
+      </article>`).join("");
+    document.getElementById("wsCount").textContent = `${workspaceCreds.length} 格`;
+  }
+
+  function renderKeys() {
+    document.getElementById("keyList").innerHTML = myCreds.length
+      ? myCreds.map((c) => `
+        <article class="key ${c.state === "stale" ? "stale" : ""}">
+          <div class="kb">
+            <div class="top"><b>${esc(c.label)}</b><span class="id">${esc(c.id)}</span></div>
+            <div class="host">${esc(c.scheme)}://${esc(c.host)}</div>
+            <div class="facts">
+              <span>账号 <b>${esc(c.username)}</b></span>
+              <span>指纹 <b>${esc(c.fingerprint)}</b></span>
+              <span>最近 <b>${esc(c.lastUsed)}</b></span>
+            </div>
+            ${c.state === "stale" ? `<div class="stale-note">长期未使用，齿可能已经磨平；建议重新验证或熔断。</div>` : ""}
+          </div>
+          <div class="teeth" aria-hidden="true">${teeth(c.fingerprint)}</div>
+          <div class="ops">
+            <button type="button" data-edit="${c.id}">编辑</button>
+            <button type="button" class="danger" data-del="${c.id}">删除</button>
+          </div>
+        </article>`).join("")
+      : `<div style="padding:20px 0;font-size:12px;color:var(--faint)">还没有自己的钥匙。自定义私有仓库会因匹配不到凭据而无法拉取。</div>`;
+    document.getElementById("myCount").textContent = `${myCreds.length} 把`;
+  }
+
+  function renderHoles() {
+    document.getElementById("holeList").innerHTML = repos.map((r) => {
+      const ok = r.state === "ok";
+      return `<div class="hole">
+        <span class="nm">${esc(r.name)}</span>
+        <span class="src">${r.source}</span>
+        <span class="host">${esc(r.host)}</span>
+        <span class="use">${esc(r.cred || "—")}</span>
+        <span class="${ok ? "ok" : "bad"}">${ok ? "已插钥匙" : r.state === "warn" ? "齿形待验" : "缺钥匙"}</span>
+      </div>`;
+    }).join("");
+  }
+
+  /* 提示条 */
+  let toastTimer = null;
+  function toast(msg) {
+    const el = document.getElementById("toast");
+    el.textContent = msg;
+    el.classList.add("on");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove("on"), 1800);
+  }
+
+  /* 抽屉开关 */
+  const drawer = document.getElementById("drawer");
+  const scrim = document.getElementById("scrim");
+  const gear = document.getElementById("gearBtn");
+  function setDrawer(open) {
+    drawer.classList.toggle("on", open);
+    scrim.classList.toggle("on", open);
+    gear.classList.toggle("on", open);
+    gear.setAttribute("aria-expanded", String(open));
+  }
+  gear.addEventListener("click", () => setDrawer(!drawer.classList.contains("on")));
+  scrim.addEventListener("click", () => setDrawer(false));
+  document.getElementById("closeBtn").addEventListener("click", () => setDrawer(false));
+  document.getElementById("backBtn").addEventListener("click", () => setDrawer(false));
+
+  /* 竖排 tab */
+  const LABEL = { git: "设置", account: "设置", appearance: "设置", data: "设置" };
+  document.querySelector(".vrail .tabs").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-tab]");
+    if (!btn) return;
+    // 切 tab 时收起配制单，避免表单悬在另一个 tab 之上
+    closeCfg();
+    document.querySelectorAll(".vrail button[data-tab]").forEach((b) => b.classList.toggle("on", b === btn));
+    document.querySelectorAll("[data-pane]").forEach((p) => { p.hidden = p.dataset.pane !== btn.dataset.tab; });
+    document.getElementById("drawerTitle").textContent = LABEL[btn.dataset.tab] || "设置";
+    document.getElementById("vbody").scrollTop = 0;
+  });
+
+  /* 配制单 */
+  const cfg = document.getElementById("cfg");
+  const cfgForm = document.getElementById("cfgForm");
+  let editId = null;
+
+  function openCfg(cred) {
+    editId = cred ? cred.id : null;
+    document.getElementById("cfgCap").textContent = cred ? "KEY RE-CUT / 改齿" : "KEY BLANK / 配制单";
+    document.getElementById("cfgTitle").textContent = cred ? "改配这把钥匙" : "配制新钥匙";
+    document.getElementById("cfgNote").textContent = cred ? "替换 Token 后旧值立即失效" : "加密落库 · 保存后仅显示指纹末四位";
+    cfgForm.reset();
+    cfgForm.elements.label.value = cred ? cred.label : "";
+    cfgForm.elements.host.value = cred ? cred.host : "";
+    cfgForm.elements.scheme.value = cred ? cred.scheme : "https";
+    cfgForm.elements.username.value = cred ? cred.username : "";
+    cfgForm.elements.host.disabled = Boolean(cred);
+    cfgForm.elements.scheme.disabled = Boolean(cred);
+    cfgForm.elements.username.disabled = Boolean(cred);
+    document.getElementById("hostHint").hidden = !cred;
+    document.getElementById("userHint").hidden = !cred;
+    cfgForm.elements.secret.placeholder = cred ? "留空则不修改" : "只写不读";
+    cfg.classList.add("on");
+    setTimeout(() => cfgForm.elements.label.focus(), 60);
+  }
+  function closeCfg() { cfg.classList.remove("on"); editId = null; }
+
+  document.getElementById("addKey").addEventListener("click", () => openCfg(null));
+  document.getElementById("addKey2").addEventListener("click", () => openCfg(null));
+  document.getElementById("cfgX").addEventListener("click", closeCfg);
+  document.getElementById("cfgCancel").addEventListener("click", closeCfg);
+  document.getElementById("cfgSave").addEventListener("click", () => cfgForm.requestSubmit());
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    if (cfg.classList.contains("on")) closeCfg();
+    else if (drawer.classList.contains("on")) setDrawer(false);
+  });
+
+  cfgForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const label = cfgForm.elements.label.value.trim();
+    const host = cfgForm.elements.host.value.trim();
+    const scheme = cfgForm.elements.scheme.value;
+    const username = cfgForm.elements.username.value.trim();
+    const secret = cfgForm.elements.secret.value;
+    if (!host || (!editId && !secret)) return toast("主机与 Token 必填");
+    if (editId) {
+      const c = myCreds.find((x) => x.id === editId);
+      if (!c) return;
+      c.label = label || c.label;
+      if (secret) c.fingerprint = "…" + secret.slice(-4);
+      c.state = "ok";
+      toast("钥匙已改配");
+    } else {
+      if (myCreds.some((c) => c.host === host && c.scheme === scheme && c.username === username)) return toast("同主机、同用户名已有钥匙");
+      myCreds.unshift({ id: "crd_u_" + Math.random().toString(16).slice(2, 6), label: label || host, host, scheme, username, fingerprint: "…" + secret.slice(-4), lastUsed: "从未使用", state: "ok" });
+      toast("钥匙已落锁（明文不再显示）");
+    }
+    closeCfg();
+    renderKeys();
+  });
+
+  document.getElementById("keyList").addEventListener("click", (e) => {
+    const edit = e.target.closest("[data-edit]");
+    if (edit) return openCfg(myCreds.find((c) => c.id === edit.dataset.edit));
+    const del = e.target.closest("[data-del]");
+    if (!del) return;
+    const c = myCreds.find((x) => x.id === del.dataset.del);
+    if (c && confirm(`熔断「${c.label}」？\n\n使用它的私有仓库会立刻失去访问权限；已开始的拉取不受影响。`)) {
+      myCreds = myCreds.filter((x) => x.id !== c.id);
+      renderKeys();
+      toast("钥匙已熔断");
+    }
+  });
+
+  /* 主题：头部与外观页共用 */
+  function setTheme(next) {
+    document.documentElement.dataset.theme = next;
+    document.getElementById("themeBtn").textContent = next === "paper" ? "墨" : "纸";
+    document.querySelectorAll("[data-set-theme]").forEach((b) => b.classList.toggle("on", b.dataset.setTheme === next));
+  }
+  document.getElementById("themeBtn").addEventListener("click", () => {
+    setTheme(document.documentElement.dataset.theme === "paper" ? "ink" : "paper");
+  });
+  document.getElementById("themeSeg").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-set-theme]");
+    if (b) setTheme(b.dataset.setTheme);
+  });
+
+  document.querySelectorAll(".sw").forEach((s) => {
+    s.addEventListener("click", () => {
+      s.classList.toggle("on");
+      s.setAttribute("aria-pressed", String(s.classList.contains("on")));
+    });
+  });
+  document.addEventListener("click", (e) => {
+    const t = e.target.closest("[data-toast]");
+    if (t) toast(t.dataset.toast);
+  });
+  document.getElementById("delAcc").addEventListener("click", () => {
+    if (confirm("删除账号后无法恢复：\n\n· 个人 Git 凭据会一并删除\n· 历史消息署名保留为「已注销用户」\n\n确定继续？")) toast("已发送最终确认邮件");
+  });
+
+  renderVault();
+  renderKeys();
+  renderHoles();
+
+  /* 直接看关抽屉：地址后加 #closed */
+  if (location.hash === "#closed") setDrawer(false);
+</script>
+</body>
+</html>
