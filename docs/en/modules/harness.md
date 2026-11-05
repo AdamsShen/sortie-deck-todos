@@ -99,6 +99,18 @@ executor advertises a declaration protocol and the model only states intent:
 | ` ```toolkit_intent {...} ` | JIT recall / float / skill execution by the orchestration layer |
 | ` ```qa {"passed": bool} ` | `StageResult.qa_passed`; only `false` bounces to `on_fail`, undeclared follows the human gate |
 
+Failed runs and gate semantics:
+
+- **Degraded self-check**: when a stage ends with `status=fail` and self-review produced no verdict
+  (all lenses `skipped` / `failed`), the graph re-enters the stage with a self-check instruction,
+  bounded by `TDT_STAGE_SELF_CHECK_ATTEMPTS` (default 1, 0 disables). The instruction only asks for
+  completing the contract artifacts, aligning `diff.patch`, running the tests and ticking the
+  checklist — no scope expansion. Deploy stages are never re-run. This keeps half-finished output
+  from flowing into QA and burning a full review round.
+- **Recommended gate action**: with `qa_passed=false`, `pending_hitl.recommended_action` is
+  `{action: "reroute", next_stage: on_fail, label: "Rework"}`, so the workbench renders "Rework"
+  as the primary button and shows the reason; "Approve anyway" (still bounces) and "Stop" remain.
+
 Acceptance: `scripts/verify_collab.py` (scripted mock regression + real harness tracks).
 
 ## 4. Mission-bound memory

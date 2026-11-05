@@ -95,6 +95,16 @@ HarnessProvider(Protocol)
 | ` ```toolkit_intent {...} ` | 缺工具/Skill/记忆 | 编排层检索、上浮、执行脚本并落 `toolkit_meta.json` / `skill_runs.json` |
 | ` ```qa {"passed": bool} ` | QA 结论 | `StageResult.qa_passed`；仅 `false` 打回，未声明按人工门禁批准继续 |
 
+失败收尾与门禁语义：
+
+- **降级自检**：阶段以 `status=fail` 收尾、且自审没有任何结论（lens 全 `skipped` / `failed`）时，
+  图会带着自检指令重入本阶段，次数由 `TDT_STAGE_SELF_CHECK_ATTEMPTS` 控制（默认 1，0 关闭）。
+  自检只要求补齐产物、对齐 `diff.patch`、跑通自测、如实勾选 checklist，不扩展需求；
+  部署类阶段不重跑。这样残缺交付不会直接流到 QA 再被判一次 fail。
+- **门禁推荐动作**：`qa_passed=false` 时 `pending_hitl.recommended_action` 给出
+  `{action: "reroute", next_stage: on_fail, label: "返工"}`，工作台据此把主按钮换成「返工」并说明原因；
+  仍保留「仍要放行」（approve，同样会被打回）与「停止」。避免出现「点了批准却回到开发」的误解。
+
 `run_session(ctx, host)` 才会注入小群协议；`run(ctx)` 保持单发语义。无 host 时
 升级仍返回 `needs_hitl`（落到工作台门禁），不静默继续。
 

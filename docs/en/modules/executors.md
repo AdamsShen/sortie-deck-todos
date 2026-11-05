@@ -116,6 +116,36 @@ the same variable.
 - `num_turns` / `usage` / `cost_usd` / `stop_reason` are recorded too
 - `TDT_HARNESS_MAX_TURNS` (default 0 = unlimited) caps non-converging stages
 
+### 8.4 Single-message buffer limit
+
+`claude-agent-sdk` accepts at most 1 MiB per NDJSON line from the CLI; exceeding it raises
+`SDKJSONDecodeError` and fails the whole stage. When a coding agent `Read`s a screenshot, the
+image travels base64-encoded inside the message (and again inside `tool_use_result`), so a
+379 KB Playwright PNG is enough to trip it (measured 2026-11-05: the `eng_implement` stage was
+discarded and reworked for ~17 minutes).
+
+- `ClaudeCodeProvider` passes `ClaudeAgentOptions.max_buffer_size` from
+  `TDT_HARNESS_MAX_BUFFER_BYTES` (default 10485760 = 10 MB, the value the official cookbook
+  recommends for image workloads; `<=0` falls back to the SDK default 1 MiB)
+- On overflow, `HarnessReply.meta` carries `buffer_overflow=true` / `max_buffer_size`, the log
+  line records initiative / stage / session with the traceback, and `reply.md` gets the hint
+
+### 8.5 QA browser runner
+
+The QA stage injects `scripts/qa_browser_runner.mjs` (an existing project-owned file is never
+overwritten). It owns the whole loop — start the service, poll the health URL, drive headless Chrome
+through the scenarios, capture screenshots, tear everything down — using only Node's built-in
+WebSocket (Node ≥ 21), with no npm packages. When no browser is available it returns
+`browser_unavailable` and the model falls back to HTTP-level checks.
+
+- Scenarios live in `qa.config.json` (`start_command` / `base_url` / `health_url` / `scenarios`);
+  steps support `click` / `type` / `key` / `expect_visible` / `expect_hidden` / `expect_text` /
+  `screenshot` / `wait_ms` (see `packages/templates/qa/config.example.json`)
+- Results go to `qa_result.json` (per-scenario step results, document status, console / pageerror /
+  4xx entries) and screenshots to `qa_screenshots/`; `favicon.ico` 404s are treated as noise
+- The prompt makes it mandatory: run the one script, fix only failing scenarios, never manage the
+  server by hand, and never hand-write CDP/Playwright scripts
+
 ## 9. Multi-lens self-review and implementation checklist
 
 The method is borrowed from autopilot-harness (MIT), but its CLI and host hooks are **not** installed:

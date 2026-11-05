@@ -113,6 +113,32 @@ MCP 条目转成 SDK `mcp_servers`，并置 `strict_mcp_config=True`，不再从
 - 同时回填 `num_turns` / `usage` / `cost_usd` / `stop_reason`
 - `TDT_HARNESS_MAX_TURNS`（默认 0 不限制）可兜住「反复打磨不收敛」的阶段
 
+### 8.4 单条消息缓冲上限
+
+`claude-agent-sdk` 默认只接受 1 MiB 的单条 CLI 消息（NDJSON），超限抛
+`SDKJSONDecodeError` 并让整个阶段失败。编码 agent 用 `Read` 打开截图时，图片会 base64
+进消息（`tool_use_result` 里还会再带一份），379 KB 的 Playwright 截图即可触发
+（2026-11-05 实测：`eng_implement` 因此整段作废，返工约 17 分钟）。
+
+- `ClaudeCodeProvider` 通过 `ClaudeAgentOptions.max_buffer_size` 传入
+  `TDT_HARNESS_MAX_BUFFER_BYTES`（默认 10485760 = 10 MB，官方 cookbook 对图片场景的建议值；
+  `<=0` 回退 SDK 默认 1 MiB）
+- 溢出时 `HarnessReply.meta` 带 `buffer_overflow=true` / `max_buffer_size`，日志记录
+  initiative / stage / session 与异常栈，`reply.md` 附带调参提示
+
+### 8.5 QA 浏览器复验 runner
+
+QA 阶段会注入 `scripts/qa_browser_runner.mjs`（项目已有同名文件则不覆盖）。它把
+「起服务 → 健康检查 → 无头 Chrome 跑场景 → 截图 → 清理」一次做完，只依赖 Node 内置
+WebSocket（Node ≥ 21），不装 npm 包；找不到浏览器时返回 `browser_unavailable`，模型退回 HTTP 级检查。
+
+- 场景写在 `qa.config.json`：`start_command` / `base_url` / `health_url` / `scenarios`；
+  单步支持 `click` / `type` / `key` / `expect_visible` / `expect_hidden` / `expect_text` /
+  `screenshot` / `wait_ms`（示例见 `packages/templates/qa/config.example.json`）
+- 结果写 `qa_result.json`（每条场景的步骤结果、文档状态码、console / pageerror / 4xx 列表），
+  截图落 `qa_screenshots/`；`favicon.ico` 404 视为噪音
+- prompt 硬约束：只跑同一个脚本、只修失败项，禁止手工起停服务，也禁止再手写 CDP/Playwright 脚本
+
 ## 9. 多镜头自审与实现清单
 
 方法论借自 autopilot-harness（MIT），但**不安装其 CLI、不写宿主 hooks**：一轮 lens 就是同一
