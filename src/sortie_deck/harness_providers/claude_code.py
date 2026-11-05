@@ -15,7 +15,10 @@ Session continuity uses the SDK ``resume`` option with the native session id.
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import logging
+import time
+from pathlib import Path
 from typing import Any
 
 from sortie_deck.harness_providers.base import HarnessSession, resolve_stage_max_turns
@@ -29,6 +32,23 @@ _AUTO_COMPACT_ENV = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
 
 def _sdk_available() -> bool:
     return importlib.util.find_spec("claude_agent_sdk") is not None
+
+
+def _activity_detail(payload: dict[str, Any]) -> str:
+    """从工具入参里挑一个人类可读的短目标（文件名 / 命令 / 检索词）。
+
+    前端把它拼成「编辑 src/game.js」「运行 npm test」这类文案；只取第一个
+    命中的键，避免把整段 prompt 塞进事件表。
+    """
+    for key in ("file_path", "notebook_path", "path"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return Path(value).name
+    for key in ("command", "pattern", "query", "url", "description", "prompt"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return " ".join(value.split())[:60]
+    return ""
 
 
 def _auto_compact_env(window: Any) -> dict[str, str] | None:
@@ -104,6 +124,7 @@ class ClaudeCodeProvider:
         cwd: str | None = None,
         context_pack: dict[str, Any] | None = None,
         extra_dirs: list[str] | None = None,
+        on_activity: Any = None,
     ) -> Any:
         from sortie_deck.harness_providers.base import HarnessReply
 
@@ -121,6 +142,7 @@ class ClaudeCodeProvider:
                 cwd=cwd,
                 context_pack=context_pack,
                 extra_dirs=extra_dirs,
+                on_activity=on_activity,
             )
         except Exception as exc:  # noqa: BLE001 — degrade to a fail reply, never raise
             return HarnessReply(
@@ -138,6 +160,7 @@ class ClaudeCodeProvider:
         cwd: str | None,
         context_pack: dict[str, Any] | None = None,
         extra_dirs: list[str] | None = None,
+        on_activity: Any = None,
     ) -> Any:
         from claude_agent_sdk import ClaudeAgentOptions, query  # type: ignore[import-untyped]
         from claude_agent_sdk.types import (  # type: ignore[import-untyped]
@@ -171,12 +194,31 @@ class ClaudeCodeProvider:
         native_id = session.native_id
         is_error = False
         context_meta: dict[str, Any] = {}
+        last_activity = 0.0
         async for message in query(prompt=prompt, options=options):
             if isinstance(message, AssistantMessage):
                 for block in getattr(message, "content", []) or []:
                     text = getattr(block, "text", None)
                     if isinstance(text, str):
                         parts.append(text)
+                        continue
+                    # ToolUseBlock：把「此刻在做什么」推给编排层，转圈才有细节可展示。
+                    # 节流 0.8s：一轮里连续读多个文件时不刷屏，也少写事件表。
+                    tool = getattr(block, "name", None)
+                    if on_activity is None or not isinstance(tool, str) or not tool.strip():
+                        continue
+                    now = time.monotonic()
+                    if now - last_activity < 0.8:
+                        continue
+                    last_activity = now
+                    try:
+                        emitted = on_activity(
+                            tool, _activity_detail(getattr(block, "input", {}) or {})
+                        )
+                        if inspect.isawaitable(emitted):
+                            await emitted
+                    except Exception:  # noqa: BLE001 — 进度上报失败不影响回合
+                        logger.debug("阶段活动上报失败: tool=%s", tool, exc_info=True)
             elif isinstance(message, ResultMessage):
                 result_text = getattr(message, "result", "")
                 if isinstance(result_text, str) and result_text.strip():

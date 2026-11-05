@@ -578,6 +578,49 @@ def _supports_extra_dirs(provider: Any) -> bool:
     return any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
 
 
+def _supports_on_activity(provider: Any) -> bool:
+    """provider 是否接受 ``on_activity``（工具级进度回调，旧签名 provider 不支持）。"""
+    import inspect
+
+    try:
+        params = inspect.signature(provider.send).parameters
+    except (TypeError, ValueError):
+        return False
+    if "on_activity" in params:
+        return True
+    return any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
+# 工具级进度节流：agent 一轮里可能连读 5 个文件，全部推 SSE 只会刷屏，
+# 前端只需要「现在正在做什么」这一个稳定信号。
+_ACTIVITY_MIN_INTERVAL = 0.8
+
+
+def _activity_callback(ctx: StageContext) -> Any:
+    """把 provider 的工具调用转成 ``stage_progress`` 的 activity 事件。
+
+    payload 只带工具名与短目标（文件名 / 命令 / 检索词），文案由前端按语言拼，
+    避免中文写死在服务端。进度是观测增强项，任何失败都不能打断阶段。
+    """
+    last = {"at": 0.0}
+
+    async def cb(tool: str, detail: str) -> None:
+        now = time.monotonic()
+        if now - last["at"] < _ACTIVITY_MIN_INTERVAL:
+            return
+        last["at"] = now
+        await _emit_progress(
+            ctx,
+            {
+                "phase": "activity",
+                "tool": str(tool or "")[:40],
+                "detail": str(detail or "")[:80],
+            },
+        )
+
+    return cb
+
+
 async def _send_turn(
     provider: Any,
     session: Any,
@@ -586,11 +629,14 @@ async def _send_turn(
     cwd: Path,
     pack: dict[str, Any],
     extra_dirs: list[str] | None = None,
+    on_activity: Any = None,
 ) -> Any:
-    """统一的 provider 调用：按能力决定是否传 extra_dirs（旧签名 provider 不传）。"""
+    """统一的 provider 调用：按能力决定是否传额外参数（旧签名 provider 不传）。"""
     kwargs: dict[str, Any] = {"cwd": str(cwd), "context_pack": pack}
     if extra_dirs and _supports_extra_dirs(provider):
         kwargs["extra_dirs"] = list(extra_dirs)
+    if on_activity is not None and _supports_on_activity(provider):
+        kwargs["on_activity"] = on_activity
     return await provider.send(session, prompt, **kwargs)
 
 
@@ -912,6 +958,7 @@ class HarnessStageExecutor:
             cwd=cwd,
             pack=pack,
             extra_dirs=extra_dirs,
+            on_activity=_activity_callback(ctx),
         )
         # 模型声明小群讨论意图时，立即拉群并把结论回注成第二轮收尾
         reply = await self._maybe_consult_subroom(
@@ -949,6 +996,7 @@ class HarnessStageExecutor:
                                 cwd=cwd,
                                 pack=pack,
                                 extra_dirs=extra_dirs,
+                                on_activity=_activity_callback(ctx),
                             )
                         except Exception:  # noqa: BLE001 — 二次调用失败保留首轮结果
                             logger.warning(
@@ -1372,7 +1420,13 @@ class HarnessStageExecutor:
         async def send(prompt: str) -> Any:
             # 续接同一 provider 会话：第 2..N 轮必须看到首轮实现上下文
             return await _send_turn(
-                provider, session, prompt, cwd=cwd, pack=pack, extra_dirs=extra_dirs
+                provider,
+                session,
+                prompt,
+                cwd=cwd,
+                pack=pack,
+                extra_dirs=extra_dirs,
+                on_activity=_activity_callback(ctx),
             )
 
         return await run_review_lenses(
@@ -1455,6 +1509,7 @@ class HarnessStageExecutor:
                 cwd=cwd,
                 pack=pack,
                 extra_dirs=extra_dirs,
+                on_activity=_activity_callback(ctx),
             )
         except Exception:  # noqa: BLE001 — 二次调用失败时保留首轮结果
             logger.warning(
