@@ -49,6 +49,27 @@ def test_prompt_requires_runner_once_injected(tmp_path: Path):
     assert "do NOT hand-write CDP" in prompt
 
 
+def test_qa_prompt_enforces_case_boundary(tmp_path: Path):
+    # 没有用例边界，agent 会「发现疑点→加一条用例」把复验拖成无限
+    _ensure_qa_runner(tmp_path, "qa_verify")
+    prompt = HarnessStageExecutor()._build_prompt(_ctx(), tmp_path, {"briefs": {}}, "")
+    assert "Test-case boundary" in prompt
+    assert '"case_id"' in prompt
+
+
+def test_rework_prompt_limits_scope_to_failed_cases(tmp_path: Path):
+    ctx = _ctx("eng_implement").model_copy(
+        update={"upstream_artifacts": {"test_report.json": '{"verdict": "fail"}'}}
+    )
+    prompt = HarnessStageExecutor()._build_prompt(ctx, tmp_path, {"briefs": {}}, "")
+    assert "Rework scope" in prompt
+
+
+def test_first_build_prompt_has_no_rework_scope(tmp_path: Path):
+    prompt = HarnessStageExecutor()._build_prompt(_ctx("eng_implement"), tmp_path, {"briefs": {}}, "")
+    assert "Rework scope" not in prompt
+
+
 def test_prompt_omits_runner_rules_when_not_injected(tmp_path: Path):
     # 注入失败时不能要求模型去跑一个不存在的脚本
     prompt = HarnessStageExecutor()._build_prompt(_ctx(), tmp_path, {"briefs": {}}, "")

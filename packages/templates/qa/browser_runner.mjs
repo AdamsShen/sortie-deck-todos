@@ -14,10 +14,14 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const CONFIG_PATH = process.argv[2] || "qa.config.json";
+const ARGV = process.argv.slice(2);
+// 允许 `--cases TC-X-01` 时省略 config 路径
+const CONFIG_PATH = ARGV[0] && !ARGV[0].startsWith("--") ? ARGV[0] : "qa.config.json";
 const RESULT_PATH = "qa_result.json";
 const SHOT_DIR = "qa_screenshots";
+const STATE_PATH = ".qa_runner_state.json";
 const DEFAULT_TIMEOUT_SEC = 60;
+const CASE_ID_RE = /TC-[A-Za-z0-9]+-\d+/g;
 
 class RunnerError extends Error {
   constructor(status, message, extra = {}) {
@@ -28,6 +32,71 @@ class RunnerError extends Error {
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// 用例白名单：只认 test_cases.md 里出现过的 TC-xxx-n 编号。
+// 没有用例文件时返回空集合（不限制），保持手工调试可用。
+function loadAllowedCases(cfg) {
+  const candidates = [
+    cfg.cases_file,
+    ".upstream/test_cases.md",
+    "artifacts/qa_verify/test_cases.md",
+    "test_cases.md",
+  ];
+  for (const file of candidates) {
+    if (!file || !existsSync(file)) continue;
+    const ids = [...new Set(readFileSync(file, "utf8").match(CASE_ID_RE) || [])];
+    if (ids.length) return { ids: new Set(ids), source: file };
+  }
+  return { ids: new Set(), source: "" };
+}
+
+// `--cases TC-X-01,TC-X-02`：返工时只回归 QA 判失败的用例。
+function parseCaseFilter(argv) {
+  const collected = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    if (argv[i] === "--cases" && argv[i + 1]) collected.push(argv[i + 1]);
+    else if (argv[i].startsWith("--cases=")) collected.push(argv[i].slice("--cases=".length));
+  }
+  return new Set(
+    collected
+      .join(",")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
+}
+
+// 验证预算：跨进程累加，超出后拒绝再跑，逼 agent 按现状收尾而不是无限加用例。
+function bumpRunBudget(cfg) {
+  const max = Number(cfg.max_runs ?? 5);
+  let state = {};
+  try {
+    state = JSON.parse(readFileSync(STATE_PATH, "utf8"));
+  } catch {
+    state = {};
+  }
+  state.runs = Number(state.runs || 0) + 1;
+  state.updated_at = new Date().toISOString();
+  writeFileSync(STATE_PATH, JSON.stringify(state, null, 2) + "\n", "utf8");
+  if (max > 0 && state.runs > max) {
+    throw new RunnerError(
+      "budget_exhausted",
+      `验证预算已用尽（上限 ${max} 次，本次第 ${state.runs} 次）：按现有 qa_result.json 收尾，不要再加用例`,
+      { runs: state.runs, max_runs: max },
+    );
+  }
+  return { runs: state.runs, max_runs: max };
+}
+
+function scopeSkipReason(caseId, scope) {
+  if (scope.only.size && !scope.only.has(caseId)) {
+    return `case_id 不在 --cases（${[...scope.only].join(",")}）`;
+  }
+  if (scope.allowed.size && !scope.allowed.has(caseId)) {
+    return `case_id 不在 ${scope.source}（用例边界外，不计入判定）`;
+  }
+  return "";
+}
 
 function readConfig() {
   if (!existsSync(CONFIG_PATH)) {
@@ -267,8 +336,26 @@ function isNoise(url) {
   return /favicon\.ico$/i.test(url || "");
 }
 
-async function runScenario(cdp, scenario, baseUrl, cfg) {
+async function runScenario(cdp, scenario, baseUrl, cfg, scope) {
   const steps = Array.isArray(scenario.steps) ? scenario.steps : [];
+  const caseId = String(scenario.case_id || "").trim();
+  const skipReason = scopeSkipReason(caseId, scope);
+  if (skipReason) {
+    // 用例边界外的场景不执行、不计入判定，只在结果里留痕
+    return {
+      name: scenario.name || scenario.path || "scenario",
+      case_id: caseId || null,
+      path: scenario.path || "/",
+      url: "",
+      out_of_scope: true,
+      skipped: true,
+      passed: false,
+      reason: skipReason,
+      doc_status: null,
+      steps: [],
+      errors: [],
+    };
+  }
   const errors = [];
   const records = [];
   let docStatus = null;
@@ -360,8 +447,10 @@ async function runScenario(cdp, scenario, baseUrl, cfg) {
   const docOk = docStatus === null || (docStatus >= 200 && docStatus < 400);
   return {
     name: scenario.name || scenario.path || "scenario",
+    case_id: caseId || null,
     path: scenario.path || "/",
     url,
+    out_of_scope: false,
     passed: stepsOk && docOk && errors.length === 0,
     doc_status: docStatus,
     steps: records,
@@ -441,6 +530,10 @@ async function main() {
   const cfg = readConfig();
   const timeout = Number(cfg.timeout_sec || DEFAULT_TIMEOUT_SEC);
   const health = cfg.health_url || cfg.base_url;
+  const allowed = loadAllowedCases(cfg);
+  const only = parseCaseFilter(ARGV);
+  const budget = bumpRunBudget(cfg);
+  const scope = { allowed: allowed.ids, source: allowed.source, only };
   let server = null;
   try {
     if (cfg.start_command) {
@@ -456,34 +549,51 @@ async function main() {
 
     const results = await withBrowser(cfg, async (cdp) => {
       const out = [];
-      for (const scenario of scenarios) out.push(await runScenario(cdp, scenario, cfg.base_url, cfg));
+      for (const scenario of scenarios) {
+        out.push(await runScenario(cdp, scenario, cfg.base_url, cfg, scope));
+      }
       return out;
     });
 
-    const failed = results.filter((r) => !r.passed).length;
+    const executed = results.filter((r) => !r.out_of_scope);
+    const failed = executed.filter((r) => !r.passed).length;
+    const passed = executed.length - failed;
+    const skipped = results.filter((r) => r.out_of_scope);
     const payload = {
-      status: failed === 0 ? "passed" : "failed",
-      ok: failed === 0,
+      status: executed.length > 0 && failed === 0 ? "passed" : "failed",
+      ok: executed.length > 0 && failed === 0,
       base_url: cfg.base_url,
       summary: {
-        scenarios: results.length,
-        passed: results.length - failed,
+        scenarios: executed.length,
+        passed,
         failed,
+        out_of_scope: skipped.length,
         browser_errors: results.reduce((n, r) => n + r.errors.length, 0),
       },
+      scope: {
+        cases_file: allowed.source || null,
+        allowed_cases: allowed.ids.size,
+        only_cases: [...only],
+        skipped_cases: skipped.map((r) => r.case_id || r.name),
+      },
+      budget,
       scenarios: results,
       screenshots: results.flatMap((r) =>
         r.steps.filter((s) => s.step === "screenshot" && s.passed).map((s) => s.detail),
       ),
       duration_ms: Date.now() - startedAt,
       next:
-        failed === 0
-          ? ""
-          : "read qa_result.json, fix only the failing scenarios (app or selector), then re-run this script",
+        executed.length === 0
+          ? "no scenario executed: every case_id is outside test_cases.md or --cases; fix qa.config.json"
+          : failed === 0
+            ? ""
+            : "read qa_result.json, fix only the failing cases, then re-run this script",
     };
     writeResult(payload);
-    console.log(`QA browser runner: ${payload.status} (${payload.summary.passed}/${payload.summary.scenarios})`);
-    return failed === 0 ? 0 : 1;
+    console.log(
+      `QA browser runner: ${payload.status} (${passed}/${executed.length} cases, ${skipped.length} out of scope)`,
+    );
+    return payload.ok ? 0 : 1;
   } finally {
     killTree(server);
   }
@@ -493,17 +603,36 @@ main()
   .then((code) => process.exit(code))
   .catch((err) => {
     const status = err instanceof RunnerError ? err.status : "failed";
-    writeResult({
-      status,
-      ok: false,
-      error: String(err.message || err),
-      ...(err instanceof RunnerError ? err.extra : {}),
-      next:
-        status === "browser_unavailable"
-          ? "fall back to HTTP-level checks (curl) and say so in the report; do not fabricate browser results"
-          : "fix qa.config.json / the start command, then re-run this script",
-    });
+    if (status === "budget_exhausted") {
+      // 不覆盖上一轮结果：预算耗尽后模型应按现有 qa_result.json 收尾
+      writeFileSync(
+        "qa_budget.json",
+        JSON.stringify(
+          {
+            status,
+            ok: false,
+            error: String(err.message || err),
+            ...(err instanceof RunnerError ? err.extra : {}),
+            next: "stop testing: report the existing qa_result.json as-is, do not add cases or scripts",
+          },
+          null,
+          2,
+        ) + "\n",
+        "utf8",
+      );
+    } else {
+      writeResult({
+        status,
+        ok: false,
+        error: String(err.message || err),
+        ...(err instanceof RunnerError ? err.extra : {}),
+        next:
+          status === "browser_unavailable"
+            ? "fall back to HTTP-level checks (curl) and say so in the report; do not fabricate browser results"
+            : "fix qa.config.json / the start command, then re-run this script",
+      });
+    }
     console.error(`QA browser runner: ${status} — ${err.message || err}`);
-    const codes = { missing_config: 2, browser_unavailable: 3, start_failed: 4 };
+    const codes = { missing_config: 2, browser_unavailable: 3, start_failed: 4, budget_exhausted: 5 };
     process.exit(codes[status] || 1);
   });

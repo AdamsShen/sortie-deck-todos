@@ -20,6 +20,13 @@ def test_non_build_stage_defaults_to_thirty_minutes() -> None:
     assert _resolve_stage_timeout("qa_cases", None, cfg) == 1800.0
 
 
+def test_qa_verify_uses_its_own_timeout() -> None:
+    """复验阶段只跑固定用例，默认 15 分钟，不套文档阶段的 30 分钟。"""
+    cfg = Settings()
+    assert _resolve_stage_timeout("qa_verify", {}, cfg) == 900.0
+    assert _resolve_stage_timeout("eng_web_verify", None, cfg) == 900.0
+
+
 def test_per_stage_config_wins_over_defaults() -> None:
     """阶段 spec 显式配置优先于一切默认值。"""
     cfg = Settings()

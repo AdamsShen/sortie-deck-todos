@@ -527,6 +527,37 @@ _QA_BROWSER_RUNNER = """Browser re-verification (mandatory — do NOT hand-write
 """
 
 
+# 用例边界（硬约束）：QA 只能执行 test_cases.md 里定义过的用例。
+# 没有这条，agent 会「发现一个疑点 → 加一条用例」，把复验拖成无限（2026-11-05 实测：
+# 返工阶段手写 23 个一次性 CDP 脚本、跑了 33 分钟，其中 26 分钟在自造场景）。
+_QA_CASE_BOUNDARY = """Test-case boundary (hard rule — do not expand the case list):
+- `test_cases.md` is the only authority: execute the cases listed there and nothing else.
+- Every browser scenario must carry `"case_id": "TC-..."` that exists in `test_cases.md`; the QA
+  runner refuses scenarios whose id is not in that file.
+- Anything suspicious that no case covers goes into the report as one line under
+  "Observations (not gating)". Do not write a script for it, do not add a case, and do not let it
+  change the verdict.
+- Keep the case list bounded: group equivalent boundary values into one case (2/21 chars in one row,
+  not two), and do not add a case per input permutation.
+- Verification budget: at most 5 runner runs (tracked in `.qa_runner_state.json`). When the runner
+  exits 5 and writes `qa_budget.json`, stop testing and report the existing `qa_result.json` as-is.
+"""
+
+# 返工边界：只回归 QA 明确判失败的用例，禁止顺手全量重测 / 探索性测试。
+_REWORK_BOUNDARY = """Rework scope (hard rule — this round fixes a QA failure):
+- Fix and re-verify ONLY the case ids that failed in the upstream `test_report.json`
+  (e.g. `TC-X-01`); other cases are out of scope for this round.
+- If `scripts/qa_browser_runner.mjs` exists, re-run just those cases with
+  `node scripts/qa_browser_runner.mjs --cases TC-X-01,TC-X-02`; otherwise use the project's own
+  test entry for them.
+- Do NOT run exploratory tests, do NOT hand-write browser/CDP scripts, and do NOT add cases or
+  edge scenarios the report did not list. Anything else you notice goes into the reply as one line.
+- Verification budget: at most 5 runner runs (`.qa_runner_state.json`); exit code 5 means the budget
+  is spent — stop and report the existing results.
+- If the fix requires a design change beyond the failing cases, escalate instead of expanding scope.
+"""
+
+
 def _ensure_qa_runner(workspace: Path, stage: str) -> None:
     """QA 阶段注入固定的浏览器复验 runner；项目已有同名脚本时不动它。
 
@@ -1960,9 +1991,14 @@ class HarnessStageExecutor:
         # QA 阶段额外要求结论块：否则图无法区分"测试通过"与"需要打回"
         if _is_qa_stage(ctx.stage):
             sections.append(_QA_PROTOCOL)
+            # 用例边界与 runner 是否存在无关：没有 runner 也不许自造用例
+            sections.append(_QA_CASE_BOUNDARY)
             # runner 注入成功才给硬约束，否则模型以为有脚本可跑
             if (workspace / "scripts" / "qa_browser_runner.mjs").is_file():
                 sections.append(_QA_BROWSER_RUNNER)
+        # 返工阶段（上游已有 QA 报告）：只许回归失败用例，禁止顺手全量重测
+        if ctx.stage in ENG_BUILD_STAGES and "test_report.json" in (ctx.upstream_artifacts or {}):
+            sections.append(_REWORK_BOUNDARY)
         if repo_section:
             sections.append(repo_section.strip())
         artifact_index = list(pack.get("artifact_index") or [])

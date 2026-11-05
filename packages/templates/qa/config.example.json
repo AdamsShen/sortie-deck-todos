@@ -3,10 +3,13 @@
   "base_url": "http://127.0.0.1:8731",
   "health_url": "http://127.0.0.1:8731/",
   "timeout_sec": 120,
+  "max_runs": 5,
+  "cases_file": ".upstream/test_cases.md",
   "viewport": { "width": 1280, "height": 800 },
   "scenarios": [
     {
       "name": "首页渲染",
+      "case_id": "TC-S-01",
       "path": "/",
       "steps": [
         { "expect_visible": "#auth-view" },
@@ -16,6 +19,7 @@
     },
     {
       "name": "注册后进入游戏",
+      "case_id": "TC-C-01",
       "path": "/",
       "steps": [
         { "type": { "selector": "input[name=username]", "text": "qa_user" } },

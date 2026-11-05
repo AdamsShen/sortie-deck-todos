@@ -284,6 +284,7 @@ def _resolve_stage_timeout(
     优先级：阶段 spec 的 timeout_seconds（航线 YAML / 前端编辑阶段均可配）
     > 阶段级覆盖 stage_timeout_overrides（如 `*_tech_design=600`，支持 `*` 通配）
     > 编码类阶段默认（eng_stage_timeout_seconds=3600s）
+    > 复验类阶段默认（qa_stage_timeout_seconds=900s）
     > 全局默认（stage_timeout_seconds=1800s）。
     app_cfg 是编排器实例注入的 Settings，优先于进程级全局 settings，
     保证多实例/单测各用各的超时。
@@ -309,6 +310,15 @@ def _resolve_stage_timeout(
         else:
             if seconds > 0:
                 return seconds
+
+    # 复验阶段只跑固定用例，套文档阶段的 30 分钟纯属浪费
+    if stage == "qa_verify" or stage.endswith("_verify"):
+        fallback = 900.0
+        return float(
+            getattr(app_cfg, "qa_stage_timeout_seconds", None)
+            or getattr(_settings, "qa_stage_timeout_seconds", fallback)
+            or fallback
+        )
 
     is_build = stage in ENG_BUILD_STAGES
     attr = "eng_stage_timeout_seconds" if is_build else "stage_timeout_seconds"
