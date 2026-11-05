@@ -31,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Mission-scoped RAG namespace**: stage key artifacts auto-indexed per initiative (`KnowledgeGateway.index_mission_artifact`, tags `ini:<id>`, WeKnora folder `missions/<id>`, idempotent + best-effort); `retrieve(query, initiative_id=...)` ranks the mission namespace first and fills from the global pool; harness context packs retrieve with mission scope (`TDT_KB_MISSION_INDEX` switch)
 - **Mission-page sub-rooms**: the task view embeds its mission's sub-rooms — turn-by-turn live transcript, read-only member roster (opener / lead / participants, no editing) and a fullscreen conversation view; `SubRoomService.on_event` (wired through the orchestrator) pushes `subroom` / `subroom_message` onto the initiative SSE stream, so the panel needs no polling
 
+### Fixed
+
+- **Duplicate artifact entries from parallel stages**: wave merges keep both the bare contract key (`tech_design.md`) and the stage-scoped copy (`eng_backend_tech_design::tech_design.md`) in `upstream`, and both can point at the same path (the branch that won last-wins). `Orchestrator._sync_artifacts_from_upstream` snapshotted existing paths once before the loop and never updated it, so the second key appended the same path again and the stage inspect panel listed the same file twice. De-duplication is now keyed by the final path with the set updated on every append; stored indexes self-heal on the next sync, the workbench also dedupes by path, and `scripts/dedup_mission_artifacts.py` cleans existing rows (`--apply`)
+
 - Apache-2.0 license and open-source project docs (EN/ZH README, MkDocs Material i18n site)
 - Architecture overview, data-flow diagrams, and per-module technical + implementation plans
 - Expanded per-module specs (entry → core → platform) with API contracts, sequences, P0–P2 task tables and acceptance criteria

@@ -723,16 +723,35 @@ class Orchestrator:
             pass
 
     def _sync_artifacts_from_upstream(self, ini: Initiative, upstream: dict[str, str], stage: str) -> None:
-        existing = {(a.path) for a in ini.artifacts}
+        """把 upstream 里的产物登记进任务索引，按最终路径去重。
+
+        并行合并后的 upstream 中，同一文件会同时以裸 key（``tech_design.md``）
+        和阶段作用域 key（``eng_backend_tech_design::tech_design.md``）出现，且
+        两者指向同一路径。判重必须以 path 为唯一键，并在登记后即时回填集合，
+        否则同一次调用内后一个 key 会把同一路径再追加一次，产物面板出现重复项。
+        同时先对已有索引做一次稳定去重，顺带自愈历史数据里的重复登记。
+        """
+        deduped: list[ArtifactRef] = []
+        existing: set[str] = set()
+        for ref in ini.artifacts:
+            path = str(ref.path).replace("\\", "/")
+            if path in existing:
+                continue
+            existing.add(path)
+            deduped.append(ref)
+        if len(deduped) != len(ini.artifacts):
+            ini.artifacts = deduped
+
         for kind, rel in upstream.items():
-            if rel in existing:
+            path = str(rel).replace("\\", "/")
+            if path in existing:
                 continue
             # Parallel waves store stage-scoped copies as `{stage}::{filename}`
             display_kind = kind.split("::", 1)[1] if "::" in str(kind) else kind
             inferred = stage
             if "::" in str(kind):
                 inferred = str(kind).split("::", 1)[0]
-            parts = str(rel).replace("\\", "/").split("/")
+            parts = path.split("/")
             # 旧(flat)布局: <ini>/<stage>/<file>；新(mission)布局: <ini>/artifacts/<stage>/<file>。
             # 跳过 ini 段与布局固定段（artifacts/workspace/chat/memory），剩余首段才是 stage。
             if len(parts) >= 2 and parts[0] == ini.id:
@@ -742,8 +761,9 @@ class Orchestrator:
                 if rest:
                     inferred = rest[0]
             ini.artifacts.append(
-                ArtifactRef(kind=display_kind, path=rel, stage=inferred, created_at=utc_now())
+                ArtifactRef(kind=display_kind, path=path, stage=inferred, created_at=utc_now())
             )
+            existing.add(path)
 
     def _roles_from_template(
         self,

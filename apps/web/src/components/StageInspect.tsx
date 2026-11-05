@@ -88,7 +88,13 @@ export function StageInspect({
   }, [initiative.timeline, stageId]);
 
   const docs = useMemo(() => {
-    return (initiative.artifacts || []).filter((a) => a.stage === stageId);
+    // 同一路径可能因历史数据或并行合并被登记多次，展示层按 path 去重兜底
+    const seen = new Set<string>();
+    return (initiative.artifacts || []).filter((a) => {
+      if (a.stage !== stageId || seen.has(a.path)) return false;
+      seen.add(a.path);
+      return true;
+    });
   }, [initiative.artifacts, stageId]);
 
   const stageChats = useMemo(() => {
