@@ -5,6 +5,7 @@ import type { I18nKey } from "../i18n";
 import type { Lang, PublicUser } from "../types";
 import { ApiKeysPage } from "./ApiKeysPage";
 import { GitSettingsPanel } from "./GitSettingsPanel";
+import { MissionInsightsPanel } from "./MissionInsightsPanel";
 
 /**
  * 设置中心（设计稿 v2）：全屏面板 + 左轨目录 + 宽内容区。
@@ -24,6 +25,7 @@ const ZH = {
   git: "Git 凭据",
   keys: "API 密钥",
   data: "导出与删除",
+  insights: "耗时分析",
   back: "返回应用",
   close: "关闭设置",
   accountTitle: "账号",
@@ -77,6 +79,7 @@ const EN: typeof ZH = {
   git: "Git credentials",
   keys: "API keys",
   data: "Export & delete",
+  insights: "Duration insights",
   back: "Back to app",
   close: "Close settings",
   accountTitle: "Account",
@@ -119,7 +122,7 @@ const EN: typeof ZH = {
   footer: "Secrets are write-only; workspace credentials are maintained in Admin › Repos.",
 };
 
-type Tab = "git" | "keys" | "account" | "appearance" | "data";
+type Tab = "git" | "keys" | "account" | "appearance" | "data" | "insights";
 
 interface Props {
   open: boolean;
@@ -206,7 +209,17 @@ export function SettingsCenter({
         : C.statusRejected;
   const initial = (user.display_name || user.username || "?").slice(0, 1);
   const currentLabel =
-    tab === "git" ? C.git : tab === "keys" ? C.keys : tab === "account" ? C.account : tab === "appearance" ? C.appearance : C.data;
+    tab === "git"
+      ? C.git
+      : tab === "keys"
+        ? C.keys
+        : tab === "account"
+          ? C.account
+          : tab === "appearance"
+            ? C.appearance
+            : tab === "insights"
+              ? C.insights
+              : C.data;
 
   return (
     <div
@@ -250,6 +263,9 @@ export function SettingsCenter({
               <div className="cap">{C.dataGroup}</div>
               <button type="button" className={tab === "data" ? "on" : ""} onClick={() => setTab("data")}>
                 {C.data}
+              </button>
+              <button type="button" className={tab === "insights" ? "on" : ""} onClick={() => setTab("insights")}>
+                {C.insights}
               </button>
             </div>
           </nav>
@@ -462,6 +478,12 @@ export function SettingsCenter({
                     {C.remove}
                   </button>
                 </div>
+              </div>
+            )}
+
+            {tab === "insights" && (
+              <div className="settings-embed">
+                <MissionInsightsPanel token={token} lang={lang} />
               </div>
             )}
           </div>
