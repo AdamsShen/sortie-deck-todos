@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Test-case boundary + verification budget for QA**: QA may only execute cases defined in `test_cases.md`. Browser scenarios now carry `case_id` and the runner skips anything outside that file (reported under `scope.skipped_cases`, never gating); rework re-runs only the failing ids via `--cases`. A cross-process budget (`max_runs`, default 5, tracked in `.qa_runner_state.json`) stops the "one more scenario" loop: exceeding it exits 5, writes `qa_budget.json` and leaves the previous `qa_result.json` intact. Prompt side: QA-only rules forbid adding cases, and rework stages (upstream `test_report.json` present) are limited to the failing ids
+
+- **Verification stages get their own timeout**: `qa_verify` / `*_verify` now resolve to `TDT_QA_STAGE_TIMEOUT_SECONDS` (default 900s) instead of falling back to the global 1800s, which was sized for document stages. A stuck review round now wastes 15 minutes instead of 30 before the artifact-salvage path takes over; build stages keep their 3600s
+
 - **Degraded stages self-check before QA**: a stage that ends with `status=fail` while self-review produced no verdict (all lenses skipped/failed) now re-enters once with a self-check instruction (`TDT_STAGE_SELF_CHECK_ATTEMPTS`, default 1, 0 disables): complete the contract artifacts, align `diff.patch`, run the tests, tick the checklist. Deploy stages are never re-run. Previously the half-finished output went straight to QA, which burned a full round (~9 minutes on the 2026-11-05 snake mission) only to return `fail`
 - **Gate button follows the QA verdict**: with `qa_passed=false` the HITL payload now carries `verdict` + `recommended_action` (reroute to `on_fail`, label "返工"), so the workbench renders **Rework** as the primary button with the reason attached instead of "approve" — approving used to bounce back to build anyway, which read as a no-op
 

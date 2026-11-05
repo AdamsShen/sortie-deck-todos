@@ -138,6 +138,14 @@ WebSocket（Node ≥ 21），不装 npm 包；找不到浏览器时返回 `brows
 - 结果写 `qa_result.json`（每条场景的步骤结果、文档状态码、console / pageerror / 4xx 列表），
   截图落 `qa_screenshots/`；`favicon.ico` 404 视为噪音
 - prompt 硬约束：只跑同一个脚本、只修失败项，禁止手工起停服务，也禁止再手写 CDP/Playwright 脚本
+- **用例边界**：每个场景必须带 `case_id`（如 `TC-X-01`），且该编号必须出现在 `test_cases.md`
+  （默认依次找 `.upstream/test_cases.md` / `artifacts/qa_verify/test_cases.md` / `test_cases.md`）。
+  边界外的场景不执行、不计入判定，只在 `scope.skipped_cases` 留痕；没有用例文件时不限制（保手工调试）
+- **验证预算**：`max_runs`（默认 5）跨进程累加在 `.qa_runner_state.json`；超出后退出码 5、写
+  `qa_budget.json`，**保留上一轮 `qa_result.json`**，提示按现状收尾
+- **只回归失败项**：返工阶段用 `--cases TC-X-01,TC-X-02` 只跑 QA 判失败的用例，不重跑全量
+- **阶段超时**：复验类阶段（`qa_verify` / `*_verify`）单独取 `TDT_QA_STAGE_TIMEOUT_SECONDS`
+  （默认 900s），不再沿用全局 1800s；编码阶段仍是 3600s
 
 ## 9. 多镜头自审与实现清单
 

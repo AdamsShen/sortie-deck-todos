@@ -145,6 +145,16 @@ WebSocket (Node ≥ 21), with no npm packages. When no browser is available it r
   4xx entries) and screenshots to `qa_screenshots/`; `favicon.ico` 404s are treated as noise
 - The prompt makes it mandatory: run the one script, fix only failing scenarios, never manage the
   server by hand, and never hand-write CDP/Playwright scripts
+- **Case boundary**: every scenario must declare `case_id` (e.g. `TC-X-01`) and that id must exist in
+  `test_cases.md` (looked up in `.upstream/test_cases.md` / `artifacts/qa_verify/test_cases.md` /
+  `test_cases.md`). Out-of-scope scenarios are skipped, excluded from the verdict and listed under
+  `scope.skipped_cases`; with no case file present nothing is filtered (manual debugging)
+- **Verification budget**: `max_runs` (default 5) is accumulated across processes in
+  `.qa_runner_state.json`. Exceeding it exits 5 and writes `qa_budget.json` while **keeping the
+  previous `qa_result.json`**, instructing the model to report the current state
+- **Rework re-runs only failures**: `--cases TC-X-01,TC-X-02` limits execution to the cases QA failed
+- **Stage timeout**: verification stages (`qa_verify` / `*_verify`) use their own
+  `TDT_QA_STAGE_TIMEOUT_SECONDS` (default 900s) instead of the global 1800s; build stages stay at 3600s
 
 ## 9. Multi-lens self-review and implementation checklist
 
