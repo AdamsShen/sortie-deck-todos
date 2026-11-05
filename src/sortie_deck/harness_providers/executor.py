@@ -275,6 +275,8 @@ _RUNS_DIRNAME = ".runs"
 _WORKSPACE_LINK = "workspace"
 # 跨阶段遗留文件的归档目录（放在 workspace 内，随沙盒一起回收）
 _ARCHIVE_DIRNAME = ".archive"
+# 本阶段越界产物的归档目录（放在阶段产物目录内，不参与产物索引）
+_STRAY_DIRNAME = ".stray"
 
 
 def _is_doc_stage(stage: str) -> bool:
@@ -370,6 +372,58 @@ def _sweep_stale_contracts(
             stage,
             ",".join(moved),
             archive,
+        )
+    return moved
+
+
+def _sweep_stray_contracts(
+    *, stage: str, artifact_dir: Path | None, workspace: Path
+) -> dict[str, list[str]]:
+    """阶段收尾清理：归档本阶段越界写出的契约文件，返回 ``{来源: [文件名]}``。
+
+    为什么需要：``_sweep_stale_contracts`` 只在阶段启动时清「上一阶段」留在
+    workspace 根层的文件，清不到本阶段运行中自己写进去的越界产物。实测
+    ini_7463287a3371：intake 把 ``prd.md`` / ``acceptance.json`` 当「副本供下游
+    读取」写进 workspace，product_prd 启动时按历史草稿把它镜像进 ``.upstream/``，
+    于是正式阶段读到的是集结阶段的旧口径。
+
+    规则：只处理契约文件名、只看根层、只归档不删除。
+    - 产物目录：只搬「不属于本阶段」的契约名，本阶段契约原地保留；
+    - workspace 根层：契约名一律搬走（含本阶段同名副本）——正式版已在
+      artifact_dir 与产物索引里，根层副本只会被下一阶段当草稿误读。
+    """
+    own = set(_contract_names(stage))
+    every = _all_contract_names()
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    moved: dict[str, list[str]] = {}
+
+    def _move(root: Path, names: set[str], archive: Path) -> list[str]:
+        got: list[str] = []
+        for name in sorted(names):
+            path = root / name
+            if not path.is_file():
+                continue
+            try:
+                archive.mkdir(parents=True, exist_ok=True)
+                path.replace(archive / name)
+            except OSError:
+                logger.warning("越界产物归档失败: %s", path, exc_info=True)
+                continue
+            got.append(name)
+        return got
+
+    if artifact_dir is not None:
+        got = _move(artifact_dir, every - own, artifact_dir / _STRAY_DIRNAME / stamp)
+        if got:
+            moved["artifact_dir"] = got
+    got = _move(workspace, every, workspace / _ARCHIVE_DIRNAME / f"{stage}-stray-{stamp}")
+    if got:
+        moved["workspace"] = got
+    if moved:
+        logger.warning(
+            "已归档本阶段越界产物: stage=%s files=%s",
+            stage,
+            "; ".join(f"{source}={','.join(names)}" for source, names in moved.items()),
         )
     return moved
 
@@ -796,6 +850,7 @@ class HarnessStageExecutor:
         snapshot: dict[str, tuple[float, int]] = {}
         extra_dirs: list[str] = []
         stale_moved: list[str] = []
+        stray_moved: dict[str, list[str]] = {}
         if doc_stage and artifact_dir is not None:
             local_upstream, snapshot = _prepare_stage_output(
                 stage=ctx.stage,
@@ -1068,6 +1123,12 @@ class HarnessStageExecutor:
         strict_missing = bool(missing_contracts) and _strict_contract_stage(ctx.stage)
         if strict_missing:
             ok = False
+        # 收尾清理本阶段越界产物：必须排在 _artifacts 之后（workspace 里的真产物
+        # 已归档进 artifact_dir）。needs_hitl 时跳过：阶段会重试，不是终态。
+        if doc_stage and not needs_hitl:
+            stray_moved = _sweep_stray_contracts(
+                stage=ctx.stage, artifact_dir=artifact_dir, workspace=workspace
+            )
         meta = {
             "harness": harness,
             "session_id": session.native_id or session.id,
@@ -1079,6 +1140,8 @@ class HarnessStageExecutor:
             "context_tokens": int(pack.get("token_estimate") or 0),
             # 跨阶段遗留清理记录：工作台/排障时用于确认「本阶段读到的是正式版」
             "stale_moved": stale_moved,
+            # 本阶段越界产物归档记录：非空说明模型写了别的阶段的契约文件
+            "stray_moved": stray_moved,
             **artifact_meta,
         }
         # 自审报告：真正跑过轮次才进产物（skipped/prompted 只留日志，避免假报告），

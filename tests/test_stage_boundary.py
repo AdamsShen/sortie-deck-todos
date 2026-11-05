@@ -61,6 +61,41 @@ class _WriterProvider:
         return None
 
 
+class _StrayWriterProvider(_WriterProvider):
+    """除了本阶段契约，还按来源写越界产物（cwd / workspace）。"""
+
+    def __init__(
+        self,
+        files: dict[str, str] | None = None,
+        *,
+        stray_cwd: dict[str, str] | None = None,
+        stray_workspace: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__(files)
+        self.stray_cwd = stray_cwd or {}
+        self.stray_workspace = stray_workspace or {}
+
+    async def send(
+        self,
+        session: HarnessSession,
+        prompt: str,
+        *,
+        cwd: str | None = None,
+        context_pack: dict[str, Any] | None = None,
+        extra_dirs: list[str] | None = None,
+    ) -> HarnessReply:
+        reply = await super().send(
+            session, prompt, cwd=cwd, context_pack=context_pack, extra_dirs=extra_dirs
+        )
+        root = Path(str(cwd or "."))
+        for name, content in self.stray_cwd.items():
+            (root / name).write_text(content, encoding="utf-8")
+        for extra in extra_dirs or []:
+            for name, content in self.stray_workspace.items():
+                (Path(extra) / name).write_text(content, encoding="utf-8")
+        return reply
+
+
 class _Registry:
     def __init__(self, provider: _WriterProvider) -> None:
         self.provider = provider
@@ -257,3 +292,78 @@ def test_intake_missing_artifact_fails_the_stage(tmp_path, monkeypatch):
     assert result.status == "fail"
     assert "未写出契约产物" in str(result.message)
     assert "intake.md" in str(result.message)
+
+
+# --- 4. 阶段收尾的越界产物清理 ---------------------------------------------------
+
+
+def test_doc_stage_archives_stray_contracts_after_run(tmp_path, monkeypatch):
+    """intake 运行中越界写出的 prd.md/acceptance.json 在收尾被归档。
+
+    线上现场（ini_7463287a3371）：intake 把 PRD 写进产物目录与 workspace 各一份，
+    product_prd 启动时把 workspace 那份当历史草稿镜像进 `.upstream/`，正式阶段
+    读到的是集结阶段口径。启动期清理清不到「本阶段自己刚写的」，只能收尾再扫。
+    """
+    art = tmp_path / "data/missions/ini_bound/artifacts/intake"
+    workspace = tmp_path / "data/missions/ini_bound/workspace"
+    provider = _StrayWriterProvider(
+        {"intake.md": "# 集结"},
+        stray_cwd={"prd.md": "# 越界 PRD（产物目录）", "acceptance.json": "{}"},
+        stray_workspace={"prd.md": "# 越界 PRD（workspace）", "acceptance.json": "{}"},
+    )
+    ctx = _ctx(tmp_path, stage="intake", role="product", artifact_dir=art)
+
+    result = _run(monkeypatch, provider, ctx)
+
+    assert result.status == "ok"
+    # 本阶段契约原地保留，越界产物从根层消失
+    assert (art / "intake.md").exists()
+    assert not (art / "prd.md").exists()
+    assert not (art / "acceptance.json").exists()
+    assert sorted(result.meta["stray_moved"]["artifact_dir"]) == ["acceptance.json", "prd.md"]
+    # workspace 根层不留契约副本（否则下一阶段会当历史草稿镜像）
+    assert not (workspace / "prd.md").exists()
+    assert not (workspace / "acceptance.json").exists()
+    assert sorted(result.meta["stray_moved"]["workspace"]) == ["acceptance.json", "prd.md"]
+    archived = list((workspace / ".archive").rglob("prd.md"))
+    assert [p.read_text(encoding="utf-8") for p in archived] == ["# 越界 PRD（workspace）"]
+
+
+def test_doc_stage_keeps_own_contract_but_clears_workspace_copy(tmp_path, monkeypatch):
+    """product_prd 自己的 prd.md 留在产物目录；workspace 根层的旧副本仍被清走。"""
+    art = tmp_path / "data/missions/ini_bound/artifacts/product_prd"
+    workspace = tmp_path / "data/missions/ini_bound/workspace"
+    workspace.mkdir(parents=True)
+    (workspace / "intake.md").write_text("# 上一阶段越界残留", encoding="utf-8")
+    provider = _StrayWriterProvider(
+        {"prd.md": "# 正式 PRD", "acceptance.json": "[]"},
+        stray_workspace={"prd.md": "# 顺手写的副本"},
+    )
+    ctx = _ctx(tmp_path, stage="product_prd", role="product", artifact_dir=art)
+
+    result = _run(monkeypatch, provider, ctx)
+
+    assert (art / "prd.md").read_text(encoding="utf-8") == "# 正式 PRD"
+    assert (art / "acceptance.json").exists()
+    # workspace 根层契约副本（本阶段同名 + 上一阶段残留）全部归档
+    assert not (workspace / "prd.md").exists()
+    assert not (workspace / "intake.md").exists()
+    # 上一阶段残留走启动期清理，本阶段自己写的副本走收尾清理
+    assert result.meta["stale_moved"] == ["intake.md"]
+    assert result.meta["stray_moved"]["workspace"] == ["prd.md"]
+    assert "artifact_dir" not in result.meta["stray_moved"]
+
+
+def test_coding_stage_leaves_workspace_files_alone(tmp_path, monkeypatch):
+    """编码阶段 workspace 就是仓库本体，收尾不做契约清理，避免误搬仓库文件。"""
+    art = tmp_path / "data/missions/ini_bound/artifacts/eng_implement"
+    workspace = tmp_path / "data/missions/ini_bound/workspace"
+    provider = _StrayWriterProvider(
+        {"implementation.md": "# 实现", "tasks.json": "[]", "prd.md": "# 仓库自带"}
+    )
+    ctx = _ctx(tmp_path, stage="eng_implement", role="eng", artifact_dir=art)
+
+    result = _run(monkeypatch, provider, ctx)
+
+    assert (workspace / "prd.md").read_text(encoding="utf-8") == "# 仓库自带"
+    assert result.meta["stray_moved"] == {}
