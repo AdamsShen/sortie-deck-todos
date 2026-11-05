@@ -912,6 +912,8 @@ class PipelineState(TypedDict, total=False):
     handoff_counts: dict[str, int]
     # Mission-wide handoff budget (runaway protection)
     handoff_total: int
+    # 降级自检预算计数（按阶段）：status=fail 且自审未跑时重入本阶段的次数
+    self_check_counts: dict[str, int]
     # Manager-driven parallel wave retry budget per group
     wave_attempts: dict[str, int]
     # Stop the run without marking the initiative as `stopped`
@@ -922,6 +924,61 @@ class PipelineState(TypedDict, total=False):
 _MAX_HANDOFF_PER_TARGET = 3
 _MAX_HANDOFF_TOTAL = 40
 _MAX_WAVE_ATTEMPTS = 2
+
+# 降级自检：harness 异常收尾（status=fail）且自审没跑成时，先用这段指令重入本阶段。
+# 不扩展需求范围，只要求补齐产物、对齐 diff、跑通自测、如实勾选 checklist。
+_SELF_CHECK_INSTRUCTION = (
+    "上一次运行异常中断（status=fail，自审未执行），产物可能不完整。请先自检再收尾，"
+    "不要新增与 brief 无关的功能：\n"
+    "1) 逐个核对 output contract 要求的文件是否存在、内容是否完整；\n"
+    "2) 核对 diff.patch 与 workspace 实际改动是否一致，补齐遗漏/未跟踪文件；\n"
+    "3) 跑一遍能跑的自测命令（单元测试/启动检查），把失败项修到通过；\n"
+    "4) 更新 checklist.md，只勾选真正执行过的项。"
+)
+_SELF_CHECK_SKIP_PREFIXES = ("deploy",)
+
+# 自审真跑过（有独立结论）才算“不需要自检”；skipped / failed / unparsed 都算没跑成。
+_REVIEW_DONE_STATUSES = {"passed", "findings", "blocking"}
+
+
+def _needs_self_check(stage_name: str, result: dict[str, Any]) -> bool:
+    """阶段失败且自审没有任何结论时返回 True：应先自检再放行下游。
+
+    部署类阶段不重跑（重复发布代价高），终态 done 也不适用。
+    """
+    if stage_name == "done" or stage_name.startswith(_SELF_CHECK_SKIP_PREFIXES):
+        return False
+    if str(result.get("status") or "ok") != "fail":
+        return False
+    review = (result.get("meta") or {}).get("review") or {}
+    statuses = review.get("statuses") or {}
+    return not any(str(v) in _REVIEW_DONE_STATUSES for v in statuses.values())
+
+
+def _gate_recommendation(
+    stage: str, result: dict[str, Any], on_fail: str
+) -> dict[str, Any]:
+    """门禁推荐动作：QA 已判失败时直接给「返工」，避免人工误点「批准」。
+
+    批准在 ``qa_passed is False`` 时同样按 ``on_fail`` 打回（见 hitl_gate），
+    按钮若仍叫「放行」会让人以为跳过了返工，因此把推荐动作显式带进 payload。
+    """
+    if stage != "qa_verify":
+        return {}
+    passed = result.get("qa_passed")
+    if passed is None:
+        return {}
+    if passed:
+        return {"verdict": {"passed": True}, "recommended_action": {"action": "approve"}}
+    return {
+        "verdict": {"passed": False},
+        "recommended_action": {
+            "action": "reroute",
+            "next_stage": on_fail,
+            "label": "返工",
+            "hint": f"QA 判定未通过；批准同样会回到 `{on_fail}`，直接返工即可。",
+        },
+    }
 
 
 # Built-in role → mock executor fallback. Custom roles are resolved through
@@ -2377,6 +2434,48 @@ def build_graph_from_template(
                 st = await run_stage(state, stage_name)
 
             result = st.get("last_result") or {}
+            # 降级自检：上一次运行失败、自审又没跑成时，先把产物补齐再放行下游，
+            # 否则 QA 只能对着一份残缺交付判 fail，白跑一整轮（9 分钟量级）。
+            if _needs_self_check(stage_name, result):
+                from sortie_deck.settings import settings as _settings
+
+                used = int((st.get("self_check_counts") or {}).get(stage_name) or 0)
+                budget = int(getattr(_settings, "stage_self_check_attempts", 0) or 0)
+                if used < budget:
+                    counts = dict(st.get("self_check_counts") or {})
+                    counts[stage_name] = used + 1
+                    events = list(st.get("events") or [])
+                    events.append(
+                        {
+                            "stage": stage_name,
+                            "kind": "error",
+                            "message": (
+                                "阶段以 fail 收尾且自审未执行，先自检再放行"
+                                f"（{used + 1}/{budget}）"
+                            ),
+                            "data": {
+                                "self_check": True,
+                                "attempt": used + 1,
+                                "status": str(result.get("status") or ""),
+                            },
+                        }
+                    )
+                    logger.warning(
+                        "阶段降级，触发自检: initiative=%s stage=%s attempt=%s/%s",
+                        state.get("initiative_id"),
+                        stage_name,
+                        used + 1,
+                        budget,
+                    )
+                    return {
+                        **st,
+                        "events": events,
+                        "self_check_counts": counts,
+                        "human_instruction": _SELF_CHECK_INSTRUCTION,
+                        "handoff_target": stage_name,
+                        "status": "running",
+                    }
+
             if result.get("status") != "needs_hitl":
                 # Serial step: the agent itself may hand off (contract-checked);
                 # otherwise the frozen plan's default edge decides.
@@ -2531,6 +2630,8 @@ def build_graph_from_template(
                 "risk": describe_stage_risk(stage, cfg),
                 "irreversible": stage_is_irreversible(stage, cfg),
                 "action_help": dict(HITL_ACTION_HELP),
+                # QA 已判失败时把「返工」作为推荐动作，避免按钮写成「放行」
+                **_gate_recommendation(stage, result, on_fail),
             }
             decision_raw = interrupt(payload)
             if isinstance(decision_raw, dict):

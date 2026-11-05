@@ -2262,6 +2262,7 @@ class Orchestrator:
                         "workspace_dir": str(self.cfg.worktrees_dir / ini.id / "workspace"),
                         "upstream": {},
                         "qa_attempt": 1,
+                        "self_check_counts": {},
                         "events": [],
                         "status": "running",
                         "stopped": False,
