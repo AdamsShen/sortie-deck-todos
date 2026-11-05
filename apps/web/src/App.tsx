@@ -16,9 +16,7 @@ import {
   registerUser,
   updateInitiativeHarness,
 } from "./api";
-import { ApiKeysPage } from "./components/ApiKeysPage";
-import { GitCredentialsPanel } from "./components/GitCredentialsPanel";
-import { MyReposPanel } from "./components/MyReposPanel";
+import { SettingsCenter } from "./components/SettingsCenter";
 import { WorkspaceReposPanel } from "./components/WorkspaceReposPanel";
 import { OperatorChip } from "./components/OperatorChip";
 import { PipelineEditor } from "./components/PipelineEditor";
@@ -219,6 +217,8 @@ export default function App() {
   const [token, setToken] = useState(() => lsGet("sortie_token") || "");
   const [user, setUser] = useState<PublicUser | null>(null);
   const [view, setView] = useState<View>("home");
+  // 设置中心：右上角入口打开的全屏面板；原「密钥」一级页面已迁入其中
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [items, setItems] = useState<Initiative[]>([]);
   const [dash, setDash] = useState<Dashboard | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -761,6 +761,8 @@ export default function App() {
       )}
     </div>
   );
+  // 主题浮层已并入设置中心；旧定义暂留，避免牵连背景图/音效状态的一次性大改
+  void themeControls;
 
   const selected = useMemo(
     () => items.find((i) => i.id === selectedId) || detail,
@@ -1278,6 +1280,7 @@ export default function App() {
     lsRemove("sortie_token");
     setToken("");
     setUser(null);
+    setSettingsOpen(false);
     setView("home");
   }
 
@@ -1349,6 +1352,7 @@ export default function App() {
       lsRemove("sortie_token");
       setToken("");
       setUser(null);
+      setSettingsOpen(false);
       setView("home");
     } catch (err) {
       setError(errMsg(err));
@@ -3061,17 +3065,6 @@ export default function App() {
           >
             {tr("decisions")}
           </button>
-          <button
-            type="button"
-            className={view === "keys" ? "on" : ""}
-            onClick={() => {
-              unlockSfx();
-              playSfx("whoosh");
-              setView("keys");
-            }}
-          >
-            {tr("keysNav")}
-          </button>
           {user.role === "admin" && (
             <button
               type="button"
@@ -3089,53 +3082,27 @@ export default function App() {
         <div className="header-meta">
           <OperatorChip user={user} tr={tr} />
           <div className="op-tools">
-            {themeControls}
+            {/* 主题 / 语言 / 导出 / 注销 / 退出均已收进设置中心，头部只保留入口 */}
             <button
               type="button"
-              className="op-chip"
+              className={`op-chip ${settingsOpen ? "on" : ""}`}
               onClick={() => {
                 unlockSfx();
-                playSfx("toggle");
-                setLang(lang === "zh" ? "en" : "zh");
+                playSfx("click");
+                setThemeOpen(false);
+                setSettingsOpen(true);
               }}
-              aria-label={tr("lang")}
-              title={tr("lang")}
+              aria-label={tr("settings")}
+              title={tr("settings")}
+              aria-expanded={settingsOpen}
             >
               <span className="op-chip-ico" aria-hidden>
-                文
+                <svg viewBox="0 0 20 20" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.4">
+                  <circle cx="10" cy="10" r="2.4" />
+                  <path d="M10 2.6v1.7M10 15.7v1.7M2.6 10h1.7M15.7 10h1.7M4.8 4.8l1.2 1.2M14 14l1.2 1.2M15.2 4.8L14 6M6 14l-1.2 1.2" />
+                </svg>
               </span>
-              <span className="op-chip-txt">{tr("lang")}</span>
-            </button>
-            <button
-              type="button"
-              className="op-chip"
-              onClick={doExportData}
-              disabled={exporting}
-              aria-busy={exporting}
-              aria-label={exporting ? tr("exportRunning") : tr("exportData")}
-              title={exporting ? tr("exportRunning") : tr("exportData")}
-            >
-              <span className="op-chip-ico" aria-hidden>
-                ⇩
-              </span>
-              <span className="op-chip-txt">{exporting ? tr("exportRunning") : tr("exportData")}</span>
-            </button>
-            {exportNote && (
-              <span className="op-note" role="status">
-                {exportNote}
-              </span>
-            )}
-            <button type="button" className="op-chip danger" onClick={doDeleteAccount} aria-label={tr("deleteAccount")} title={tr("deleteAccount")}>
-              <span className="op-chip-ico" aria-hidden>
-                ✕
-              </span>
-              <span className="op-chip-txt">{tr("deleteAccount")}</span>
-            </button>
-            <button type="button" className="op-chip danger" onClick={doLogout} aria-label={tr("logout")} title={tr("logout")}>
-              <span className="op-chip-ico" aria-hidden>
-                ⎋
-              </span>
-              <span className="op-chip-txt">{tr("logout")}</span>
+              <span className="op-chip-txt">{tr("settings")}</span>
             </button>
           </div>
         </div>
@@ -6310,14 +6277,6 @@ export default function App() {
         </main>
       )}
 
-      {view === "keys" && (
-        <main className="main page-pad">
-          <ApiKeysPage token={token} lang={lang} tr={tr} />
-          <GitCredentialsPanel token={token} lang={lang} />
-          <MyReposPanel token={token} lang={lang} />
-        </main>
-      )}
-
       {view === "decisions" && (
         <main className="main page-pad">
           <DecisionCenter
@@ -6497,6 +6456,44 @@ export default function App() {
           <WorkspaceReposPanel token={token} lang={lang} />
         </main>
       )}
+      <SettingsCenter
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        token={token}
+        user={user}
+        lang={lang}
+        tr={tr}
+        theme={theme}
+        onTheme={setTheme}
+        bgUrl={bgUrl}
+        onBgUrl={setBgUrl}
+        sfxMuted={sfxMuted}
+        bgmMuted={bgmMuted}
+        onSfxMuted={(m) => {
+          unlockSfx();
+          setSfxMuted(m);
+          setSfxMutedState(m);
+          if (!m) playSfx("toggle");
+        }}
+        onBgmMuted={(m) => {
+          unlockSfx();
+          startBgm();
+          setBgmMuted(m);
+          setBgmMutedState(m);
+          if (m) playSfx("toggle");
+          else playSfx("ok");
+        }}
+        exporting={exporting}
+        exportNote={exportNote}
+        onExport={doExportData}
+        onDeleteAccount={doDeleteAccount}
+        onLogout={doLogout}
+        onLangChange={setLang}
+        onOpenAdmin={() => {
+          setSettingsOpen(false);
+          setView("admin");
+        }}
+      />
     </div>
   );
 }

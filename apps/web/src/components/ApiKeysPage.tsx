@@ -61,10 +61,13 @@ export function ApiKeysPage({
   token,
   lang,
   tr,
+  onCountChange,
 }: {
   token: string;
   lang: Lang;
   tr: (key: I18nKey | string) => string;
+  /** 设置中心左轨的计数徽标用；页面独立使用时可不传 */
+  onCountChange?: (n: number) => void;
 }) {
   const [keys, setKeys] = useState<ApiKeyRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -94,6 +97,10 @@ export function ApiKeysPage({
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    onCountChange?.(keys.length);
+  }, [keys.length, onCountChange]);
 
   // 弹层打开时聚焦名称输入；Escape 关闭
   useEffect(() => {

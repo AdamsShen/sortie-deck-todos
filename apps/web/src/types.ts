@@ -12,7 +12,6 @@ export type View =
   | "forge"
   | "subrooms"
   | "decisions"
-  | "keys"
   | "admin";
 
 export type UserRole = "admin" | "member";
