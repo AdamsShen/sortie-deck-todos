@@ -321,6 +321,20 @@ class GitCredentialStore:
         logger.info("git 凭据已覆盖: id=%s host=%s scope=%s", credential.id, host, scope)
         return self.get(credential.id) or credential
 
+    def update_label(self, cred_id: str, label: str) -> GitCredential | None:
+        """只改展示名（不动匹配键与密钥）。
+
+        为什么需要：密钥只写不读，用户改名称/备注时不应被迫重新输入 token；
+        主机、协议、用户名属于唯一键，改动会影响解析结果，统一走覆盖写入。
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE git_credentials SET label = ? WHERE id = ?",
+                ((label or "").strip(), cred_id),
+            )
+            self._conn.commit()
+        return self.get(cred_id) if cur.rowcount > 0 else None
+
     def disable(self, cred_id: str) -> bool:
         """禁用（安全处置）：保留记录，解析时跳过。"""
         with self._lock:

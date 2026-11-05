@@ -2053,6 +2053,12 @@ class GitCredentialBody(BaseModel):
     expires_at: float | None = None
 
 
+class GitCredentialPatch(BaseModel):
+    """个人凭据可改字段：只开放展示名，匹配键与密钥走覆盖写入。"""
+
+    label: str | None = None
+
+
 class WorkspaceRepoBody(BaseModel):
     name: str = ""
     url: str
@@ -2094,6 +2100,25 @@ async def list_workspace_repos(_user: PublicUser = Depends(require_user)) -> lis
     """全员可读的工作区仓库清单（凭证只回 credential_id，不含密钥）。"""
     _creds, repos, _user_repos = _git_stores()
     return [r.to_public() for r in repos.list_enabled()]
+
+
+@app.get("/api/git/workspace-credentials")
+async def list_workspace_credentials(
+    _user: PublicUser = Depends(require_user),
+) -> list[dict[str, Any]]:
+    """工作区凭据的只读元信息（全员可见，永不返回 secret）。
+
+    设置页用来看清「这些公用钥匙是谁在维护、绑了哪些仓库」；写入口只存在于
+    管理端 `/api/admin/git/*`，这里刻意不提供任何修改能力。
+    """
+    from sortie_deck.git_cred import SCOPE_WORKSPACE
+
+    creds, _repos, _user_repos = _git_stores()
+    return [
+        c.to_public()
+        for c in creds.list_for_owner(SCOPE_WORKSPACE, "workspace")
+        if c.is_active()
+    ]
 
 
 @app.post("/api/admin/git/workspace-repos")
@@ -2227,6 +2252,25 @@ async def create_my_credential(
     except GitCredentialError as exc:
         raise HTTPException(400, str(exc)) from exc
     return credential.to_public()
+
+
+@app.patch("/api/me/git-credentials/{cred_id}")
+async def update_my_credential_label(
+    cred_id: str, body: GitCredentialPatch, user: PublicUser = Depends(require_user)
+) -> dict[str, Any]:
+    """只改个人凭据的展示名；密钥仍走 POST 覆盖写入。
+
+    密钥写入后不可读回，改名不应该逼用户重新贴一次 token，
+    因此单独开放 label 字段（匹配键保持不变）。
+    """
+    creds, _credential = _my_credential(cred_id, user)
+    label = (body.label or "").strip()
+    if not label:
+        raise HTTPException(400, "label 不能为空")
+    updated = creds.update_label(cred_id, label)
+    if updated is None:
+        raise HTTPException(404, "credential not found")
+    return updated.to_public()
 
 
 def _my_credential(cred_id: str, user: PublicUser):
