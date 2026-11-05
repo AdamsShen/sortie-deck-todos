@@ -14,6 +14,20 @@ from sortie_deck.models import RepoConfig, StageContext, StageResult
 
 logger = logging.getLogger(__name__)
 
+# 同一 mission 的并行波次可能同时准备同名仓库（两个角色都绑了 monorepo）：
+# 按 checkout 绝对路径做进程内串行，避免「两边都判断 .git 不存在 → 同时 clone」
+# 导致后到的一方直接失败。多进程部署下每个 mission 目录独立，不存在跨进程竞争。
+_CLONE_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _clone_lock(target: Path) -> asyncio.Lock:
+    key = str(target.absolute())
+    lock = _CLONE_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _CLONE_LOCKS[key] = lock
+    return lock
+
 # 这些 flag 后面跟的是凭据，入 span 前要打码
 _SENSITIVE_FLAGS = {"--api-key", "--token", "--password", "--auth-token", "--secret"}
 _MAX_COMMAND_CHARS = 200
@@ -452,72 +466,103 @@ async def clone_repos(
     for repo in repos:
         target = repos_root / _repo_dirname(repo)
         display = repo.branch or "(default branch)"
-        if (target / ".git").exists():
-            log.append(f"repo {target.name}: reuse existing checkout")
-        elif _which("git"):
-            args = ["git", "clone", "--depth", "50"]
-            if repo.branch:
-                args += ["--branch", repo.branch, "--single-branch"]
-            args += [_clone_url(repo), str(target)]
+        # 并行波次可能同时准备同名仓库：按 checkout 路径串行，避免重复 clone 冲突
+        async with _clone_lock(target):
+            if (target / ".git").exists():
+                log.append(f"repo {target.name}: reuse existing checkout")
+            elif _which("git"):
+                # --no-single-branch 必须显式给：--depth 默认隐含 --single-branch，只拉基线分支。
+                # 工作副本在 push 后会被回收（git_cleanup_after_push），下一阶段重新 clone
+                # 时若看不到任务分支，就会从基线重建同名分支并与远端已有提交分叉，
+                # push 直接 non-fast-forward。
+                args = ["git", "clone", "--depth", "50", "--no-single-branch"]
+                if repo.branch:
+                    args += ["--branch", repo.branch]
+                args += [_clone_url(repo), str(target)]
 
-            git_ctx = None
-            extra_env: dict[str, str] = {}
-            if resolver is not None:
-                from sortie_deck.git_cred import build_askpass_env
+                git_ctx = None
+                extra_env: dict[str, str] = {}
+                if resolver is not None:
+                    from sortie_deck.git_cred import build_askpass_env
 
+                    try:
+                        resolved = resolver.resolve(repo, actor_user_id=actor_user_id)
+                    except Exception as exc:  # noqa: BLE001 — 单仓凭据失败不阻断其它仓库
+                        log.append(f"repo {target.name}: credential unavailable ({exc})")
+                        entries.append(
+                            f"- `{target}` — CHECKOUT SKIPPED: git credential unavailable"
+                        )
+                        continue
+                    if resolved.scheme == "https":
+                        git_ctx = build_askpass_env(
+                            username=resolved.username,
+                            secret=resolved.secret,
+                            workdir=workspace,
+                        )
+                        extra_env = git_ctx.env
+                    else:
+                        # SSH 凭据二期支持；当前依赖 worker 容器内已挂载的密钥
+                        log.append(f"repo {target.name}: ssh scheme (依赖容器内密钥)")
                 try:
-                    resolved = resolver.resolve(repo, actor_user_id=actor_user_id)
-                except Exception as exc:  # noqa: BLE001 — 单仓凭据失败不阻断其它仓库
-                    log.append(f"repo {target.name}: credential unavailable ({exc})")
-                    entries.append(
-                        f"- `{target}` — CHECKOUT SKIPPED: git credential unavailable"
-                    )
-                    continue
-                if resolved.scheme == "https":
-                    git_ctx = build_askpass_env(
-                        username=resolved.username,
-                        secret=resolved.secret,
-                        workdir=workspace,
-                    )
-                    extra_env = git_ctx.env
+                    code, out, err = await _run_cmd(args, cwd=workspace, extra_env=extra_env)
+                finally:
+                    if git_ctx is not None:
+                        git_ctx.__exit__()
+                log.append(f"repo {target.name}: clone exit={code}")
+                if code != 0:
+                    log.append(f"clone stderr={(err or out)[:500]}")
                 else:
-                    # SSH 凭据二期支持；当前依赖 worker 容器内已挂载的密钥
-                    log.append(f"repo {target.name}: ssh scheme (依赖容器内密钥)")
-            try:
-                code, out, err = await _run_cmd(args, cwd=workspace, extra_env=extra_env)
-            finally:
-                if git_ctx is not None:
-                    git_ctx.__exit__()
-            log.append(f"repo {target.name}: clone exit={code}")
-            if code != 0:
-                log.append(f"clone stderr={(err or out)[:500]}")
+                    # clone 成功后把 origin 换成无 token 的干净 URL，避免凭证落盘 .git/config
+                    #（push 时用带 token 的完整 URL，见 git_publish._push_branch）
+                    await _run_cmd(
+                        ["git", "remote", "set-url", "origin", repo.url], cwd=target, timeout=15
+                    )
             else:
-                # clone 成功后把 origin 换成无 token 的干净 URL，避免凭证落盘 .git/config
-                #（push 时用带 token 的完整 URL，见 git_publish._push_branch）
-                await _run_cmd(["git", "remote", "set-url", "origin", repo.url], cwd=target, timeout=15)
-        else:
-            log.append(f"repo {target.name}: git not available, clone skipped")
-        if (target / ".git").exists():
-            # 任务分支：基于目标分支 HEAD 创建（幂等，已存在则复用）
-            task_branch = mission_branch(initiative_id, _repo_dirname(repo), multi_repo=len(repos) > 1)
-            code, _, err = await _run_cmd(
-                ["git", "rev-parse", "--verify", task_branch], cwd=target, timeout=15
-            )
-            if code == 0:
-                await _run_cmd(["git", "checkout", task_branch], cwd=target, timeout=15)
-                log.append(f"repo {target.name}: task branch reused={task_branch}")
+                log.append(f"repo {target.name}: git not available, clone skipped")
+            if (target / ".git").exists():
+                task_branch = mission_branch(
+                    initiative_id, _repo_dirname(repo), multi_repo=len(repos) > 1
+                )
+                # 复用顺序：本地分支 → 远端跟踪分支 → 新建。
+                # 不能直接用 `rev-parse --verify <name>`：它不解析 refs/remotes/*，
+                # 会把上一阶段已 push 的任务分支误判为不存在，随后从基线重建导致分叉。
+                code, _, _ = await _run_cmd(
+                    ["git", "rev-parse", "--verify", f"refs/heads/{task_branch}"],
+                    cwd=target,
+                    timeout=15,
+                )
+                if code == 0:
+                    await _run_cmd(["git", "checkout", task_branch], cwd=target, timeout=15)
+                    log.append(f"repo {target.name}: task branch reused={task_branch}")
+                else:
+                    code, _, _ = await _run_cmd(
+                        ["git", "rev-parse", "--verify", f"refs/remotes/origin/{task_branch}"],
+                        cwd=target,
+                        timeout=15,
+                    )
+                    if code == 0:
+                        code, _, cerr = await _run_cmd(
+                            ["git", "checkout", "-b", task_branch, f"origin/{task_branch}"],
+                            cwd=target,
+                            timeout=15,
+                        )
+                        log.append(
+                            f"repo {target.name}: task branch restored from origin="
+                            f"{task_branch} exit={code}"
+                            + (f" stderr={cerr[:200]}" if code != 0 else "")
+                        )
+                    else:
+                        code, _, cerr = await _run_cmd(
+                            ["git", "checkout", "-b", task_branch], cwd=target, timeout=15
+                        )
+                        log.append(
+                            f"repo {target.name}: task branch created={task_branch} exit={code}"
+                            + (f" stderr={cerr[:200]}" if code != 0 else "")
+                        )
+                entries.append(f"- `{target}` (base: {display}, working branch: `{task_branch}`)")
+                branch_notes.append(f"{target.name}: `{task_branch}`")
             else:
-                code, _, cerr = await _run_cmd(
-                    ["git", "checkout", "-b", task_branch], cwd=target, timeout=15
-                )
-                log.append(
-                    f"repo {target.name}: task branch created={task_branch} exit={code}"
-                    + (f" stderr={cerr[:200]}" if code != 0 else "")
-                )
-            entries.append(f"- `{target}` (base: {display}, working branch: `{task_branch}`)")
-            branch_notes.append(f"{target.name}: `{task_branch}`")
-        else:
-            entries.append(f"- `{target}` (branch: {display}) — CHECKOUT FAILED, see log")
+                entries.append(f"- `{target}` (branch: {display}) — CHECKOUT FAILED, see log")
     section = (
         "\n\nMission code repositories (read these first, then iterate on them):\n"
         + "\n".join(entries)

@@ -4,10 +4,10 @@
 
     workspace/repos/<name>  →  git add -A → commit → push 任务分支
                             →  GitLab API 创建 MR（人工在平台合并）
-                            →  cleanup：删除 repos/ 工作副本
+                            →  cleanup：确认无未上库提交后删除本次的 checkout
 
 设计要点：
-- 分支权威数据在 GitLab，本地 clone 只是临时工作副本（push 后即可回收）；
+- 分支权威数据在 GitLab，本地 clone 只是临时工作副本（确认 push 后才能回收）；
 - 任一仓库失败不中断其余仓库（软降级），结果进 StageResult.meta → 事件流；
 - 凭据经 `GIT_ASKPASS` 环境变量注入（见 git_cred），命令行与远端配置都不落密钥；
 - 幂等可重试：无变更不 commit，MR 按源分支去重复用。
@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import shutil
@@ -40,6 +41,9 @@ class PublishResult:
     pushed: bool  # 是否成功 push
     mr_url: str | None  # GitLab MR web_url（新建或复用）
     error: str | None  # 软降级错误信息（None=成功）
+    # HEAD 上是否存在未进入远端的提交（含 agent 自己 commit 的情况）。
+    # cleanup 必须等 ahead=False 才允许执行，否则会删掉未上库的提交。
+    ahead: bool = False
 
 
 def _sanitize(name: str) -> str:
@@ -105,6 +109,87 @@ def _clone_url(repo: RepoConfig) -> str:
     from sortie_deck.plugins.coding import _clone_url as _url
 
     return _url(repo)
+
+
+async def _unpushed_count(target: Path) -> tuple[int | None, str | None]:
+    """HEAD 上有多少提交未进入任何远端分支；``None`` 表示无法判断。
+
+    工作树干净不代表已上库：agent 可能自己 ``git commit`` 过，此时
+    ``_commit_all`` 返回 False，若直接跳过 push 再 cleanup，提交会随工作副本一起丢失。
+    """
+    # 空仓库（尚无任何提交）没有可上库内容，直接视为 0，避免误报 push 失败
+    head_code, _, _ = await _git(["rev-parse", "--verify", "HEAD"], target)
+    if head_code != 0:
+        return 0, None
+    code, out, err = await _git(["rev-list", "--count", "HEAD", "--not", "--remotes"], target)
+    if code != 0:
+        return None, f"git rev-list 失败: {(err or out)[:200]}"
+    try:
+        return int((out or "").strip() or "0"), None
+    except ValueError:
+        return None, f"git rev-list 输出异常: {(out or '')[:120]}"
+
+
+async def _all_pushed(workspace: Path, repos: list[RepoConfig]) -> bool:
+    """cleanup 前的最后一道闸：每个 checkout 都不能有未上库的提交。"""
+    from sortie_deck.plugins.coding import _repo_dirname
+
+    for repo in repos:
+        target = workspace / "repos" / _repo_dirname(repo)
+        if not (target / ".git").exists():
+            continue  # 没有工作副本 = 没有本地提交可丢
+        count, err = await _unpushed_count(target)
+        if err is not None or count:
+            logger.warning(
+                "cleanup 跳过，存在未上库提交: repo=%s count=%s err=%s",
+                target.name,
+                count,
+                err,
+            )
+            return False
+    return True
+
+
+async def _flush_unpushed(
+    workspace: Path,
+    repos: list[RepoConfig],
+    initiative_id: str,
+    commit_message: str,
+    *,
+    actor_user_id: str = "",
+    resolver: Any | None = None,
+) -> dict[str, tuple[bool, bool, bool, str | None]]:
+    """cleanup 前的兜底提交：把仍在本地的改动/提交补推一次。
+
+    返回 ``{repo_name: (committed, pushed, ahead, error)}``。典型场景：
+    - 首轮 push 因瞬时网络/凭据抖动失败，这里再试一次；
+    - 并行阶段在本阶段 push 之后又往同一 checkout 写了新提交。
+    """
+    from sortie_deck.plugins.coding import _repo_dirname
+
+    flushed: dict[str, tuple[bool, bool, bool, str | None]] = {}
+    for repo in repos:
+        name = _repo_dirname(repo)
+        target = workspace / "repos" / name
+        if not (target / ".git").exists():
+            continue
+        committed, error = await _commit_all(target, commit_message)
+        if error is not None:
+            flushed[name] = (committed, False, False, error)
+            continue
+        count, count_err = await _unpushed_count(target)
+        if count_err is not None:
+            flushed[name] = (committed, False, False, count_err)
+            continue
+        ahead = bool(count)
+        pushed = False
+        if committed or ahead:
+            branch = mission_branch(initiative_id, name, multi_repo=len(repos) > 1)
+            pushed, error = await _push_branch(
+                target, repo, branch, actor_user_id=actor_user_id, resolver=resolver
+            )
+        flushed[name] = (committed, pushed, ahead, error)
+    return flushed
 
 
 async def _commit_all(target: Path, message: str) -> tuple[bool, str | None]:
@@ -222,6 +307,9 @@ async def publish_repos(
 ) -> list[PublishResult]:
     """逐仓库 commit + push 任务分支 + 建 MR；任一失败不中断其余仓库。
 
+    全部仓库处理完后、cleanup 之前会再补一次 commit+push（覆盖首轮失败与并行
+    阶段的新提交），确认每个 checkout 都没有未上库提交后，才删除工作副本。
+
     输入输出示例：workspace=data/missions/<id>/workspace，repos=[RepoConfig(url,
     branch, name)] → [PublishResult(repo_name="repo", branch="sortie/ini_x-repo",
     committed=True, pushed=True, mr_url="https://gitlab/.../-/merge_requests/1",
@@ -259,13 +347,22 @@ async def publish_repos(
             continue
         committed: bool = False
         pushed: bool = False
+        ahead: bool = False
         mr_url: str | None = None
         error: str | None = None
         committed, error = await _commit_all(target, commit_message)
-        if error is None and committed:
-            pushed, error = await _push_branch(
-                target, repo, branch, actor_user_id=actor_user_id, resolver=resolver
-            )
+        if error is None:
+            count, count_err = await _unpushed_count(target)
+            if count_err is not None:
+                error = count_err
+            else:
+                ahead = bool(count)
+                # 有未上库提交就必须 push：包括 agent 自己 commit、工作树已干净的情况。
+                # 否则 cleanup 会删掉这些只存在于本地的提交。
+                if committed or ahead:
+                    pushed, error = await _push_branch(
+                        target, repo, branch, actor_user_id=actor_user_id, resolver=resolver
+                    )
         if error is None and pushed:
             mr_url = _ensure_mr(
                 repo, branch, initiative_id, f"Sortie Deck: {initiative_id} → {repo.branch or 'default'}"
@@ -278,33 +375,72 @@ async def publish_repos(
                 pushed=pushed,
                 mr_url=mr_url,
                 error=error,
+                ahead=ahead,
             )
         )
         if error:
             logger.warning(
                 "git publish 部分失败 initiative=%s repo=%s: %s", initiative_id, name, error
             )
-    if settings.git_cleanup_after_push and all(r.error is None for r in results) and results:
-        await cleanup_repos(workspace)
+    # cleanup 前先补一次 commit+push：首轮 push 失败、或并行阶段刚写入的新提交，
+    # 都在这里再推一次；推完再按 git 事实确认「每个 checkout 都没有未进入远端的
+    # 提交」，确认通过才允许删除工作副本。
+    if settings.git_cleanup_after_push and results:
+        by_name = {r.repo_name: r for r in results}
+        flushed = await _flush_unpushed(
+            workspace,
+            repos,
+            initiative_id,
+            commit_message,
+            actor_user_id=actor_user_id,
+            resolver=resolver,
+        )
+        for name, (committed, pushed, ahead, error) in flushed.items():
+            result = by_name.get(name)
+            if result is None:
+                continue
+            result.committed = result.committed or committed
+            result.pushed = result.pushed or pushed
+            # 保留首轮观察到的「本地领先远端」事实：兜底 push 成功后 ahead 会归零，
+            # 但事件流里应该能看到这次是靠补推才上库的。
+            result.ahead = result.ahead or ahead
+            # 兜底结果是当前状态的权威值：补推成功要清掉首轮的错误，否则 cleanup 会被误拦
+            result.error = error
+        if all(r.error is None for r in results) and await _all_pushed(workspace, repos):
+            await cleanup_repos(workspace, repos)
+        else:
+            logger.warning("git cleanup 跳过：仍有未上库提交 initiative=%s", initiative_id)
     return results
 
 
-async def cleanup_repos(workspace: Path) -> None:
-    """push 全部成功后删除 workspace/repos 工作副本（保留沙盒目录本身）。"""
+async def cleanup_repos(workspace: Path, repos: list[RepoConfig] | None = None) -> None:
+    """push 全部成功后删除工作副本（保留沙盒目录本身）。
+
+    ``repos`` 非空时只删这些仓库目录：并行波次里另一个阶段可能正在使用别的
+    checkout，整目录 rmtree 会把它们一起删掉。
+    """
+    from sortie_deck.plugins.coding import _repo_dirname
+
     repos_root = workspace / "repos"
-    if not repos_root.exists():
-        return
-    try:
-        await asyncio.to_thread(shutil.rmtree, repos_root)
-        logger.info("工作副本已回收（push 完成）: %s", repos_root)
-    except asyncio.CancelledError:
-        raise
-    except (OSError, SystemExit) as exc:
-        # 清理是收尾动作，失败不允许影响阶段结果：除 OSError 外，运行环境
-        # （如 IDE 的批量删除守卫）会在 rmtree 里 raise SystemExit——它是
-        # BaseException，继续上抛会穿过阶段与 LangGraph 直接杀掉进程
-        # （2026-10-27 事故），因此这里一并吞掉，只记 warning。
-        logger.warning("工作副本回收失败 %s: %s", repos_root, exc)
+    targets = [repos_root / _repo_dirname(r) for r in repos] if repos else [repos_root]
+    for target in targets:
+        if not target.exists():
+            continue
+        try:
+            await asyncio.to_thread(shutil.rmtree, target)
+            logger.info("工作副本已回收（push 完成）: %s", target)
+        except asyncio.CancelledError:
+            raise
+        except (OSError, SystemExit) as exc:
+            # 清理是收尾动作，失败不允许影响阶段结果：除 OSError 外，运行环境
+            # （如 IDE 的批量删除守卫）会在 rmtree 里 raise SystemExit——它是
+            # BaseException，继续上抛会穿过阶段与 LangGraph 直接杀掉进程
+            # （2026-10-27 事故），因此这里一并吞掉，只记 warning。
+            logger.warning("工作副本回收失败 %s: %s", target, exc)
+    # 本阶段的 checkout 全部清掉后，连空的 repos/ 一起回收；还有别的阶段在用时
+    # 目录非空，rmdir 会失败并被忽略。
+    with contextlib.suppress(OSError):
+        repos_root.rmdir()
 
 
 def cleanup_workspace(workspace_dir: Path) -> None:
