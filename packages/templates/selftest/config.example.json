@@ -1,0 +1,5 @@
+{
+  "start_command": "python3 -m app --port 8000",
+  "health_url": "http://127.0.0.1:8000/api/health",
+  "test_command": "node e2e/selftest.mjs"
+}
