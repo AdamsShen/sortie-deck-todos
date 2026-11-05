@@ -185,6 +185,30 @@ class Report:
 # --------------------------------------------------------------------------- #
 
 
+def _write_scripted_contracts(stage: str, cwd: str | None) -> None:
+    """剧本化 agent 也要满足阶段契约：按 REQUIRED 写占位产物。
+
+    契约校验（尤其 intake 的硬失败）看的是磁盘文件，剧本里只返回文本会让
+    「编排链路是否跑通」被误判成失败；这里补的是契约合规性，不改场景断言。
+    """
+    from sortie_deck.contracts import REQUIRED
+
+    names = [n for n in REQUIRED.get(stage, []) if n != "diff.patch"]
+    if not names or not cwd:
+        return
+    root = Path(cwd)
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        for name in names:
+            target = root / name
+            if target.exists():
+                continue
+            body = "{}" if name.endswith(".json") else f"# {name}（scripted verify stub）\n"
+            target.write_text(body, encoding="utf-8")
+    except OSError:
+        logging.getLogger(__name__).warning("剧本化产物写入失败: stage=%s cwd=%s", stage, cwd)
+
+
 class ScriptedProvider:
     """按阶段返回预设文本，用来在无模型时驱动完整编排链路。"""
 
@@ -217,6 +241,7 @@ class ScriptedProvider:
         stage = str(session.meta.get("stage") or "")
         text = self._reply_fn(stage, prompt)
         self.calls.append((stage, prompt))
+        _write_scripted_contracts(stage, cwd)
         return HarnessReply(
             status="ok",
             text=text,
