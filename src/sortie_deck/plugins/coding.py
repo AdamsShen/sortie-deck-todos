@@ -113,7 +113,7 @@ async def _extra_artifacts(
     if not (cfg.enabled and stage_in_review_scope(ctx.stage, cfg)):
         return extra, {}
     checklist = extra.get("checklist.md") or str(ctx.upstream_artifacts.get("checklist.md") or "")
-    scope = build_scope(ctx, diff, checklist)
+    scope = build_scope(ctx, diff, checklist, workspace=workspace)
     data_dir = Path(ctx.data_dir) if ctx.data_dir else None
     log = record_static_review(
         ctx, scope, harness=harness, rounds=cfg.rounds, data_dir=data_dir

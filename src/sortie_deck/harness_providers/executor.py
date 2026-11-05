@@ -1254,7 +1254,13 @@ class HarnessStageExecutor:
                 logger.warning("实现清单读取失败: %s", local_checklist)
         elif ctx.upstream_artifacts.get("checklist.md"):
             checklist = ctx.upstream_artifacts["checklist.md"]
-        scope = build_scope(ctx, diff, checklist)
+        # workspace 用于「无 git 差异」时的改动面兜底（没绑仓库的任务很常见）
+        scope = build_scope(ctx, diff, checklist, workspace=workspace)
+        # 编排层规则打分：不额外调模型，判定依据写进 review.json，事后可复盘调阈值
+        from sortie_deck.complexity import estimate_from_scope
+
+        complexity = estimate_from_scope(scope, brief=ctx.brief, checklist=checklist)
+        complexity_meta = complexity.as_dict()
 
         if harness == "mock":
             return build_skipped_log(
@@ -1263,6 +1269,7 @@ class HarnessStageExecutor:
                 reason="mock harness 不产生真实改动，跳过自审",
                 harness=harness,
                 data_dir=data_dir,
+                complexity=complexity_meta,
             )
         if str(getattr(reply, "status", "")) != "ok" or not str(
             getattr(reply, "text", "") or ""
@@ -1273,7 +1280,50 @@ class HarnessStageExecutor:
                 reason="首轮未成功产出，跳过自审",
                 harness=harness,
                 data_dir=data_dir,
+                complexity=complexity_meta,
             )
+
+        # 自适应档位：简单任务直接走老逻辑（0 轮），复杂任务按配置加轮次
+        if bool(getattr(cfg, "adaptive", True)):
+            round_budget = cfg.rounds_for(complexity.level)
+            if round_budget <= 0:
+                reason = (
+                    f"复杂度判定 {complexity.level}（{complexity.summary()}），"
+                    "按老逻辑跳过自审"
+                )
+                logger.info(
+                    "自审按复杂度跳过: initiative=%s stage=%s level=%s signals=%s",
+                    ctx.initiative_id,
+                    ctx.stage,
+                    complexity.level,
+                    complexity.signals,
+                )
+                await _emit_progress(
+                    ctx,
+                    {
+                        "phase": "review_skip",
+                        "total": 0,
+                        "status": "skipped",
+                        "title": reason,
+                    },
+                )
+                return build_skipped_log(
+                    ctx,
+                    scope,
+                    reason=reason,
+                    harness=harness,
+                    data_dir=data_dir,
+                    complexity=complexity_meta,
+                )
+            if round_budget != cfg.rounds:
+                cfg = replace(cfg, rounds=round_budget)
+                logger.info(
+                    "自审轮次按复杂度调整: initiative=%s stage=%s level=%s rounds=%d",
+                    ctx.initiative_id,
+                    ctx.stage,
+                    complexity.level,
+                    round_budget,
+                )
 
         # 预算压缩：主体回合可能已经吃掉大半阶段预算，自审必须给收尾留余量。
         # 压不下来就整段跳过——不能让增强项把阶段顶成超时失败。
@@ -1302,6 +1352,7 @@ class HarnessStageExecutor:
                 reason="阶段剩余预算不足，跳过自审",
                 harness=harness,
                 data_dir=data_dir,
+                complexity=complexity_meta,
             )
         if budgeted != original_timeout:
             cfg = replace(cfg, timeout=budgeted)
@@ -1335,6 +1386,7 @@ class HarnessStageExecutor:
             data_dir=data_dir,
             on_progress=lambda payload: _emit_progress(ctx, payload),
             circuit_breaker=bool(getattr(cfg, "circuit_breaker", True)),
+            complexity=complexity_meta,
         )
 
     async def _maybe_consult_subroom(

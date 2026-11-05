@@ -16,6 +16,7 @@ from sortie_deck.review_lens import (
     LensStatus,
     ReviewScope,
     build_scope,
+    build_skipped_log,
     build_static_review_section,
     compute_verdict,
     parse_diff_stats,
@@ -129,6 +130,68 @@ def test_build_scope_from_diff_and_checklist(tmp_path):
     assert scope.checklist_items == ["- [ ] C1 改 a.py", "- [x] C2 加测试"]
 
 
+def test_build_scope_falls_back_to_workspace_files(tmp_path):
+    """无 git 差异时按工作区现存文件兜底，避免自审范围为空表。"""
+    workspace = tmp_path / "workspace"
+    (workspace / "src").mkdir(parents=True)
+    (workspace / "repos/snake").mkdir(parents=True)
+    (workspace / ".upstream").mkdir(parents=True)
+    (workspace / "node_modules").mkdir(parents=True)
+    (workspace / "src/app.js").write_text("console.log(1)", encoding="utf-8")
+    (workspace / "repos/snake/index.js").write_text("game", encoding="utf-8")
+    (workspace / ".upstream/prd.md").write_text("# 上游", encoding="utf-8")
+    (workspace / "node_modules/x.js").write_text("dep", encoding="utf-8")
+    (workspace / "README.md").write_text("# sandbox", encoding="utf-8")
+
+    scope = build_scope(_ctx(tmp_path), "", workspace=workspace)
+
+    assert scope.source == "workspace"
+    assert "src/app.js" in scope.changed_files
+    assert "repos/snake/index.js" in scope.changed_files
+    assert ".upstream/prd.md" not in scope.changed_files
+    assert "node_modules/x.js" not in scope.changed_files
+    assert "README.md" not in scope.changed_files
+    # 提示词/报告里要说清「推断」而不是伪装成 diff
+    rendered = scope.render()
+    assert "工作区文件" in rendered
+    assert "无 git 差异" in rendered
+
+
+def test_build_scope_prefers_diff_when_available(tmp_path):
+    """有真 diff 时不被工作区兜底覆盖（source 仍为 diff）。"""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "src").mkdir()
+    (workspace / "src/a.py").write_text("x", encoding="utf-8")
+    diff = "diff --git a/src/a.py b/src/a.py\n--- a/src/a.py\n+++ b/src/a.py\n@@ -1 +1,2 @@\n+x\n"
+
+    scope = build_scope(_ctx(tmp_path), diff, workspace=workspace)
+
+    assert scope.changed_files == ["src/a.py"]
+    assert scope.source == "diff"
+    assert "改动文件" in scope.render()
+
+
+def test_skipped_log_keeps_reason_at_top_level(tmp_path):
+    """跳过原因要进顶层 reason，排障时不用逐轮翻 lens.summary。"""
+    ctx = _ctx(tmp_path)
+    scope = build_scope(ctx, "")
+    log = build_skipped_log(
+        ctx,
+        scope,
+        reason="阶段剩余预算不足，跳过自审",
+        harness="claude_code",
+        data_dir=tmp_path / "data",
+    )
+
+    assert log.verdict == "not_run"
+    assert log.reason == "阶段剩余预算不足，跳过自审"
+    assert log.summary()["reason"] == log.reason
+    payload = json.loads(Path(log.log_path).read_text(encoding="utf-8"))
+    assert payload["reason"] == "阶段剩余预算不足，跳过自审"
+    assert payload["verdict"] == "not_run"
+
+
 def test_parse_diff_stats_handles_non_git_worktree_listing():
     files, added, removed = parse_diff_stats("# worktree files (no git)\n+ src/a.py\n+ src/b.py\n")
     assert files == ["src/a.py", "src/b.py"]
@@ -202,6 +265,39 @@ async def test_run_review_lenses_survives_timeout(tmp_path):
     )
     assert log.lenses[0].status == LensStatus.FAILED
     assert "timeout" in log.lenses[0].error
+
+
+async def test_run_review_skips_simple_tasks_as_legacy(tmp_path):
+    """复杂度判定 simple → 按老逻辑跳过自审（0 轮），并记录原因与信号。"""
+    from sortie_deck.review_lens import load_review_config
+
+    workspace = tmp_path / "workspace"
+    (workspace / "src").mkdir(parents=True)
+    (workspace / "src/a.js").write_text("console.log(1)", encoding="utf-8")
+    (workspace / "src/b.js").write_text("console.log(2)", encoding="utf-8")
+    ctx = _ctx(tmp_path)
+
+    log = await HarnessStageExecutor()._run_review(
+        ctx,
+        _reply("implemented\n\n## Result\nok"),
+        provider=None,  # simple 分支不会用到 provider
+        session=None,
+        pack={},
+        cwd=workspace,
+        extra_dirs=None,
+        harness="claude_code",
+        diff="",
+        data_dir=tmp_path / "data",
+        workspace=workspace,
+        cfg=load_review_config("claude_code"),
+    )
+
+    assert log.verdict == "not_run"
+    assert "复杂度判定 simple" in log.reason
+    assert log.complexity["level"] == "simple"
+    assert all(run.status == LensStatus.SKIPPED for run in log.lenses)
+    saved = json.loads(Path(log.log_path).read_text(encoding="utf-8"))
+    assert saved["complexity"]["level"] == "simple"
 
 
 def test_load_review_config_adapts_timeout_by_harness(monkeypatch):
@@ -377,6 +473,8 @@ def test_executor_runs_review_and_attaches_report(tmp_path, monkeypatch):
     from sortie_deck.settings import settings
 
     monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    # 这两个用例验的是自审机制本身（轮次/报告/blocking），关掉自适应避免简单任务被跳过
+    monkeypatch.setattr(settings, "review_adaptive", False)
     provider = _ReviewProvider()
     result = _run(monkeypatch, provider, _ctx(tmp_path))
 
@@ -392,6 +490,7 @@ def test_executor_escalates_when_review_has_blocking(tmp_path, monkeypatch):
     from sortie_deck.settings import settings
 
     monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "review_adaptive", False)
     blocking = _review_text(
         "blocking",
         [{"severity": "blocking", "where": "src/a.py:9", "issue": "并发写覆盖", "fix": "加锁"}],

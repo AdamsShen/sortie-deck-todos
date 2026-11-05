@@ -134,6 +134,22 @@ class ReviewConfig:
     timeout: float
     blocking_policy: str
     circuit_breaker: bool = True
+    # 自适应档位：按复杂度改轮次（0 轮 = 按老逻辑跳过 LLM 自审）
+    adaptive: bool = True
+    rounds_simple: int = 0
+    rounds_standard: int = 3
+    rounds_complex: int = 5
+
+    def rounds_for(self, level: str) -> int:
+        """复杂度档位 → 实际轮次。未识别档位回落到 ``rounds``。"""
+        key = str(level or "").strip().lower()
+        if key == "simple":
+            return max(0, self.rounds_simple)
+        if key == "standard":
+            return max(0, self.rounds_standard)
+        if key == "complex":
+            return max(0, self.rounds_complex)
+        return max(0, self.rounds)
 
 
 # 未命中 harness 映射时的兜底超时：编码型 agent loop 单回合常见 5–10 分钟，
@@ -186,6 +202,12 @@ def load_review_config(harness: str | None = None) -> ReviewConfig:
     policy = str(getattr(settings, "review_blocking_policy", "hitl") or "hitl").strip().lower()
     if policy not in {"hitl", "fail", "ignore"}:
         policy = "hitl"
+    def _as_int(name: str, fallback: int) -> int:
+        try:
+            return max(0, int(getattr(settings, name, fallback) or fallback))
+        except (TypeError, ValueError):
+            return fallback
+
     return ReviewConfig(
         enabled=enabled,
         rounds=max(0, rounds),
@@ -193,6 +215,10 @@ def load_review_config(harness: str | None = None) -> ReviewConfig:
         timeout=max(10.0, timeout),
         blocking_policy=policy,
         circuit_breaker=bool(getattr(settings, "review_lens_circuit_breaker", True)),
+        adaptive=bool(getattr(settings, "review_adaptive", True)),
+        rounds_simple=_as_int("review_rounds_simple", 0),
+        rounds_standard=_as_int("review_rounds_standard", 3),
+        rounds_complex=_as_int("review_rounds_complex", 5),
     )
 
 
@@ -242,16 +268,25 @@ class ReviewScope(BaseModel):
     contract_files: list[str] = Field(default_factory=list)
     upstream_files: list[str] = Field(default_factory=list)
     checklist_items: list[str] = Field(default_factory=list)
+    # 改动面来源：diff = 真实 git 差异；workspace = 无差异时按现存文件推断
+    source: str = "diff"
 
     def render(self) -> str:
         lines = [f"- 阶段：`{self.stage}`（角色 `{self.role}`）"]
         if self.changed_files:
-            lines.append(
-                f"- 改动文件：{len(self.changed_files)} 个（+{self.diff_added}/-{self.diff_removed} 行）"
-            )
+            if self.source == "workspace":
+                lines.append(
+                    f"- 工作区文件：{len(self.changed_files)} 个"
+                    "（无 git 差异，按现存文件推断，无法给出增删行）"
+                )
+            else:
+                lines.append(
+                    f"- 改动文件：{len(self.changed_files)} 个"
+                    f"（+{self.diff_added}/-{self.diff_removed} 行）"
+                )
             lines.extend(f"  - `{name}`" for name in self.changed_files[:30])
         else:
-            lines.append("- 改动文件：未检测到（无 git 差异，按工作区文件清单判断）")
+            lines.append("- 改动文件：未检测到（无 git 差异，且工作区没有可审文件）")
         if self.contract_files:
             lines.append("- 本阶段契约产物：" + "、".join(f"`{n}`" for n in self.contract_files))
         if self.upstream_files:
@@ -292,6 +327,10 @@ class ReviewLog(BaseModel):
     lenses: list[LensRun] = Field(default_factory=list)
     scope: ReviewScope
     verdict: str = "not_run"  # passed | findings | blocking | degraded | not_run
+    # 未执行时的顶层原因（skipped / prompted）：排障时不必逐轮翻 lens.summary
+    reason: str = ""
+    # 复杂度判定结果（level / score / signals / reasons），用于复盘与调阈值
+    complexity: dict[str, Any] = Field(default_factory=dict)
     blocking_count: int = 0
     degraded: bool = False
     started_at: str = ""
@@ -315,7 +354,7 @@ class ReviewLog(BaseModel):
             for finding in run.findings
             if finding.severity == Severity.BLOCKING
         ]
-        return {
+        out: dict[str, Any] = {
             "verdict": self.verdict,
             "mode": self.mode,
             "rounds": len(self.lenses),
@@ -326,6 +365,11 @@ class ReviewLog(BaseModel):
             "blocking_findings": blocking[:5],
             "statuses": {run.lens: run.status.value for run in self.lenses},
         }
+        if self.reason:
+            out["reason"] = self.reason
+        if self.complexity:
+            out["complexity"] = self.complexity
+        return out
 
 
 # --- 解析 ---------------------------------------------------------------------
@@ -369,14 +413,68 @@ def _checklist_items(text: str) -> list[str]:
     return items[:30]
 
 
-def build_scope(ctx: StageContext, diff: str = "", checklist_text: str = "") -> ReviewScope:
+# 兜底扫描时要跳过的目录：编排层注入（.upstream/.archive）与依赖目录都不是审查对象
+_SCOPE_SKIP_PARTS = frozenset(
+    {
+        ".git",
+        ".upstream",
+        ".archive",
+        ".runs",
+        "node_modules",
+        "__pycache__",
+        ".cursor",
+        ".sortie-deck",
+        ".write_probe",
+    }
+)
+
+
+def _workspace_file_list(workspace: Path, limit: int = 40) -> list[str]:
+    """无 git 差异时的兜底：按现存文件推断本阶段改动面。
+
+    为什么需要：没绑仓库的任务里 workspace 不是 git 仓库，代码写在
+    ``workspace/repos/<name>`` 下，``git diff`` 拿不到任何改动，自审范围就成了
+    空表，模型只能凭 checklist 审——等于放弃了「审真实改动」这个前提。
+    跳过编排层注入目录与依赖目录，按 mtime 倒序取最近写的文件。
+    """
+    rows: list[tuple[float, str]] = []
+    for path in workspace.rglob("*"):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(workspace)
+        if any(part in _SCOPE_SKIP_PARTS for part in rel.parts):
+            continue
+        if path.name == "README.md":
+            continue
+        try:
+            rows.append((path.stat().st_mtime, str(rel)))
+        except OSError:
+            continue
+    rows.sort(key=lambda row: row[0], reverse=True)
+    return [rel for _, rel in rows[:limit]]
+
+
+def build_scope(
+    ctx: StageContext,
+    diff: str = "",
+    checklist_text: str = "",
+    *,
+    workspace: Path | None = None,
+) -> ReviewScope:
     """组装审查范围：git 改动 + 本阶段契约文件 + 上游产物 + 实现清单。
 
     ``diff.patch`` 本身不列进契约产物——它不是要审的对象，改动文件清单已经覆盖。
+    ``workspace`` 传入且 diff 解析不出文件时，退化为工作区现存文件清单（标记
+    ``source="workspace"``，提示词与报告里都会注明「无法给出增删行」）。
     """
     from sortie_deck.contracts import REQUIRED
 
     changed, added, removed = parse_diff_stats(diff)
+    source = "diff"
+    if not changed and workspace is not None:
+        inferred = _workspace_file_list(workspace)
+        if inferred:
+            changed, source = inferred, "workspace"
     contract_files = [n for n in REQUIRED.get(ctx.stage, []) if n != "diff.patch"]
     return ReviewScope(
         stage=ctx.stage,
@@ -387,6 +485,7 @@ def build_scope(ctx: StageContext, diff: str = "", checklist_text: str = "") -> 
         contract_files=contract_files,
         upstream_files=sorted(ctx.upstream_artifacts),
         checklist_items=_checklist_items(checklist_text),
+        source=source,
     )
 
 
@@ -600,6 +699,7 @@ async def run_review_lenses(
     data_dir: Path | None = None,
     on_progress: ProgressFn | None = None,
     circuit_breaker: bool = True,
+    complexity: dict[str, Any] | None = None,
 ) -> ReviewLog:
     """在同一会话上依次跑 N 轮审查，返回汇总日志。
 
@@ -617,6 +717,7 @@ async def run_review_lenses(
         session_id=session_id,
         rounds_requested=rounds,
         scope=scope,
+        complexity=dict(complexity or {}),
         started_at=utc_now().isoformat(),
     )
     if data_dir is not None:
@@ -757,8 +858,9 @@ def build_skipped_log(
     reason: str,
     harness: str = "",
     data_dir: Path | None = None,
+    complexity: dict[str, Any] | None = None,
 ) -> ReviewLog:
-    """未实际执行的记录（mock harness / 首轮失败），保留「为什么没审」。"""
+    """未实际执行的记录（mock harness / 首轮失败 / 简单任务），保留「为什么没审」。"""
     now = utc_now().isoformat()
     cfg = load_review_config()
     log = ReviewLog(
@@ -770,6 +872,8 @@ def build_skipped_log(
         rounds_requested=cfg.rounds,
         scope=scope,
         verdict="not_run",
+        reason=reason,
+        complexity=dict(complexity or {}),
         started_at=now,
         ended_at=now,
     )
@@ -810,6 +914,7 @@ def record_static_review(
         rounds_requested=rounds,
         scope=scope,
         verdict="not_run",
+        reason="CLI 单发模式：已写入提示词，编排层无法验证结论",
         started_at=now,
         ended_at=now,
     )
@@ -861,6 +966,13 @@ def render_review_markdown(log: ReviewLog) -> str:
         log.scope.render(),
         "",
     ]
+    if log.complexity:
+        level = log.complexity.get("level", "?")
+        detail = "；".join(log.complexity.get("reasons") or [])
+        lines.insert(3, f"- 复杂度：`{level}`" + (f"（{detail}）" if detail else ""))
+    if log.reason:
+        # 跳过/静态模式的真实原因放在最显眼处：否则报告只写 not_run 无从判断
+        lines.insert(3, f"- 未执行原因：{log.reason}")
     for run in log.lenses:
         lines.append(f"## 第 {run.round} 轮 · {run.title} — `{run.status.value}`")
         if run.summary:

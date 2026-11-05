@@ -188,6 +188,28 @@ class Settings(BaseSettings):
     review_lens_circuit_breaker: bool = True
     # 仍有 blocking 发现时的处理：hitl（默认，转人工门禁）/ fail / ignore
     review_blocking_policy: str = "hitl"
+    # --- 自适应自审：先判任务复杂度，再决定跑不跑 / 跑几轮 -----------------------
+    # 复杂度由编排层规则打分（改动文件数 / diff 行数 / 模块跨度 / 高风险词），
+    # 不额外调用模型；判定结果与信号写进 review.json 与 meta.review，可复盘调阈值。
+    review_adaptive: bool = True
+    # simple 档：文件数 <= N、diff 行数 <= M、且只动 1 个模块，才判简单
+    review_complexity_simple_max_files: int = 3
+    review_complexity_simple_max_diff_lines: int = 500
+    # complex 档：文件数 >= N、或 diff 行数 > M、或跨模块数 >= K，直接判复杂
+    # 默认口径：3 文件/500 行以内算简单，10 文件/1500 行以内算中等，再往上算复杂
+    review_complexity_complex_min_files: int = 11
+    review_complexity_complex_min_diff_lines: int = 1500
+    review_complexity_complex_min_modules: int = 3
+    # 高风险词（逗号分隔）：命中即判 complex，再小的改动也不省自审。
+    # 中文按子串匹配，英文按单词边界匹配（auth 不会命中 author）。
+    review_complexity_high_risk_keywords: str = (
+        "重构,迁移,并发,支付,权限,鉴权,多端,架构,协议,加密,审计,"
+        "refactor,migration,concurrency,payment,auth,oauth,jwt,encryption"
+    )
+    # 各档位实际跑的轮次：0 = 按老逻辑（不做 LLM 自审）
+    review_rounds_simple: int = 0
+    review_rounds_standard: int = 3
+    review_rounds_complex: int = 5
     # Stage timeout for coding CLI (seconds)
     coding_timeout_seconds: float = 900.0
     # When true, coding executors list/call MCP tools from toolkit bindings
