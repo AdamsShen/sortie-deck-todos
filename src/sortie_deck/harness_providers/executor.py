@@ -284,8 +284,16 @@ def _is_doc_stage(stage: str) -> bool:
 
     intake 也算文档型：它的唯一契约是 `intake.md`，cwd 指到 artifacts/intake
     后，即便模型想多写 PRD 也只会落在自己的产物目录，不会污染 workspace。
+
+    办公/研究阶段（``office_*`` / ``research_*``）的产物同样是 md 文档，
+    cwd 直接指向产物目录，写入即进任务档案。
     """
-    return stage in _DOC_STAGE_NAMES or stage.endswith("_tech_design")
+    return (
+        stage in _DOC_STAGE_NAMES
+        or stage.endswith("_tech_design")
+        or stage.startswith("office_")
+        or stage.startswith("research_")
+    )
 
 
 def _all_contract_names() -> set[str]:
@@ -478,6 +486,45 @@ Rules:
   "tail": "<last lines>"}}], and summarise pass/fail in `selftest.md` (contract artifact).
 - A failing command must be reported as failing — never rewrite the command to make it pass."""
 
+# 注入 runner 之后的硬约束：环境生命周期交给脚本，模型只负责「跑 → 读结果 → 修失败项」。
+# 实测（2026-11-05 贪吃蛇任务）自测两阶段 241 步里 99 步是起服务/杀进程/等待/查进程。
+_SELFTEST_RUNNER_RULES = """Verification runner (mandatory — do NOT manage the server yourself):
+- `scripts/selftest_runner.sh` is injected for this stage. Run it ONCE:
+  `bash scripts/selftest_runner.sh`.
+- It starts the service, waits for the health URL, runs every case, writes
+  `selftest_result.json`, then tears the service down.
+- Read `selftest_result.json`; fix ONLY the failing cases it lists, then re-run the same script.
+- Never start/stop services by hand and never use pkill/kill/sleep/ps/lsof — the runner owns the
+  lifecycle; extra manual attempts only burn turns and leave stale ports.
+- If `selftest.config.json` is missing, fill it from the project's own e2e entry
+  (package.json scripts / Makefile / scripts/*.sh). Do not invent ports or commands.
+- Summarise pass/fail in `selftest.md` (contract artifact) and append run records to
+  `selftest_log.json`.
+
+Coverage checklist (reference only — the runner executes them in one pass):
+{items}"""
+
+
+def _ensure_selftest_runner(workspace: Path, stage: str) -> None:
+    """自测阶段注入固定 e2e runner；项目已有同名脚本时不动它。
+
+    注入失败只告警：prompt 会检测脚本是否存在并回退到逐条验证，不影响任务。
+    """
+    if not stage.endswith("_selftest"):
+        return
+    target = workspace / "scripts" / "selftest_runner.sh"
+    if target.exists():
+        return
+    from sortie_deck.templates import TEMPLATES_DIR
+
+    template = TEMPLATES_DIR / "selftest" / "runner.sh"
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(template.read_text(encoding="utf-8"), encoding="utf-8")
+        target.chmod(0o755)
+    except OSError as exc:
+        logger.warning("自测 runner 注入失败（回退逐条验证）: %s", exc)
+
 # 没有上游清单（如 express 轨没有技术方案阶段）时的兜底：先立清单再执行，
 # 否则「逐项 + 可执行验证」只对有 tech_design 的航线生效。
 _BUILD_CHECKLIST_FALLBACK = """Implementation checklist (no upstream checklist — create one first):
@@ -515,9 +562,19 @@ def _checklist_exec_section(ctx: StageContext, cwd: Path) -> str:
         logger.warning("实现清单读取失败: %s", local)
     if not items:
         items = str(ctx.upstream_artifacts.get("checklist.md") or "").strip()
+    runner = cwd / "scripts" / "selftest_runner.sh"
     if not items:
-        # 自测阶段没有清单就只按 selftest.md 契约走；编码阶段仍要求先立清单再干活
-        return _BUILD_CHECKLIST_FALLBACK if is_build else ""
+        # 自测阶段没有清单：有 runner 仍要求一次跑完全部用例；编码阶段仍要求先立清单
+        if is_build:
+            return _BUILD_CHECKLIST_FALLBACK
+        if is_selftest and runner.is_file():
+            return _SELFTEST_RUNNER_RULES.format(
+                items="(no checklist upstream — cover the full suite)"
+            )
+        # 自测阶段没有清单就只按 selftest.md 契约走
+        return ""
+    if is_selftest and runner.is_file():
+        return _SELFTEST_RUNNER_RULES.format(items=items[:4000])
     template = _SELFTEST_CHECKLIST_RULES if is_selftest else _BUILD_CHECKLIST_RULES
     return template.format(items=items[:6000])
 
@@ -884,6 +941,8 @@ class HarnessStageExecutor:
         data_dir = Path(ctx.data_dir) if ctx.data_dir else settings.data_dir
         worktrees_dir = Path(ctx.worktrees_dir) if ctx.worktrees_dir else settings.worktrees_dir
         workspace = ensure_worktree(data_dir.parent, ctx.initiative_id, worktrees_dir)
+        # 自测阶段注入固定 runner：把起服务/健康检查/清理从模型手里拿走
+        _ensure_selftest_runner(workspace, ctx.stage)
         repo_section, repo_log = await clone_repos(
             ctx.repos, workspace, ctx.initiative_id, actor_user_id=ctx.actor_user_id
         )
@@ -1636,6 +1695,10 @@ class HarnessStageExecutor:
             # 本阶段实际挂载的 MCP（strict 关闭时为空，由 SDK 按 setting_sources 全量加载）
             "mcp_servers": mcp_servers,
             "mcp_notes": mcp_notes,
+            # 本阶段禁用工具：provider 据此设置底层 agent 的工具白名单（claude_code
+            # 映射到 SDK disallowed_tools）。放在 pack 里而不是改 send 签名，
+            # 旧 provider 忽略该键即可，不会因签名不匹配报错。
+            "disallowed_tools": list(ctx.disallowed_tools or []),
         }
         return out
 
@@ -1785,6 +1848,14 @@ class HarnessStageExecutor:
             f"Human instruction: {ctx.human_instruction or 'none'}",
             f"Mission brief:\n{ctx.brief}",
         ]
+        if ctx.disallowed_tools:
+            # 显式告知工具禁用：否则 agent 会先尝试 Bash 撞一次拒绝再放弃，白烧回合。
+            sections.append(
+                "Tool policy for this stage: "
+                f"{', '.join(ctx.disallowed_tools)} is NOT available. "
+                "Do not verify code by executing it here — this stage only produces the "
+                "design document; implementation and verification belong to later stages."
+            )
         if ctx.stage == "intake":
             # 集结只做需求收敛：这段写死唯一产出与轮次目标，防止它去产 PRD
             sections.append(_INTAKE_SPEC)

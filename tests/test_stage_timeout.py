@@ -34,6 +34,33 @@ def test_global_env_override_applies() -> None:
     assert _resolve_stage_timeout("eng_backend", {}, cfg) == 7200.0
 
 
+def test_tech_design_stage_capped_by_override() -> None:
+    """技术方案阶段被阶段级覆盖压到 600s，不再套全局 1800s。"""
+    cfg = Settings()
+    assert _resolve_stage_timeout("eng_web_tech_design", {}, cfg) == 600.0
+    assert _resolve_stage_timeout("eng_backend_tech_design", None, cfg) == 600.0
+
+
+def test_stage_override_exact_beats_wildcard() -> None:
+    """精确规则优先于通配；未命中的阶段仍走原默认。"""
+    cfg = Settings(stage_timeout_overrides="*_tech_design=600,eng_backend_tech_design=900")
+    assert _resolve_stage_timeout("eng_web_tech_design", {}, cfg) == 600.0
+    assert _resolve_stage_timeout("eng_backend_tech_design", {}, cfg) == 900.0
+    assert _resolve_stage_timeout("product_prd", {}, cfg) == 1800.0
+
+
+def test_stage_spec_timeout_beats_override() -> None:
+    """航线 spec 显式配置仍是最高优先级。"""
+    cfg = Settings(stage_timeout_overrides="*_tech_design=600")
+    assert _resolve_stage_timeout("eng_web_tech_design", {"timeout_seconds": 1200}, cfg) == 1200.0
+
+
+def test_invalid_stage_override_falls_back() -> None:
+    """非法覆盖值只告警，不能让阶段拿不到超时。"""
+    cfg = Settings(stage_timeout_overrides="*_tech_design=abc")
+    assert _resolve_stage_timeout("eng_web_tech_design", {}, cfg) == 1800.0
+
+
 def test_spec_timeout_survives_normalize_and_materialize() -> None:
     """PipelineStageSpec.timeout_seconds 要能穿过 normalize_specs → materialize_template。"""
     from sortie_deck.models import PipelineStageSpec

@@ -423,6 +423,9 @@ class StageContext(BaseModel):
     # 本阶段总超时预算（秒，编排层注入）。执行器据此给自审压缩单轮超时，
     # 避免「主体回合 + 多轮自审」一起撞阶段超时，把已经产出的阶段判成 fail。
     stage_timeout_seconds: float = 0.0
+    # 本阶段禁用的工具名（编排层注入，如 tech_design 禁 Bash）。执行器转交
+    # harness 后由底层 agent 直接拒绝该工具；空列表表示不限制，保持旧行为。
+    disallowed_tools: list[str] = Field(default_factory=list)
 
 
 class StageResult(BaseModel):
@@ -442,6 +445,10 @@ class CreateInitiativeRequest(BaseModel):
     pipeline_track: Literal["express", "standard", "default", "research"] | None = None
     # auto | trivial | normal | complex — feeds planner when track unset
     complexity: Literal["auto", "trivial", "normal", "complex"] = "auto"
+    # 任务类型与档位：auto 时由后端规则判定（见 tiers.py）；显式指定则强制采用。
+    # 档位是阶段预算，planner 只能在预算内排序/删减，不能新增阶段。
+    task_kind: Literal["auto", "delivery", "knowledge"] = "auto"
+    tier: Literal["auto", "express", "standard", "full"] = "auto"
     coding_executor: Literal["mock", "claude_code", "cursor_cli", "auto"] = "auto"
     # Agent harness for the whole mission; None → TDT_DEFAULT_HARNESS.
     # Locked on start; mid-run change requires HITL switch_harness approval.

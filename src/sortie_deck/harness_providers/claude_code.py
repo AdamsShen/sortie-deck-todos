@@ -174,9 +174,17 @@ class ClaudeCodeProvider:
 
         pack = context_pack or {}
         strict = bool(settings.harness_mcp_strict)
+        # 阶段级禁用工具（如 tech_design 禁 Bash）：SDK 会从可用工具列表里摘掉，
+        # agent 连尝试调用的机会都没有，避免「写方案」退化成「提前实现」。
+        disallowed = [
+            str(name).strip()
+            for name in (pack.get("disallowed_tools") or [])
+            if str(name or "").strip()
+        ]
         options = ClaudeAgentOptions(
             cwd=cwd or None,
             permission_mode=settings.coding_permission_mode,
+            disallowed_tools=disallowed or None,
             resume=session.native_id or None,
             setting_sources=_setting_sources(settings.harness_setting_sources),
             # 额外可写目录（阶段产物目录 / 沙盒）：CLI 会把它当 --add-dir 处理。

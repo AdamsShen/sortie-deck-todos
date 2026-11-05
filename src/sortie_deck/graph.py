@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypedDict
@@ -220,6 +221,59 @@ def _validate_or_explain(stage: str, result: StageResult) -> None:
         raise
 
 
+def _stage_rules(raw: str | None) -> list[tuple[str, str]]:
+    """解析 `stage=value,stage2=value` 形式的阶段规则，保持书写顺序。"""
+    rules: list[tuple[str, str]] = []
+    for part in str(raw or "").split(","):
+        part = part.strip()
+        if not part or "=" not in part:
+            continue
+        stage, value = part.split("=", 1)
+        stage, value = stage.strip(), value.strip()
+        if stage and value:
+            rules.append((stage, value))
+    return rules
+
+
+def _match_stage_rule(stage: str, raw: str | None) -> str | None:
+    """按阶段名取规则值：精确匹配优先，其次 `*` 通配（如 `*_tech_design`）。
+
+    精确优先是为了让「单阶段特例」不被通配抢走；同级按书写顺序取第一条。
+    """
+    rules = _stage_rules(raw)
+    for pattern, value in rules:
+        if "*" not in pattern and pattern == stage:
+            return value
+    for pattern, value in rules:
+        if "*" not in pattern:
+            continue
+        prefix, _, suffix = pattern.partition("*")
+        if (
+            len(stage) >= len(prefix) + len(suffix)
+            and stage.startswith(prefix)
+            and stage.endswith(suffix)
+        ):
+            return value
+    return None
+
+
+def _resolve_stage_disallowed_tools(stage: str, app_cfg: Any = None) -> list[str]:
+    """解析本阶段禁用的工具名（空列表 = 不限制）。
+
+    结果由执行器转交 harness；claude_code 直接映射到 SDK 的
+    ``disallowed_tools``，agent 连尝试调用的机会都没有。
+    """
+    from sortie_deck.settings import settings as _settings
+
+    raw = getattr(app_cfg, "stage_disallowed_tools", None)
+    if raw is None:
+        raw = getattr(_settings, "stage_disallowed_tools", "")
+    value = _match_stage_rule(stage, str(raw or ""))
+    if not value:
+        return []
+    return [name.strip() for name in value.replace(";", "|").split("|") if name.strip()]
+
+
 def _resolve_stage_timeout(
     stage: str,
     stage_cfg: dict[str, Any] | None,
@@ -228,6 +282,7 @@ def _resolve_stage_timeout(
     """解析单个阶段的超时上限（秒）。
 
     优先级：阶段 spec 的 timeout_seconds（航线 YAML / 前端编辑阶段均可配）
+    > 阶段级覆盖 stage_timeout_overrides（如 `*_tech_design=600`，支持 `*` 通配）
     > 编码类阶段默认（eng_stage_timeout_seconds=3600s）
     > 全局默认（stage_timeout_seconds=1800s）。
     app_cfg 是编排器实例注入的 Settings，优先于进程级全局 settings，
@@ -236,11 +291,28 @@ def _resolve_stage_timeout(
     configured = (stage_cfg or {}).get("timeout_seconds")
     if configured:
         return float(configured)
+
+    from sortie_deck.settings import settings as _settings
+
+    # 阶段级覆盖：文档型阶段（tech_design）只该写方案，不该套编码阶段的量级
+    raw_overrides = getattr(app_cfg, "stage_timeout_overrides", None)
+    if raw_overrides is None:
+        raw_overrides = getattr(_settings, "stage_timeout_overrides", "")
+    override = _match_stage_rule(stage, str(raw_overrides or ""))
+    if override:
+        try:
+            seconds = float(override)
+        except ValueError:
+            logger.warning(
+                "阶段超时覆盖配置非法已忽略: stage=%s value=%s", stage, override
+            )
+        else:
+            if seconds > 0:
+                return seconds
+
     is_build = stage in ENG_BUILD_STAGES
     attr = "eng_stage_timeout_seconds" if is_build else "stage_timeout_seconds"
     fallback = 3600.0 if is_build else 1800.0
-
-    from sortie_deck.settings import settings as _settings
 
     return float(
         getattr(app_cfg, attr, None)
@@ -1499,6 +1571,50 @@ def build_graph_from_template(
         # 只靠 current_stage 落库要等阶段结束，运行中界面会长时间没有反馈。
         initiative_id = str(state.get("initiative_id") or "")
         started_at = ""
+        # 指标采集：墙钟起点用于甘特图定位，单调时钟用于耗时（不受系统时间调整影响）。
+        # tool_calls 由 _stage_progress 在 phase=activity 时累加。
+        metric_started = time.time()
+        metric_started_mono = time.monotonic()
+        metric_stats: dict[str, int] = {"tool_calls": 0}
+
+        def _persist_metrics(result_state: PipelineState | None) -> None:
+            """阶段收尾写指标（旁路）：失败只告警，绝不影响任务执行。"""
+            try:
+                from sortie_deck.orchestrator import get_orchestrator
+
+                result = (result_state or {}).get("last_result") or {}
+                result_meta = result.get("meta") or {}
+                review = result_meta.get("review") or {}
+                get_orchestrator().record_stage_metric(
+                    initiative_id=initiative_id,
+                    stage=stage,
+                    role=stage_role.value,
+                    harness=str(state.get("harness") or ""),
+                    status=str(result.get("status") or ("error" if result_state is None else "")),
+                    started_at=metric_started,
+                    ended_at=time.time(),
+                    tool_calls=int(metric_stats.get("tool_calls") or 0),
+                    review_rounds=int(review.get("rounds") or 0),
+                    review_verdict=str(review.get("verdict") or ""),
+                    meta={
+                        "timeout": bool(result_meta.get("timeout")),
+                        "salvaged_artifacts": list(
+                            result_meta.get("salvaged_artifacts") or []
+                        ),
+                        "qa_attempt": int(state.get("qa_attempt") or 1),
+                        "duration_mono_ms": int(
+                            (time.monotonic() - metric_started_mono) * 1000
+                        ),
+                    },
+                )
+            except Exception:  # noqa: BLE001 — 指标是旁路
+                logging.getLogger(__name__).warning(
+                    "阶段指标采集失败 initiative=%s stage=%s",
+                    initiative_id,
+                    stage,
+                    exc_info=True,
+                )
+
         try:
             from sortie_deck.orchestrator import get_orchestrator
 
@@ -1543,13 +1659,20 @@ def build_graph_from_template(
                 "sortie.qa_attempt": int(state.get("qa_attempt") or 1),
             },
         ) as stage_span:
-            result_state = await _run_stage(state, stage)
+            result_state: PipelineState | None = None
+            try:
+                result_state = await _run_stage(state, stage, metric_stats)
+            finally:
+                # 指标必须在阶段结束的第一时间落库：超时/异常也要留痕
+                _persist_metrics(result_state)
             # 超时/契约失败/needs_hitl 都是「转成返回值的失败」，span() 抓不到异常，
             # 必须显式按 result.status 落 ERROR，否则 trace 全绿而任务实际停了。
             obs.mark_result(stage_span, result_state.get("last_result") or {})
             return result_state
 
-    async def _run_stage(state: PipelineState, stage: str) -> PipelineState:
+    async def _run_stage(
+        state: PipelineState, stage: str, stats: dict[str, int] | None = None
+    ) -> PipelineState:
         if state.get("stopped"):
             return {**state, "status": "stopped", "stage": stage}
 
@@ -1718,8 +1841,13 @@ def build_graph_from_template(
 
             阶段主回合可能跑十几分钟、自审还要多轮，只靠最终的 update 事件，
             前端除了「出击中」看不到任何变化。这里把每个子步骤即时推出去。
+
+            同时累计工具步数（只算 ``phase=activity``）：``stage_start`` /
+            ``stage_end`` / ``review_*`` 是阶段控制事件，不是工具调用。
             """
             try:
+                if stats is not None and payload.get("phase") == "activity":
+                    stats["tool_calls"] = int(stats.get("tool_calls") or 0) + 1
                 from sortie_deck.orchestrator import get_orchestrator
 
                 await get_orchestrator()._emit(
@@ -1779,6 +1907,8 @@ def build_graph_from_template(
             progress_cb=_stage_progress,
             # 自审必须在这条总预算内收尾，不能反过来把阶段顶成超时
             stage_timeout_seconds=timeout,
+            # 阶段级工具禁用（tech_design 禁 Bash）：执行器转交 harness 生效
+            disallowed_tools=_resolve_stage_disallowed_tools(stage, app_cfg),
         )
 
         # Session-capable executors get a host so they can pull a sub-room

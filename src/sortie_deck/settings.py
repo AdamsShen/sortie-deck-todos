@@ -331,6 +331,15 @@ class Settings(BaseSettings):
     # 编码 agent 要写多模块代码并跑自测，30 分钟不够（2026-11-04 本机实测
     # eng_backend 在 1800s 被砍时 agent 仍在正常产出），默认放宽到 1 小时。
     eng_stage_timeout_seconds: float = 3600.0
+    # 阶段级超时覆盖：`stage=秒,stage2=秒`，支持 `*` 通配（`*_tech_design=600`）。
+    # 优先级低于航线 spec 的 timeout_seconds，高于按阶段类别取的默认值。
+    # 技术方案是文档型阶段（cwd 直指产物目录），600s 足够；套全局 1800s 会让
+    # 一个卡住的设计阶段白等半小时（2026-11-05 实测超时 1800s 后被强杀）。
+    stage_timeout_overrides: str = "*_tech_design=600"
+    # 阶段级工具禁用：`stage=Tool1|Tool2,...`，支持 `*` 通配。
+    # 技术方案阶段只该产出文档：放开 Bash 会让 agent 顺手做 spike，把「写方案」
+    # 变成「提前实现」（2026-11-05 实测 eng_web_tech_design 58 步里 45 次 Bash）。
+    stage_disallowed_tools: str = "*_tech_design=Bash"
     # --- OpenTelemetry 全链路追踪（见 docs/plans/2026-10-27-otel-full-tracing.md）---
     # 默认关；开启且 otel_endpoint 非空时才真正建 provider 导出 span。
     # 只装了 opentelemetry-api 没装 [otel] extra 时自动降级为 no-op，不影响启动。
@@ -414,6 +423,11 @@ class Settings(BaseSettings):
     def events_sqlite(self) -> Path:
         """mission 事件日志（SSE 的唯一数据源，多进程共享）。"""
         return self.data_dir / "events.sqlite"
+
+    @property
+    def metrics_sqlite(self) -> Path:
+        """阶段指标（耗时/工具步数/review 轮次），供设置页耗时分析查询。"""
+        return self.data_dir / "metrics.sqlite"
 
     @property
     def api_keys_db(self) -> Path:
