@@ -269,16 +269,131 @@ _REFLECT_MIN_REPLY_CHARS = 200
 # 文档型阶段的契约产物就是文档本身，把 cwd 直接指向 artifacts/<stage>/，写入即进
 # 任务档案；workspace 只保留代码与仓库副本（见
 # docs/plans/2026-10-30-artifact-direct-write.md）。
-_DOC_STAGE_NAMES = frozenset({"product_prd", "qa_cases", "design_ui"})
+_DOC_STAGE_NAMES = frozenset({"intake", "product_prd", "qa_cases", "design_ui"})
 _UPSTREAM_DIRNAME = ".upstream"
 _RUNS_DIRNAME = ".runs"
 _WORKSPACE_LINK = "workspace"
+# 跨阶段遗留文件的归档目录（放在 workspace 内，随沙盒一起回收）
+_ARCHIVE_DIRNAME = ".archive"
 
 
 def _is_doc_stage(stage: str) -> bool:
-    """是否文档型阶段（产物为 md/json 文档，无代码改动）。"""
+    """是否文档型阶段（产物为 md/json 文档，无代码改动）。
+
+    intake 也算文档型：它的唯一契约是 `intake.md`，cwd 指到 artifacts/intake
+    后，即便模型想多写 PRD 也只会落在自己的产物目录，不会污染 workspace。
+    """
     return stage in _DOC_STAGE_NAMES or stage.endswith("_tech_design")
 
+
+def _all_contract_names() -> set[str]:
+    """全部阶段的契约文件名并集（diff.patch 由 git 生成，不算 agent 直写产物）。"""
+    from sortie_deck.contracts import REQUIRED
+
+    names = {name for names in REQUIRED.values() for name in names}
+    names.discard("diff.patch")
+    return names
+
+
+def _mirror_upstream(target_dir: Path, upstream: dict[str, str]) -> dict[str, str]:
+    """把上游契约产物镜像到阶段可读目录，返回 ``name → 镜像后路径``。
+
+    为什么必须镜像：harness 只能稳定读 cwd 内的文件，cwd 之外的上游路径
+    （``artifacts/<prev>/``）在 acceptEdits 下会被 Read 权限拒绝。实测
+    ini_937080976c38 的开发阶段因此读不到 product_prd 的 prd.md v1.1，
+    退回去读了 workspace 里 intake 遗留的 v1.0（43 条），实现口径直接错版。
+    """
+    local: dict[str, str] = {}
+    if not upstream:
+        return local
+    target_dir.mkdir(parents=True, exist_ok=True)
+    for name, content in upstream.items():
+        if not str(content or "").strip():
+            continue
+        target = target_dir / Path(name).name
+        try:
+            target.write_text(content, encoding="utf-8")
+        except OSError:
+            logger.warning("上游产物镜像失败: %s", target)
+            continue
+        local[name] = str(target)
+    return local
+
+
+def _strict_contract_stage(stage: str) -> bool:
+    """该阶段缺契约文件是否直接判失败。
+
+    历史行为是把缺失的契约文件包成「回复说明」继续往下走（mock harness 与
+    老任务依赖这个兼容性）；但 intake 一旦缺 `intake.md`，包装件会掩盖「越界
+    写了 PRD、正式契约反而没写」的事实，所以集结阶段改为硬失败。
+    """
+    from sortie_deck.settings import settings
+
+    stages = {
+        part.strip().lower()
+        for part in str(getattr(settings, "strict_contract_stages", "") or "").split(",")
+        if part.strip()
+    }
+    return str(stage or "").strip().lower() in stages
+
+
+def _sweep_stale_contracts(
+    workspace: Path, stage: str, artifact_dir: Path | None = None
+) -> list[str]:
+    """把其他阶段遗留在 workspace 根层的契约文件移进 ``.archive/``。
+
+    编码类阶段 cwd 就是 workspace，agent 会优先读 cwd 里的同名文件；上一阶段
+    留下的旧版 ``prd.md`` 会盖住 ``.upstream/`` 里的正式版（这正是 43 条被当成
+    54 条依据的原因）。只处理契约文件名、只看根层、只归档不删除，保留追溯。
+    文档型阶段在 ``_prepare_stage_output`` 之后调用，草稿已经先镜像进
+    ``.upstream/``，所以这里搬走不会丢失审校入口。
+    """
+    stale = _all_contract_names() - set(_contract_names(stage))
+    if not stale:
+        return []
+    archive = workspace / _ARCHIVE_DIRNAME / f"{stage}-{time.strftime('%Y%m%d-%H%M%S')}"
+    moved: list[str] = []
+    for name in sorted(stale):
+        path = workspace / name
+        if not path.is_file():
+            continue
+        try:
+            archive.mkdir(parents=True, exist_ok=True)
+            path.replace(archive / name)
+        except OSError:
+            logger.warning("跨阶段遗留清理失败: %s", path, exc_info=True)
+            continue
+        moved.append(name)
+    if moved:
+        logger.warning(
+            "已清理跨阶段遗留契约文件: stage=%s files=%s -> %s",
+            stage,
+            ",".join(moved),
+            archive,
+        )
+    return moved
+
+
+_INTAKE_SPEC = """Intake deliverable (THIS stage only — do not do later stages' work):
+Write exactly ONE file, `intake.md`, in the output dir, with these sections:
+1. `需求复述` — restate the brief in <=10 lines.
+2. `范围内 / 范围外` — what this mission does and explicitly does not do.
+3. `关键假设` — assumptions you had to make (one line each).
+4. `待确认` — open questions for the PRD stage.
+5. `交接要点` — what `product_prd` must produce next.
+
+Hard limits:
+- Never write `prd.md`, `acceptance.json`, design specs or test cases here; those belong to later stages and are contract-checked there.
+- Do not expand open questions into a PRD — record them under `待确认` and stop.
+- Write `intake.md` early (within the first few tool calls), then refine in place. Target: finish within 10 tool turns.
+- `intake.md` is the only artifact checked for this stage: if it is missing or empty, the stage fails."""
+
+_SCOPE_GUARD = """Scope guard (hard limits):
+- Write ONLY this stage's contract artifacts ({own}). Never create files that belong to other stages ({others}) — a stray copy becomes stale input that the next stage reads instead of the authoritative upstream.
+- Upstream truth lives in `.upstream/` (read-only mirror). Files with the same name elsewhere in the workspace are leftovers — never use them as a basis.
+- Do not read or grep the orchestrator source tree, `~/.claude`, or other missions' directories. If the workspace is empty (no repos bound), one look is enough — no repeated `ls`/`find`/`tree` sweeps.
+- Do not load skills unrelated to this stage.
+- Finish with a `## Result` section."""
 
 _CHECKLIST_PLAN_SECTION = """Implementation plan artifact (write `checklist.md`):
 Alongside `tech_design.md`, produce `checklist.md` — an ordered, executable checklist the build
@@ -472,20 +587,8 @@ def _prepare_stage_output(
     _archive_previous_artifacts(artifact_dir, names)
     snapshot = _snapshot_contract_files([artifact_dir, workspace], names)
 
-    local_upstream: dict[str, str] = {}
     upstream_dir = artifact_dir / _UPSTREAM_DIRNAME
-    if upstream:
-        upstream_dir.mkdir(parents=True, exist_ok=True)
-        for name, content in upstream.items():
-            if not str(content or "").strip():
-                continue
-            target = upstream_dir / Path(name).name
-            try:
-                target.write_text(content, encoding="utf-8")
-            except OSError:
-                logger.warning("上游产物镜像失败: %s", target)
-                continue
-            local_upstream[name] = str(target)
+    local_upstream = _mirror_upstream(upstream_dir, upstream)
 
     # 上一阶段可能把同名契约文件直接留在 workspace（如 intake 的 prd.md v1.0）：
     # 这些文件不在 artifact 索引里，但正是本阶段需要审校的草稿，一并镜像进 .upstream/
@@ -692,6 +795,7 @@ class HarnessStageExecutor:
         doc_stage = bool(direct_write and artifact_dir is not None and _is_doc_stage(ctx.stage))
         snapshot: dict[str, tuple[float, int]] = {}
         extra_dirs: list[str] = []
+        stale_moved: list[str] = []
         if doc_stage and artifact_dir is not None:
             local_upstream, snapshot = _prepare_stage_output(
                 stage=ctx.stage,
@@ -702,6 +806,8 @@ class HarnessStageExecutor:
             if local_upstream:
                 # prompt 里的「按需读取」路径必须落在 cwd 内，否则多数 harness 读不了
                 ctx = ctx.model_copy(update={"upstream_paths": local_upstream})
+            # 历史草稿已镜像进 .upstream，再清掉 workspace 里的其余阶段遗留副本
+            stale_moved = _sweep_stale_contracts(workspace, ctx.stage, artifact_dir)
             cwd = artifact_dir
             # workspace 作为额外目录：claude/codex 可读写，其余 harness 忽略
             extra_dirs = [str(workspace)]
@@ -712,6 +818,15 @@ class HarnessStageExecutor:
                 )
         else:
             cwd = workspace
+            # 编码类阶段没有 .upstream 机制：上游在 artifacts/<prev>/，harness 读
+            # cwd 之外的路径会被权限拒绝，agent 只能退回去读 workspace 里的旧草稿。
+            # 先清遗留再把正式上游镜像进 workspace/.upstream，prompt 指向镜像路径。
+            stale_moved = _sweep_stale_contracts(workspace, ctx.stage, artifact_dir)
+            local_upstream = _mirror_upstream(
+                workspace / _UPSTREAM_DIRNAME, ctx.upstream_artifacts
+            )
+            if local_upstream:
+                ctx = ctx.model_copy(update={"upstream_paths": local_upstream})
             snapshot = _snapshot_contract_files(
                 [workspace, artifact_dir], _contract_names(ctx.stage)
             )
@@ -946,6 +1061,13 @@ class HarnessStageExecutor:
             snapshot=snapshot,
             diff=stage_diff or None,
         )
+        # 契约缺件不能靠回复包装蒙混过关：包装件会让阶段"看起来有产物"，下游读到的
+        # 却是一段说明（intake 越界写 PRD、正式契约反而不存在，就是这么被放过的）。
+        # 只对 strict_contract_stages 列出的阶段硬失败，其余保持历史降级行为。
+        missing_contracts = list(artifact_meta.get("artifact_degraded") or [])
+        strict_missing = bool(missing_contracts) and _strict_contract_stage(ctx.stage)
+        if strict_missing:
+            ok = False
         meta = {
             "harness": harness,
             "session_id": session.native_id or session.id,
@@ -955,6 +1077,8 @@ class HarnessStageExecutor:
             "artifact_direct_write": doc_stage,
             "files_written": _count_impl_files(workspace, has_repos=bool(ctx.repos)),
             "context_tokens": int(pack.get("token_estimate") or 0),
+            # 跨阶段遗留清理记录：工作台/排障时用于确认「本阶段读到的是正式版」
+            "stale_moved": stale_moved,
             **artifact_meta,
         }
         # 自审报告：真正跑过轮次才进产物（skipped/prompted 只留日志，避免假报告），
@@ -1013,8 +1137,15 @@ class HarnessStageExecutor:
         )
         return StageResult(
             status="ok" if ok else "fail",
-            message=f"harness `{harness}` stage finished" if ok else (
-                f"harness `{harness}` 未产出有效回复（见 reply.md / implementation.md）"
+            message=(
+                f"harness `{harness}` stage finished"
+                if ok
+                else (
+                    f"harness `{harness}` 未写出契约产物：{', '.join(missing_contracts)}"
+                    "（见 reply.md）"
+                    if strict_missing
+                    else f"harness `{harness}` 未产出有效回复（见 reply.md / implementation.md）"
+                )
             ),
             artifacts=artifacts,
             proposed_next=proposed_next or fallback_next,
@@ -1465,10 +1596,14 @@ class HarnessStageExecutor:
         else:
             location_line = f"Workspace (cwd): `{workspace}` — you may create/edit files here."
             if artifact_dir is not None:
-                location_line += (
-                    f"\nContract artifacts dir: `{artifact_dir}` — write "
-                    f"{contract_hint or 'the contract files'} there too; it is the mission archive."
+                # 无契约阶段不再回退成 "the contract files"：含糊指令会让模型自己找
+                # 规格（实测 intake 因此反手写了整份 PRD + 验收用例，越界且留脏文件）
+                write_hint = (
+                    f"write {contract_hint} there too; it is the mission archive."
+                    if contract_hint
+                    else "this stage has no contract artifact — do not write stage documents there."
                 )
+                location_line += f"\nContract artifacts dir: `{artifact_dir}` — {write_hint}"
         sections: list[str] = [
             ctx.persona or f"You are the {ctx.role} agent in Sortie Deck.",
             (
@@ -1480,12 +1615,16 @@ class HarnessStageExecutor:
             f"Human instruction: {ctx.human_instruction or 'none'}",
             f"Mission brief:\n{ctx.brief}",
         ]
+        if ctx.stage == "intake":
+            # 集结只做需求收敛：这段写死唯一产出与轮次目标，防止它去产 PRD
+            sections.append(_INTAKE_SPEC)
         if briefs:
             from sortie_deck.artifact_summary import render_artifact_briefs
 
             sections.append(
-                "Upstream artifacts（只给摘要与路径；需要细节时用 Read 打开对应路径，"
-                "不要凭文件名猜内容）:\n"
+                "Upstream artifacts（权威副本已镜像到阶段目录内，只给摘要与路径；"
+                "需要细节时用 Read 打开对应路径，不要凭文件名猜内容；"
+                "workspace 其他位置的同名文件是遗留物，禁止作为依据）:\n"
                 + render_artifact_briefs(briefs)
                 + "\n\n读取建议：只读与本阶段产出直接相关的 1-2 份，其余按需再取，"
                 "不要为了完整性通读全部产物。"
@@ -1544,6 +1683,17 @@ class HarnessStageExecutor:
             sections.append(
                 "Mission artifact index:\n" + "\n".join(f"- `{p}`" for p in artifact_index[:20])
             )
+        # 边界硬限制放最后：模型对结尾指令最敏感，越界产他阶段文件是最贵的错误
+        own_contract = _contract_names(ctx.stage)
+        sections.append(
+            _SCOPE_GUARD.format(
+                own="、".join(f"`{n}`" for n in own_contract) or "(none)",
+                others="、".join(
+                    f"`{n}`" for n in sorted(_all_contract_names() - set(own_contract))
+                )
+                or "(none)",
+            )
+        )
         sections.append(
             "Output contract: finish with a markdown section titled `## Result` summarising "
             "what this stage produced (files written, decisions, next step)."

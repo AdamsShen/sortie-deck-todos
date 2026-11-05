@@ -1935,7 +1935,12 @@ def build_graph_from_template(
             )
         )
 
-        _validate_or_explain(stage, result)
+        # needs_hitl 是「停在这里等人」，不是「本阶段已交付」：升级/权限拦截的结果
+        # 只带 reply.md 之类过程文件，按交付契约校验会把一次正常的人工升级判成
+        # 流水线失败（2026-11-04 qa_verify 事故：决策已生成、状态已置 waiting_hitl，
+        # 随后被这里抛出的 StageContractError 覆盖成 failed，人工答复无处可恢复）。
+        if result.status != "needs_hitl":
+            _validate_or_explain(stage, result)
 
         # git 回写（任务分支 commit/push + MR）——只影响 meta，不影响阶段判定
         publish_meta = await _maybe_publish(state, ctx, result, stage)
@@ -1977,6 +1982,21 @@ def build_graph_from_template(
                         "salvaged_artifacts": salvaged_files,
                         "failure_message": (result.meta or {}).get("failure_message"),
                     },
+                }
+            )
+        # 跨阶段遗留清理也要留痕：否则「这一阶段为什么没读到上一版 PRD」无从追溯
+        stale_moved = list((result.meta or {}).get("stale_moved") or [])
+        if stale_moved:
+            events.append(
+                {
+                    "stage": stage,
+                    "role": role.value,
+                    "kind": "info",
+                    "message": (
+                        "已清理 workspace 里的跨阶段遗留契约文件："
+                        f"{', '.join(stale_moved)}（归档在 .archive/）"
+                    ),
+                    "data": {"stale_moved": stale_moved},
                 }
             )
         # Sub-room conclusions are surfaced for observability; the transcript is not.

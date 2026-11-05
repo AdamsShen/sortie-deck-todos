@@ -321,8 +321,17 @@ async def _git_diff(workspace: Path, repo_root: Path, repos: list[RepoConfig] | 
         return "# (git not available)\n"
     has_git = (workspace / ".git").exists() or (repo_root / ".git").exists()
     if not has_git:
-        # Count files written even without git
-        files = [p for p in workspace.rglob("*") if p.is_file() and p.name != "README.md"]
+        # Count files written even without git。
+        # .upstream / .archive 是编排层注入的上游镜像与遗留归档，不是 agent 产出，
+        # 混进来会让 diff.patch 出现「上游文件被当成实现」的假改动。
+        excluded = {".upstream", ".archive"}
+        files = [
+            p
+            for p in workspace.rglob("*")
+            if p.is_file()
+            and p.name != "README.md"
+            and not (excluded & set(p.relative_to(workspace).parts))
+        ]
         if files:
             listing = "\n".join(f"+ {p.relative_to(workspace)}" for p in sorted(files)[:80])
             return f"# worktree files (no git)\n{listing}\n"
@@ -566,6 +575,9 @@ def _count_impl_files(workspace: Path, *, has_repos: bool = False) -> int:
         ".write_probe",
         ".cursor",
         ".sortie-deck",
+        # 编排层注入目录：上游镜像与跨阶段遗留归档，不能算成 agent 写的实现文件
+        ".upstream",
+        ".archive",
     }
     if has_repos:
         skip.add("repos")
