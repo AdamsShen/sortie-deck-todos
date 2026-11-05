@@ -198,6 +198,9 @@ def test_git_diff_excludes_upstream_mirror(tmp_path, monkeypatch):
     (workspace / ".upstream/prd.md").write_text("# PRD", encoding="utf-8")
     (workspace / ".archive/stage-x").mkdir(parents=True)
     (workspace / ".archive/stage-x/prd.md").write_text("# 旧 PRD", encoding="utf-8")
+    # 依赖/缓存目录不属于手写实现，不能挤占文件清单名额
+    (workspace / "__pycache__").mkdir(parents=True)
+    (workspace / "__pycache__/app.cpython-312.pyc").write_bytes(b"\x00")
 
     monkeypatch.setattr(coding, "_which", lambda name: "/usr/bin/git")
     diff = asyncio.run(coding._git_diff(workspace, tmp_path))
@@ -205,6 +208,81 @@ def test_git_diff_excludes_upstream_mirror(tmp_path, monkeypatch):
     assert "src/app.js" in diff
     assert ".upstream" not in diff
     assert ".archive" not in diff
+    assert "__pycache__" not in diff
+
+
+def test_git_diff_ignores_host_repo_when_sandbox_is_not_repo(tmp_path, monkeypatch):
+    """沙盒嵌在宿主 git 仓库下时，diff 不能把宿主仓库的改动算成 agent 产出。
+
+    回归 2026-11-05：workspace 没有 .git 时，旧实现用 ``(repo_root/".git").exists()``
+    判 has_git；repo_root 指向宿主机仓库，于是 ``git diff`` 向上回溯到宿主仓库，
+    diff.patch 全是编排器自己的改动，自审也审错了对象（贪吃蛇任务实测）。
+    """
+    import subprocess
+
+    from sortie_deck.plugins import coding
+
+    host = tmp_path / "host_repo"
+    host.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=host, check=True, capture_output=True)
+    (host / "orchestrator.py").write_text("x = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=host, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "init"],
+        cwd=host,
+        check=True,
+        capture_output=True,
+    )
+    # 宿主仓库留一条未提交改动：旧实现会把它当成任务产出
+    (host / "orchestrator.py").write_text("x = 2\n", encoding="utf-8")
+
+    workspace = host / "data" / "missions" / "ini_x" / "workspace"
+    (workspace / "snake").mkdir(parents=True)
+    (workspace / "snake" / "game.py").write_text("print(1)\n", encoding="utf-8")
+
+    monkeypatch.setattr(coding, "_which", lambda name: "/usr/bin/git")
+    diff = asyncio.run(coding._git_diff(workspace, host))
+
+    assert "snake/game.py" in diff
+    assert "orchestrator.py" not in diff
+
+
+def test_git_diff_collects_repo_clone_without_sandbox_git(tmp_path, monkeypatch):
+    """沙盒本身不是 git 仓库时，绑定的 repo clone 仍要给出 diff。
+
+    回归：旧实现在 has_git=False 时从文件清单分支直接 return，后面的
+    per-repo diff 循环永远走不到，业务代码的增删行全部丢失。
+    """
+    import subprocess
+
+    from sortie_deck.models import RepoConfig
+    from sortie_deck.plugins import coding
+
+    workspace = tmp_path / "ws"
+    repo_dir = workspace / "repos" / "web"
+    repo_dir.mkdir(parents=True)
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo_dir, check=True, capture_output=True)
+    (repo_dir / "app.py").write_text("print(1)\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo_dir, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "init"],
+        cwd=repo_dir,
+        check=True,
+        capture_output=True,
+    )
+    (repo_dir / "app.py").write_text("print(2)\n", encoding="utf-8")
+
+    monkeypatch.setattr(coding, "_which", lambda name: "/usr/bin/git")
+    diff = asyncio.run(
+        coding._git_diff(
+            workspace,
+            tmp_path,
+            [RepoConfig(url="https://example.com/acme/web.git", name="web")],
+        )
+    )
+
+    assert "# diff in repo web" in diff
+    assert "app.py" in diff
 
 
 # --- 2. 跨阶段遗留清理 ---------------------------------------------------------

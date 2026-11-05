@@ -330,40 +330,106 @@ async def _run_cmd(
         )
 
 
-async def _git_diff(workspace: Path, repo_root: Path, repos: list[RepoConfig] | None = None) -> str:
+async def _git_toplevel(path: Path) -> Path | None:
+    """返回 path 所属 git 仓库的顶层目录；不是仓库（或目录不存在）时返回 None。
+
+    单独抽出来的原因：git 在子目录执行会向上回溯父仓库，必须显式拿到 toplevel
+    才能判断「这个目录自己是不是仓库」。只有 toplevel 恰好等于目录本身，才说明
+    该目录是仓库根；否则说明它嵌在别的仓库里。
+    """
+    if not path.exists():
+        return None
+    code, out, _err = await _run_cmd(
+        ["git", "rev-parse", "--show-toplevel"], cwd=path, timeout=10
+    )
+    if code != 0:
+        return None
+    raw = (out or "").strip()
+    if not raw:
+        return None
+    try:
+        return Path(raw).resolve()
+    except OSError:
+        return None
+
+
+def _workspace_file_listing(workspace: Path) -> str:
+    """无 git 时的兜底：列出 agent 写过的文件（只有文件名，没有增删行）。
+
+    .upstream / .archive 是编排层注入的上游镜像与遗留归档，不是 agent 产出，
+    混进来会让 diff.patch 出现「上游文件被当成实现」的假改动。
+    依赖与缓存目录（__pycache__ / node_modules 等）同样不是手写实现，
+    列进来会挤占 80 个文件名额，还会把 .pyc 之类噪音带进自审范围；
+    口径与 _count_impl_files 的 skip 集合保持一致。
+    """
+    excluded = {
+        ".upstream",
+        ".archive",
+        ".git",
+        "__pycache__",
+        "node_modules",
+        ".cursor",
+        ".sortie-deck",
+        ".write_probe",
+    }
+    files = [
+        p
+        for p in workspace.rglob("*")
+        if p.is_file()
+        and p.name != "README.md"
+        and not (excluded & set(p.relative_to(workspace).parts))
+    ]
+    if not files:
+        return "# (no git repository)\n"
+    listing = "\n".join(f"+ {p.relative_to(workspace)}" for p in sorted(files)[:80])
+    return f"# worktree files (no git)\n{listing}\n"
+
+
+async def _git_diff(
+    workspace: Path, repo_root: Path | None = None, repos: list[RepoConfig] | None = None
+) -> str:
+    """采集 agent 本阶段的代码改动，供 diff.patch 与自审范围复用。
+
+    三路来源依次拼接：
+    1. 沙盒自身是 git 仓库根 → ``git diff``（有增删行）；
+    2. 否则输出文件清单（agent 写了哪些文件，无增删行）；
+    3. 绑定了 mission repos → 每个 clone 再单独 ``git diff``，业务代码落在这里。
+
+    ``repo_root`` 仅为兼容旧签名保留，不参与任何判定。历史实现用
+    ``(repo_root / ".git").exists()`` 判断 has_git，但 repo_root 指向宿主机仓库，
+    mission 沙盒（data/missions/<id>/workspace）通常嵌在它下面，git 会向上回溯，
+    diff 出来的是编排器自己的未提交改动，与 agent 产出无关（2026-11-05 实测：
+    贪吃蛇任务的 diff.patch 里全是 sortie-deck 主仓库改动，自审也因此审错对象）。
+    """
     if not _which("git"):
         return "# (git not available)\n"
-    has_git = (workspace / ".git").exists() or (repo_root / ".git").exists()
-    if not has_git:
-        # Count files written even without git。
-        # .upstream / .archive 是编排层注入的上游镜像与遗留归档，不是 agent 产出，
-        # 混进来会让 diff.patch 出现「上游文件被当成实现」的假改动。
-        excluded = {".upstream", ".archive"}
-        files = [
-            p
-            for p in workspace.rglob("*")
-            if p.is_file()
-            and p.name != "README.md"
-            and not (excluded & set(p.relative_to(workspace).parts))
-        ]
-        if files:
-            listing = "\n".join(f"+ {p.relative_to(workspace)}" for p in sorted(files)[:80])
-            return f"# worktree files (no git)\n{listing}\n"
-        return "# (no git repository)\n"
-    _code, out, err = await _run_cmd(["git", "diff", "--no-ext-diff"], cwd=workspace, timeout=60)
-    diff = out or err or "# (empty diff)\n"
-    # Mission repos cloned under workspace/repos: collect per-repo diffs too
+
+    parts: list[str] = []
+    toplevel = await _git_toplevel(workspace)
+    # 必须 toplevel 恰好等于沙盒本身：等于父目录说明沙盒嵌在别的仓库里，
+    # 此时 git diff 拿到的是那个仓库的改动，宁可按「无 git」处理。
+    if toplevel is not None and toplevel == workspace.resolve():
+        _code, out, err = await _run_cmd(
+            ["git", "diff", "--no-ext-diff"], cwd=workspace, timeout=60
+        )
+        parts.append(out or err or "# (empty diff)\n")
+    else:
+        parts.append(_workspace_file_listing(workspace))
+
+    # Mission repos cloned under workspace/repos: collect per-repo diffs too。
+    # 与上面分支独立：绑定仓库的任务，沙盒本身通常不是 git 仓库，
+    # 只走文件清单会拿不到业务代码的增删行。
     for repo in repos or []:
         target = workspace / "repos" / _repo_dirname(repo)
         if not (target / ".git").exists():
             continue
-        rcode, rout, rerr = await _run_cmd(
+        _rcode, rout, rerr = await _run_cmd(
             ["git", "diff", "--no-ext-diff"], cwd=target, timeout=60
         )
         rdiff = rout or rerr or ""
         if rdiff.strip():
-            diff += f"\n# diff in repo {target.name}\n{rdiff}\n"
-    return diff
+            parts.append(f"\n# diff in repo {target.name}\n{rdiff}\n")
+    return "".join(parts)
 
 
 def _repo_dirname(repo: RepoConfig) -> str:
