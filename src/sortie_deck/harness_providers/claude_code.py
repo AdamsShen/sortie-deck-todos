@@ -70,6 +70,29 @@ def _auto_compact_env(window: Any) -> dict[str, str] | None:
     return {_AUTO_COMPACT_ENV: str(value)}
 
 
+def _max_buffer_size(value: Any) -> int | None:
+    """把配置的单条消息上限转成 SDK 参数；0/None/非法值返回 None（用 SDK 默认）。
+
+    SDK 默认 1 MiB，agent Read 图片时 base64 后的消息很容易超过它。
+    """
+    try:
+        size = int(value or 0)
+    except (TypeError, ValueError):
+        return None
+    return size if size > 0 else None
+
+
+def _buffer_overflow_hint(exc: BaseException, configured: int | None) -> str:
+    """识别 SDK 的缓冲溢出错误并给出可执行提示；其它异常返回空串。"""
+    if "maximum buffer size" not in str(exc):
+        return ""
+    limit = configured or 1024 * 1024
+    return (
+        "（单条消息超过 max_buffer_size，常见诱因是 agent Read 了图片/大文件；"
+        f"当前上限 {limit} 字节，可调大 TDT_HARNESS_MAX_BUFFER_BYTES）"
+    )
+
+
 def _compact_meta(data: dict[str, Any]) -> dict[str, Any]:
     """从 compact_boundary 事件里提取可上报的字段（字段名兼容蛇形/驼峰）。"""
     def pick(*keys: str) -> Any:
@@ -145,11 +168,30 @@ class ClaudeCodeProvider:
                 on_activity=on_activity,
             )
         except Exception as exc:  # noqa: BLE001 — degrade to a fail reply, never raise
+            from sortie_deck.settings import settings
+
+            limit = _max_buffer_size(settings.harness_max_buffer_bytes)
+            hint = _buffer_overflow_hint(exc, limit)
+            logger.exception(
+                "claude-agent-sdk 调用失败: initiative=%s stage=%s session=%s "
+                "error=%s buffer_overflow=%s limit=%s",
+                (session.meta or {}).get("initiative_id"),
+                (session.meta or {}).get("stage"),
+                session.id,
+                type(exc).__name__,
+                bool(hint),
+                limit,
+            )
             return HarnessReply(
                 status="fail",
-                text=f"claude-agent-sdk run failed: {exc}",
+                text=f"claude-agent-sdk run failed: {exc}{hint}",
                 session_id=session.id,
-                meta={"error": str(exc)[:300]},
+                meta={
+                    "error": str(exc)[:300],
+                    "error_type": type(exc).__name__,
+                    "buffer_overflow": bool(hint),
+                    "max_buffer_size": limit,
+                },
             )
 
     async def _send_via_sdk(
@@ -197,6 +239,8 @@ class ClaudeCodeProvider:
             env=_auto_compact_env(settings.harness_auto_compact_window),
             # 阶段回合上限：intake 等对齐阶段封顶（stage_max_turns），编码阶段默认不限
             max_turns=resolve_stage_max_turns(str((session.meta or {}).get("stage", ""))) or None,
+            # 单条 CLI 消息上限：默认 1 MiB，agent Read 截图时 base64 后会溢出
+            max_buffer_size=_max_buffer_size(settings.harness_max_buffer_bytes),
         )
         parts: list[str] = []
         native_id = session.native_id

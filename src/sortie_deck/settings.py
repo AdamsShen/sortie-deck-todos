@@ -151,6 +151,15 @@ class Settings(BaseSettings):
     # CLAUDE_CODE_AUTO_COMPACT_WINDOW 控制，官方有效范围 100K–1M；
     # 0 表示不注入（沿用模型默认阈值，约 200K/967K 才触发）。
     harness_auto_compact_window: int = 200000
+    # SDK 读取 CLI stdout 的单条 JSON 上限（字节）。claude-agent-sdk 默认 1 MiB，
+    # agent 用 Read 打开截图时图片会 base64 进消息（`tool_use_result` 还会再带一份），
+    # 单行超限会抛 SDKJSONDecodeError、整个阶段直接判失败（2026-11-05 实测：
+    # 379 KB 的 Playwright 截图即触发）。官方 cookbook 建议图片场景用 10 MB。
+    harness_max_buffer_bytes: int = 10 * 1024 * 1024
+    # 阶段以 status=fail 收尾、且自审一轮都没跑成时，先按本预算做自检再放行下游
+    # （0 = 关闭）。没有自检就直接进 QA，下游只能对着一份残缺交付判 fail，
+    # 实测多花约 9 分钟（2026-11-05 贪吃蛇任务）。自检次数按阶段计。
+    stage_self_check_attempts: int = 1
     # 单阶段最大 agent 轮次；0 表示不限制。用于兜住「反复打磨不收敛」的阶段。
     harness_max_turns: int = 0
     # 各阶段 agent 回合上限：`stage=轮次`，逗号分隔；未列出的阶段回落 harness_max_turns。
