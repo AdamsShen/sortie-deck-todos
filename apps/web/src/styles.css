@@ -8131,6 +8131,32 @@ tr:hover td {
   white-space: nowrap;
 }
 
+/* 并行波次：一个阶段一行，各自显示「在做什么 + 已等待」 */
+.live-step.multi {
+  max-width: 62ch;
+  border-radius: 14px;
+  align-items: flex-start;
+}
+
+.live-step-rows {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.live-step-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.live-step-row .live-step-text {
+  flex: 1;
+  min-width: 0;
+}
+
 .live-step-elapsed {
   flex: none;
   opacity: 0.62;

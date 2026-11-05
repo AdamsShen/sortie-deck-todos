@@ -185,6 +185,35 @@ function displayTime(iso: string): string {
   }
 }
 
+/** 工具名 → 动作动词：后端只推 tool + detail，语言由前端决定 */
+function toolVerb(tool: string | undefined, tr: (key: string) => string): string {
+  switch (tool) {
+    case "Read":
+      return tr("actRead");
+    case "Write":
+      return tr("actWrite");
+    case "Edit":
+    case "MultiEdit":
+    case "NotebookEdit":
+      return tr("actEdit");
+    case "Bash":
+    case "BashOutput":
+      return tr("actRun");
+    case "Grep":
+    case "Glob":
+      return tr("actSearch");
+    case "Task":
+      return tr("actDelegate");
+    case "TodoWrite":
+      return tr("actPlan");
+    case "WebFetch":
+    case "WebSearch":
+      return tr("actFetch");
+    default:
+      return tr("actTool");
+  }
+}
+
 export default function App() {
   const [lang, setLang] = useState<Lang>(() => (lsGet("sortie_lang") as Lang) || "zh");
   const [token, setToken] = useState(() => lsGet("sortie_token") || "");
@@ -194,8 +223,16 @@ export default function App() {
   const [dash, setDash] = useState<Dashboard | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<Initiative | null>(null);
-  // 阶段内实时进度（stage_progress SSE）：用于「第 N/M 轮自审中」转圈与已等待秒数
-  const [stageProgress, setStageProgress] = useState<StageProgress | null>(null);
+  // 阶段内实时进度（stage_progress SSE）：按阶段分开存——并行波次会同时推多个
+  // 阶段的事件，单个 state 会互相覆盖，只剩最后一条。
+  const [liveByStage, setLiveByStage] = useState<
+    Record<string, { progress: StageProgress; startedAt: number }>
+  >({});
+
+  // 切换任务时清空上一任务的阶段进度，避免沿用旧转圈
+  useEffect(() => {
+    setLiveByStage({});
+  }, [selectedId]);
   const [tickNow, setTickNow] = useState(() => Date.now());
   const [harnesses, setHarnesses] = useState<HarnessInfo[]>([]);
   const [harnessPick, setHarnessPick] = useState("");
@@ -952,9 +989,13 @@ export default function App() {
 
   const harnessLocked = Boolean(selected?.harness_locked) && selected?.status !== "draft";
 
-  // current_stage 在阶段收尾时才落库，早于它到达的 stage_start 不能被过滤掉，
-  // 否则「刚开始的这一步」永远不转圈；任务不在 running 时一律隐藏。
-  const liveProgress = stageProgress && selected?.status === "running" ? stageProgress : null;
+  // 阶段内实时进度可能有多条（并行波次），这里取最近一条供单阶段文案使用。
+  const liveProgress = useMemo(() => {
+    if (selected?.status !== "running") return null;
+    const entries = Object.values(liveByStage);
+    if (!entries.length) return null;
+    return entries.reduce((a, b) => (b.progress.at >= a.progress.at ? b : a)).progress;
+  }, [liveByStage, selected?.status]);
   // 只要任务在跑就必须有转圈：即使 SSE 还没送到子步骤（例如刚刷新页面），
   // 也先按当前阶段给一个兜底文案，避免界面看起来完全没有反应。
   const liveBusy = selected?.status === "running";
@@ -971,33 +1012,82 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [liveBusy]);
 
-  const liveLabel = useMemo(() => {
-    const railList = railFromInitiative(selected, lang);
-    const stageId = liveProgress?.stage || selected?.current_stage || "";
-    const stageText = railList.find((s) => s.id === stageId)?.label || stageId;
-    if (!liveProgress) return `${stageText} · ${tr("stageWorking")}`;
-    const p = liveProgress;
-    const roundText =
-      p.phase === "review_start" || p.phase === "review_end" || p.phase === "review_skip"
-        ? ` · ${tr("stageReview")} ${p.round ?? 1}/${p.total ?? 1}`
-        : "";
-    if (p.phase === "review_begin") return `${stageText} · ${tr("stageReview")} 1/${p.total ?? 1}`;
-    if (p.phase === "review_start") return `${stageText}${roundText}${p.title ? ` · ${p.title}` : ""}`;
-    if (p.phase === "review_end") {
-      return `${stageText}${roundText}${p.status === "failed" ? ` · ${tr("stageTimeout")}` : ""}`;
-    }
-    if (p.phase === "review_skip") return `${stageText}${roundText} · ${tr("stageDegraded")}`;
-    if (p.phase === "stage_end") {
-      return `${stageText} · ${p.status === "ok" ? "✓" : statusLabel(lang, String(p.status || ""))}`;
-    }
-    return `${stageText} · ${tr("stageWorking")}`;
-  }, [liveProgress, selected, lang, tr]);
+  // 正在执行的阶段：并行波次取 meta.active_parallel（编排层在波次开始时写入），
+  // 否则用最近事件 / 服务端开始时间 / current_stage 兜底。流程图与顶部状态条
+  // 共用这份集合，避免一边显示 PRD、一边还在集结转圈。
+  const activeStageIds = useMemo(() => {
+    if (!selected || selected.status !== "running") return [] as string[];
+    const parallel = Array.isArray(selected.meta?.active_parallel)
+      ? (selected.meta?.active_parallel as unknown[]).map((v) => String(v)).filter(Boolean)
+      : [];
+    if (parallel.length) return parallel;
+    const single =
+      liveProgress?.stage || selected.stage_started_stage || selected.current_stage || "";
+    return single ? [single] : [];
+  }, [selected, liveProgress]);
 
-  const liveElapsed = liveBusy
-    ? Math.max(0, Math.floor((tickNow - (liveProgress?.at ?? stageEnteredAt)) / 1000))
-    : 0;
-  const liveElapsedText =
-    liveElapsed >= 60 ? `${Math.floor(liveElapsed / 60)}m${liveElapsed % 60}s` : `${liveElapsed}s`;
+  // 刷新后内存里的进度会丢：用服务端持久化的阶段开始时刻续算，
+  // 否则用户已经等了几分钟，页面一刷新又显示 0s。
+  const persistedStageStart = useMemo(() => {
+    const raw = selected?.stage_started_at;
+    if (!raw) return 0;
+    const ms = Date.parse(raw);
+    return Number.isFinite(ms) ? ms : 0;
+  }, [selected?.stage_started_at]);
+
+  const describeLive = useCallback(
+    (p?: StageProgress) => {
+      if (!p) return tr("stageWorking");
+      if (p.phase === "activity") {
+        const verb = toolVerb(p.tool, tr);
+        return p.detail ? `${verb} ${p.detail}` : verb;
+      }
+      const round = `${p.round ?? 1}/${p.total ?? 1}`;
+      if (p.phase === "review_begin") return `${tr("stageReview")} 1/${p.total ?? 1}`;
+      if (p.phase === "review_start")
+        return `${tr("stageReview")} ${round}${p.title ? ` · ${p.title}` : ""}`;
+      if (p.phase === "review_end")
+        return `${tr("stageReview")} ${round}${p.status === "failed" ? ` · ${tr("stageTimeout")}` : ""}`;
+      if (p.phase === "review_skip") return `${tr("stageReview")} · ${tr("stageDegraded")}`;
+      if (p.phase === "stage_end")
+        return p.status === "ok" ? "✓" : statusLabel(lang, String(p.status || ""));
+      return tr("stageWorking");
+    },
+    [lang, tr]
+  );
+
+  // 顶部状态条：单阶段一行；并行波次一个阶段一行，各带自己的已等待时长
+  const liveRows = useMemo(() => {
+    if (!liveBusy) return [] as { id: string; label: string; detail: string; elapsedText: string }[];
+    const railList = railFromInitiative(selected, lang);
+    return activeStageIds.map((id) => {
+      const entry = liveByStage[id];
+      const label = railList.find((s) => s.id === id)?.label || id;
+      const anchor = entry?.startedAt || persistedStageStart || stageEnteredAt;
+      const secs = Math.max(0, Math.floor((tickNow - anchor) / 1000));
+      return {
+        id,
+        label,
+        detail: describeLive(entry?.progress),
+        elapsedText: secs >= 60 ? `${Math.floor(secs / 60)}m${secs % 60}s` : `${secs}s`,
+      };
+    });
+  }, [
+    liveBusy,
+    activeStageIds,
+    liveByStage,
+    selected,
+    lang,
+    describeLive,
+    persistedStageStart,
+    stageEnteredAt,
+    tickNow,
+  ]);
+
+  const liveLabel = useMemo(
+    () => (liveRows.length ? liveRows.map((r) => `${r.label} · ${r.detail}`).join(" ∥ ") : null),
+    [liveRows]
+  );
 
   async function saveHarness(harness: string) {
     if (!selectedId || !harness) return;
@@ -1109,7 +1199,19 @@ export default function App() {
     es.addEventListener("stage_progress", (ev: MessageEvent) => {
       const payload = JSON.parse(String(ev.data)) as Partial<StageProgress>;
       if (!payload?.stage || !payload?.phase) return;
-      setStageProgress({ ...(payload as StageProgress), at: Date.now() });
+      // 服务端带了阶段开始时刻就用它：SSE 重连回放时「收到时间」不是真实开始时间
+      const started = payload.started_at ? Date.parse(payload.started_at) : NaN;
+      const at = Number.isFinite(started) ? started : Date.now();
+      const stage = payload.stage;
+      setLiveByStage((prev) => {
+        const prior = prev[stage];
+        // stage_start 才是这个阶段的计时起点；后续 activity 不能把它冲掉
+        const startedAt = payload.phase === "stage_start" ? at : prior?.startedAt ?? at;
+        return {
+          ...prev,
+          [stage]: { progress: { ...(payload as StageProgress), at }, startedAt },
+        };
+      });
     });
     return () => {
       cancelled = true;
@@ -3280,11 +3382,22 @@ export default function App() {
               </div>
             </div>
             <div className="topbar-actions">
-              {liveBusy && (
-                <span className="live-step busy" title={liveLabel}>
+              {liveBusy && liveRows.length > 0 && (
+                <span
+                  className={`live-step busy${liveRows.length > 1 ? " multi" : ""}`}
+                  title={liveLabel || undefined}
+                >
                   <span className="spin" aria-hidden />
-                  <span className="live-step-text">{liveLabel}</span>
-                  <span className="live-step-elapsed">{liveElapsedText}</span>
+                  <span className="live-step-rows">
+                    {liveRows.map((row) => (
+                      <span key={row.id} className="live-step-row">
+                        <span className="live-step-text">
+                          {row.label} · {row.detail}
+                        </span>
+                        <span className="live-step-elapsed">{row.elapsedText}</span>
+                      </span>
+                    ))}
+                  </span>
                 </span>
               )}
               <span className={`st large ${selected.status}`}>{statusLabel(lang, selected.status)}</span>
@@ -3322,7 +3435,7 @@ export default function App() {
           </div>
           <div className="rail-wrap">
             <PipelineRail
-              stage={selected.current_stage}
+              stage={activeStageIds[0] || selected.current_stage}
               status={selected.status}
               stages={railFromInitiative(selected, lang)}
               selectedId={inspectStage?.id}
@@ -3330,11 +3443,7 @@ export default function App() {
               lang={lang}
               missionKey={selected.id}
               liveLabel={liveBusy ? liveLabel : null}
-              activeParallel={
-                Array.isArray(selected.meta?.active_parallel)
-                  ? (selected.meta.active_parallel as string[])
-                  : undefined
-              }
+              activeParallel={activeStageIds.length ? activeStageIds : undefined}
               onSelect={(id, label) =>
                 setInspectStage((prev) => (prev?.id === id ? null : { id, label }))
               }

@@ -403,6 +403,10 @@ export interface Initiative {
   template?: string;
   status: InitiativeStatus;
   current_stage: string;
+  /** 当前阶段开始执行的时刻（服务端持久化）；刷新后用它续算已等待时长 */
+  stage_started_at?: string | null;
+  /** stage_started_at 属于哪个阶段，用于刷新后兜底展示阶段名 */
+  stage_started_stage?: string;
   thread_id?: string;
   room_id?: string;
   // Initiative-locked agent harness (claude_code | opencode | codex | cursor | mock)
@@ -705,6 +709,7 @@ export type ApiKeyCreated = {
 export type StageProgressPhase =
   | "stage_start"
   | "stage_end"
+  | "activity"
   | "review_begin"
   | "review_start"
   | "review_end"
@@ -726,9 +731,14 @@ export type StageProgress = {
   timeout?: number;
   findings?: number;
   duration_ms?: number;
+  /** activity 阶段：工具名与短目标（文件名 / 命令 / 检索词） */
+  tool?: string;
+  detail?: string;
   error?: string;
   message?: string;
   seq?: number;
+  /** 服务端记录的阶段开始时刻（stage_start 事件带），优先作为计时锚点 */
+  started_at?: string;
   /** 前端收到该事件的时间戳（用于展示已等待秒数） */
   at: number;
 };
