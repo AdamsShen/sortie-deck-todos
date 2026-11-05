@@ -60,6 +60,10 @@ def optional_artifacts(stage: str) -> list[str]:
 
 
 REQUIRED: dict[str, list[str]] = {
+    # 集结阶段只交一页 `intake.md`（需求复述 / 范围 / 假设 / 待确认 / 交接要点）。
+    # 之前这里没有 intake 项，模型拿不到产出规格，就去写完整 PRD + 验收用例，
+    # 既越界又把旧版 prd.md 留在 workspace 里盖住 product_prd 的正式版。
+    "intake": ["intake.md"],
     "product_prd": ["prd.md", "acceptance.json"],
     "eng_backend_tech_design": ["tech_design.md"],
     "eng_web_tech_design": ["tech_design.md"],

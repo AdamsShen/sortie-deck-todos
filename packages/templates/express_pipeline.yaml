@@ -49,6 +49,8 @@ stages:
     role: product
     label: 集结
     label_en: Intake
+    output_contract:
+      - intake.md
   - name: eng_implement
     role: eng
     label: 开发

@@ -20,6 +20,8 @@ stages:
     role: product
     label: 集结
     label_en: Intake
+    output_contract:
+      - intake.md
   - name: research_scan
     role: design
     label: 采集

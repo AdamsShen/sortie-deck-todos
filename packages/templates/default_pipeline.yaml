@@ -50,6 +50,8 @@ stages:
     label: 集结
     label_en: Intake
     hitl: false
+    output_contract:
+      - intake.md
   - name: product_prd
     role: product
     label: PRD

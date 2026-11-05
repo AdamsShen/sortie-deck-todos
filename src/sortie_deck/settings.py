@@ -162,6 +162,10 @@ class Settings(BaseSettings):
     # 禁止 agent 拉小群的阶段：逗号分隔。集结拉群 = 三队员回复 + 回注 + 收尾轮，
     # 直接把轮次翻倍；需求对齐最多问一个角色，默认在 intake 禁掉。
     subroom_disabled_stages: str = "intake"
+    # 缺少契约文件即判失败的阶段：逗号分隔。默认只对 intake 生效——历史行为是
+    # 把缺失产物包成「回复说明」继续走（mock harness 依赖），但 intake 缺
+    # intake.md 时包装件会掩盖「越界写 PRD」的事实，所以这里硬失败。
+    strict_contract_stages: str = "intake"
     # --- 多镜头自审（见 docs/plans/2026-11-02-多镜头自审方案与改动说明.md）---
     # 编码/自测阶段结束后，由编排层在同一 provider 会话里追加 N 轮不同视角的审查；
     # 每轮追加 logs/<stage>/review.jsonl，收尾写 review.json 与 review.md 产物。
