@@ -1528,14 +1528,18 @@ export default function App() {
     }
   }, [selected?.id, selected?.meta?.pipeline_specs, selected?.meta?.pipeline_confirmed, pipelineEditing]);
 
-  async function submitHitl(action: string, harness?: string) {
+  async function submitHitl(action: string, harness?: string, nextStage?: string) {
     setBusy(true);
     playSfx(action === "approve" ? "gate" : "warn");
     try {
       const data = await api<Initiative>(`/api/initiatives/${selectedId}/hitl`, {
         token,
         method: "POST",
-        body: JSON.stringify({ action, harness: harness || null }),
+        body: JSON.stringify({
+          action,
+          harness: harness || null,
+          next_stage: nextStage || null,
+        }),
       });
       setDetail(data);
       await refreshList();
@@ -3634,12 +3638,44 @@ export default function App() {
                   <span>
                     {tr("gate")} · {selected.pending_hitl.stage}
                   </span>
-                  <button type="button" className="btn primary" disabled={busy} onClick={() => submitHitl("approve")}>
-                    {tr("approve")}
-                  </button>
-                  <button type="button" className="btn" disabled={busy} onClick={() => submitHitl("reject")}>
-                    {tr("reject")}
-                  </button>
+                  {selected.pending_hitl.verdict?.passed === false && (
+                    <span className="hitl-verdict">
+                      {selected.pending_hitl.recommended_action?.hint || tr("gateVerdictFailed")}
+                    </span>
+                  )}
+                  {selected.pending_hitl.recommended_action?.action === "reroute" ? (
+                    <>
+                      <button
+                        type="button"
+                        className="btn primary"
+                        disabled={busy}
+                        onClick={() =>
+                          submitHitl(
+                            "reroute",
+                            undefined,
+                            selected.pending_hitl?.recommended_action?.next_stage || undefined,
+                          )
+                        }
+                      >
+                        {selected.pending_hitl.recommended_action.label || tr("rework")}
+                      </button>
+                      <button type="button" className="btn" disabled={busy} onClick={() => submitHitl("approve")}>
+                        {tr("forceApprove")}
+                      </button>
+                      <button type="button" className="btn" disabled={busy} onClick={() => submitHitl("stop")}>
+                        {tr("stop")}
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button type="button" className="btn primary" disabled={busy} onClick={() => submitHitl("approve")}>
+                        {tr("approve")}
+                      </button>
+                      <button type="button" className="btn" disabled={busy} onClick={() => submitHitl("reject")}>
+                        {tr("reject")}
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
               {!canControlMission && selected.status === "waiting_hitl" && selected.pending_hitl && (

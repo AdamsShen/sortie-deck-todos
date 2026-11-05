@@ -2623,6 +2623,13 @@ textarea {
   letter-spacing: 0.08em;
 }
 
+/* QA 判失败时贴在按钮旁的原因：按钮已换成「返工」，这里说明为什么不能点放行 */
+.hitl-verdict {
+  flex-basis: 100%;
+  color: var(--danger);
+  letter-spacing: 0.02em;
+}
+
 .login-deck {
   display: grid;
   place-items: center;

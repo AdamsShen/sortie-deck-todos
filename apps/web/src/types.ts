@@ -423,11 +423,23 @@ export interface MissionWorkspace {
   worktree_files: WorkspaceFile[];
 }
 
+/** 门禁推荐动作：QA 判失败时后端下发 reroute（返工），前端据此替换按钮语义 */
+export interface HitlRecommendation {
+  action: string;
+  next_stage?: string | null;
+  label?: string;
+  hint?: string;
+}
+
 export interface HitlRequest {
   stage: string;
   prompt: string;
   allowed_actions?: string[];
   artifacts?: ArtifactRef[];
+  /** 阶段裁决：目前只有 qa_verify 会带 */
+  verdict?: { passed?: boolean | null } | null;
+  /** 推荐动作：有值时用它当主按钮（例如「返工」），而不是默认的「放行」 */
+  recommended_action?: HitlRecommendation | null;
 }
 
 /** POST /api/system/reveal 的返回：available=false 表示服务端无桌面环境，只能回传路径 */
