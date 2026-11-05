@@ -154,7 +154,8 @@ WebSocket (Node ≥ 21), with no npm packages. When no browser is available it r
   previous `qa_result.json`**, instructing the model to report the current state
 - **Rework re-runs only failures**: `--cases TC-X-01,TC-X-02` limits execution to the cases QA failed
 - **Stage timeout**: verification stages (`qa_verify` / `*_verify`) use their own
-  `TDT_QA_STAGE_TIMEOUT_SECONDS` (default 900s) instead of the global 1800s; build stages stay at 3600s
+  `TDT_QA_STAGE_TIMEOUT_SECONDS` (default 1800s = 30 minutes, tunable per project) without
+  affecting document/build stages; build stages stay at 3600s
 
 ## 9. Multi-lens self-review and implementation checklist
 

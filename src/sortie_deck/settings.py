@@ -341,9 +341,9 @@ class Settings(BaseSettings):
     # eng_backend 在 1800s 被砍时 agent 仍在正常产出），默认放宽到 1 小时。
     eng_stage_timeout_seconds: float = 3600.0
     # 测试/复验类阶段（qa_verify / *_verify）的默认单阶段超时（秒）。
-    # 复验是「跑固定用例 + 判结论」，不该套文档阶段的 30 分钟：实测一轮 QA 约 9 分钟，
-    # 给 15 分钟足够；超时后按产物回收走默认边，避免一个卡住的 QA 白等半小时。
-    qa_stage_timeout_seconds: float = 900.0
+    # 复验需要起服务 + 跑完整用例集，默认给 30 分钟；需要收紧时单独设
+    # TDT_QA_STAGE_TIMEOUT_SECONDS，不影响文档/编码阶段的默认值。
+    qa_stage_timeout_seconds: float = 1800.0
     # 阶段级超时覆盖：`stage=秒,stage2=秒`，支持 `*` 通配（`*_tech_design=600`）。
     # 优先级低于航线 spec 的 timeout_seconds，高于按阶段类别取的默认值。
     # 技术方案是文档型阶段（cwd 直指产物目录），600s 足够；套全局 1800s 会让

@@ -145,7 +145,7 @@ WebSocket（Node ≥ 21），不装 npm 包；找不到浏览器时返回 `brows
   `qa_budget.json`，**保留上一轮 `qa_result.json`**，提示按现状收尾
 - **只回归失败项**：返工阶段用 `--cases TC-X-01,TC-X-02` 只跑 QA 判失败的用例，不重跑全量
 - **阶段超时**：复验类阶段（`qa_verify` / `*_verify`）单独取 `TDT_QA_STAGE_TIMEOUT_SECONDS`
-  （默认 900s），不再沿用全局 1800s；编码阶段仍是 3600s
+  （默认 1800s = 30 分钟，可按项目单独收紧），不影响文档/编码阶段；编码阶段仍是 3600s
 
 ## 9. 多镜头自审与实现清单
 

@@ -21,10 +21,17 @@ def test_non_build_stage_defaults_to_thirty_minutes() -> None:
 
 
 def test_qa_verify_uses_its_own_timeout() -> None:
-    """复验阶段只跑固定用例，默认 15 分钟，不套文档阶段的 30 分钟。"""
+    """复验阶段走独立配置项，默认 30 分钟（与全局一致，但可单独收紧）。"""
     cfg = Settings()
-    assert _resolve_stage_timeout("qa_verify", {}, cfg) == 900.0
-    assert _resolve_stage_timeout("eng_web_verify", None, cfg) == 900.0
+    assert _resolve_stage_timeout("qa_verify", {}, cfg) == 1800.0
+    assert _resolve_stage_timeout("eng_web_verify", None, cfg) == 1800.0
+
+
+def test_qa_timeout_can_be_tightened_independently() -> None:
+    """QA 超时可单独设置，不影响其它阶段的默认值。"""
+    cfg = Settings(qa_stage_timeout_seconds=600)
+    assert _resolve_stage_timeout("qa_verify", {}, cfg) == 600.0
+    assert _resolve_stage_timeout("product_prd", {}, cfg) == 1800.0
 
 
 def test_per_stage_config_wins_over_defaults() -> None:
