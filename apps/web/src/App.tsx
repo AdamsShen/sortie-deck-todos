@@ -1200,13 +1200,20 @@ export default function App() {
       const payload = JSON.parse(String(ev.data)) as Partial<StageProgress>;
       if (!payload?.stage || !payload?.phase) return;
       // 服务端带了阶段开始时刻就用它：SSE 重连回放时「收到时间」不是真实开始时间
-      const started = payload.started_at ? Date.parse(payload.started_at) : NaN;
-      const at = Number.isFinite(started) ? started : Date.now();
+      const explicitStart = payload.started_at ? Date.parse(payload.started_at) : NaN;
+      const at = Number.isFinite(explicitStart) ? explicitStart : Date.now();
       const stage = payload.stage;
       setLiveByStage((prev) => {
         const prior = prev[stage];
-        // stage_start 才是这个阶段的计时起点；后续 activity 不能把它冲掉
-        const startedAt = payload.phase === "stage_start" ? at : prior?.startedAt ?? at;
+        // 只有 stage_start（或服务端明确给了 started_at）才算计时起点。
+        // 刷新后第一条往往是 activity（不带 started_at），拿「收到时间」当起点
+        // 会让计时从 0 重来；这里留 0 表示未知，交给 stage_started_at 兜底。
+        const startedAt =
+          payload.phase === "stage_start"
+            ? at
+            : Number.isFinite(explicitStart)
+              ? explicitStart
+              : prior?.startedAt ?? 0;
         return {
           ...prev,
           [stage]: { progress: { ...(payload as StageProgress), at }, startedAt },
