@@ -80,7 +80,7 @@ from sortie_deck.models import (
 )
 from sortie_deck.orchestrator import Orchestrator, bind_catalogs, get_orchestrator
 from sortie_deck.persona import parse_persona
-from sortie_deck.pipeline import list_tracks, stage_catalog
+from sortie_deck.pipeline import catalog_by_id, list_tracks, stage_catalog
 from sortie_deck.prompt_enhance import EnhancePromptRequest
 from sortie_deck.roles import RoleSpec, get_role_registry, normalize_role_key
 from sortie_deck.settings import settings
@@ -2513,12 +2513,18 @@ async def list_pipelines(_user: PublicUser = Depends(require_user)) -> dict[str,
 async def suggest_pipeline(
     brief: str = Query(default=""),
     title: str = Query(default=""),
+    task_kind: str = Query(default="auto", pattern="^(auto|delivery|knowledge)$"),
+    tier: str = Query(default="auto", pattern="^(auto|express|standard|full)$"),
     _user: PublicUser = Depends(require_user),
 ) -> dict[str, Any]:
     from sortie_deck.pipeline_llm import plan_pipeline_smart
 
     proposal = await plan_pipeline_smart(
-        title=title, brief=brief, use_llm=bool(settings.pipeline_llm)
+        title=title,
+        brief=brief,
+        task_kind=task_kind,
+        tier=tier,
+        use_llm=bool(settings.pipeline_llm),
     )
     return {
         "track": proposal.get("track_hint"),
@@ -2532,6 +2538,151 @@ async def suggest_pipeline(
 @app.get("/api/pipelines/catalog")
 async def get_stage_catalog(_user: PublicUser = Depends(require_user)) -> dict[str, Any]:
     return {"stages": stage_catalog()}
+
+
+@app.get("/api/pipelines/tiers")
+async def get_pipeline_tiers(
+    task_kind: str | None = Query(default=None, pattern="^(delivery|knowledge)$"),
+    _user: PublicUser = Depends(require_user),
+) -> dict[str, Any]:
+    """建任务页的档位数据：开发/办公两套各三档，含阶段链路与预估时长。"""
+    from sortie_deck.tiers import list_tier_definitions
+
+    return {"task_kinds": list_tier_definitions(task_kind, catalog_by_id())}
+
+
+# --- 耗时分析（严格只看自己创建的任务） --------------------------------------
+
+
+def _ensure_metrics_owner(ini: Any, user: PublicUser) -> None:
+    """耗时分析严格按创建者：admin 与共享用户都不放行。
+
+    与任务列表口径不同（那里 admin 可见全部、共享用户可见被共享任务），
+    这里按产品要求只允许本人查看自己创建的任务耗时。
+    """
+    if getattr(ini, "created_by", None) != user.id:
+        raise HTTPException(403, "只能查看自己创建的任务耗时")
+
+
+def _insight_mission_brief(ini: Any) -> dict[str, Any]:
+    return {
+        "id": ini.id,
+        "title": ini.title,
+        "status": ini.status.value,
+        "current_stage": ini.current_stage,
+        "created_at": ini.created_at.isoformat(),
+        "updated_at": ini.updated_at.isoformat(),
+    }
+
+
+def _insight_stages_payload(stages: list[dict[str, Any]]) -> dict[str, Any]:
+    """阶段明细 + 相对时间轴：offset_ms 以首个阶段起点为 0，供甘特图定位。"""
+    if not stages:
+        return {"stages": [], "span": None}
+    start = min(float(s["started_at"]) for s in stages)
+    end = max(float(s["ended_at"]) for s in stages)
+    return {
+        "stages": [
+            {
+                "stage": s["stage"],
+                "role": s["role"],
+                "harness": s["harness"],
+                "attempt": s["attempt"],
+                "status": s["status"],
+                "started_at": s["started_at"],
+                "ended_at": s["ended_at"],
+                "offset_ms": int((float(s["started_at"]) - start) * 1000),
+                "duration_ms": s["duration_ms"],
+                "tool_calls": s["tool_calls"],
+                "review_rounds": s["review_rounds"],
+                "review_verdict": s["review_verdict"],
+                "meta": s["meta"],
+            }
+            for s in stages
+        ],
+        "span": {
+            "started_at": start,
+            "ended_at": end,
+            "duration_ms": int((end - start) * 1000),
+        },
+    }
+
+
+@app.get("/api/insights/missions")
+async def list_insight_missions(
+    limit: int = Query(default=100, ge=1, le=300),
+    user: PublicUser = Depends(require_user),
+) -> dict[str, Any]:
+    """当前用户创建的任务 + 阶段指标聚合。"""
+    items = [
+        i
+        for i in orch().list_initiatives()
+        if getattr(i, "created_by", None) == user.id
+    ]
+    items.sort(key=lambda i: i.updated_at, reverse=True)
+    items = items[:limit]
+    agg = orch().metrics.list_missions([i.id for i in items])
+    missions: list[dict[str, Any]] = []
+    for ini in items:
+        metrics = agg.get(ini.id) or {}
+        missions.append(
+            {
+                **_insight_mission_brief(ini),
+                "has_metrics": bool(metrics),
+                "stage_count": int(metrics.get("stage_count") or 0),
+                "total_duration_ms": int(metrics.get("total_duration_ms") or 0),
+                "tool_calls": int(metrics.get("tool_calls") or 0),
+                "review_rounds": int(metrics.get("review_rounds") or 0),
+            }
+        )
+    return {
+        "missions": missions,
+        "totals": {
+            "mission_count": len(missions),
+            "total_duration_ms": sum(m["total_duration_ms"] for m in missions),
+            "tool_calls": sum(m["tool_calls"] for m in missions),
+            "review_rounds": sum(m["review_rounds"] for m in missions),
+        },
+    }
+
+
+@app.get("/api/insights/missions/{initiative_id}")
+async def get_insight_mission(
+    initiative_id: str, user: PublicUser = Depends(require_user)
+) -> dict[str, Any]:
+    """单任务阶段明细，供单任务甘特图。"""
+    ini = orch().get(initiative_id)
+    if not ini:
+        raise HTTPException(404, "Initiative not found")
+    _ensure_metrics_owner(ini, user)
+    return {
+        "mission": _insight_mission_brief(ini),
+        **_insight_stages_payload(orch().metrics.list_stages(initiative_id)),
+    }
+
+
+@app.get("/api/insights/compare")
+async def compare_insight_missions(
+    ids: str = Query(..., description="逗号分隔的任务 id，最多 5 个"),
+    user: PublicUser = Depends(require_user),
+) -> dict[str, Any]:
+    """多任务对比：每个任务各自以首个阶段为 0 点，前端共用一条相对时间轴。"""
+    id_list = [x.strip() for x in ids.split(",") if x.strip()][:5]
+    if len(id_list) < 2:
+        raise HTTPException(400, "至少选择 2 个任务进行对比")
+    missions: list[dict[str, Any]] = []
+    for mid in id_list:
+        ini = orch().get(mid)
+        if not ini:
+            raise HTTPException(404, f"任务不存在: {mid}")
+        _ensure_metrics_owner(ini, user)
+        missions.append(
+            {
+                "mission": _insight_mission_brief(ini),
+                **_insight_stages_payload(orch().metrics.list_stages(mid)),
+            }
+        )
+    return {"missions": missions}
 
 
 @app.get("/api/initiatives")
@@ -2666,6 +2817,29 @@ async def set_briefing_repos(
         sess = get_briefing().set_role_repos(session_id, body.role_repos)
     except KeyError:
         raise HTTPException(404, "briefing session not found") from None
+    return sess.model_dump(mode="json")
+
+
+class BriefingPrefsBody(BaseModel):
+    # 建任务页选择的档位：auto 表示交给后端规则推荐
+    task_kind: str | None = None
+    tier: str | None = None
+
+
+@app.patch("/api/briefing/sessions/{session_id}/prefs")
+async def set_briefing_prefs(
+    session_id: str,
+    body: BriefingPrefsBody,
+    user: PublicUser = Depends(require_user),
+) -> dict[str, Any]:
+    """保存档位选择；确认建队时据此生成预算内的航线。"""
+    sess = _load_briefing_session(session_id)
+    _guard_briefing_owner(sess, user)
+    if body.task_kind in {"auto", "delivery", "knowledge"}:
+        sess.task_kind = body.task_kind
+    if body.tier in {"auto", "express", "standard", "full"}:
+        sess.tier = body.tier
+    get_briefing().store.save(sess)
     return sess.model_dump(mode="json")
 
 

@@ -19,6 +19,7 @@ from sortie_deck.graph import build_graph_from_template, compile_pipelines
 from sortie_deck.manager import plan_digest, plan_digest_matches
 from sortie_deck.materials import compose_brief
 from sortie_deck.memory import MemoryStore
+from sortie_deck.metrics import StageMetricsStore
 from sortie_deck.models import (
     CODING_ROLE_VALUES,
     ActorKind,
@@ -192,6 +193,8 @@ class Orchestrator:
         self._run_locks_guard = asyncio.Lock()
         # 事件表：SSE 的唯一数据源，worker 进程写、API 进程读，跨进程可见
         self.events = EventLog(self.cfg.events_sqlite)
+        # 阶段指标：耗时/工具步数/review 轮次的结构化汇总，供设置页耗时分析查询
+        self.metrics = StageMetricsStore(self.cfg.metrics_sqlite)
         self._subscribers: dict[str, list[asyncio.Queue]] = {}
         self._worker_task: asyncio.Task | None = None
         self._sweep_task: asyncio.Task | None = None
@@ -1081,13 +1084,20 @@ class Orchestrator:
             brief=req.brief,
             hint_track=hint,
             complexity=req.complexity,
+            task_kind=req.task_kind,
+            tier=req.tier,
+            has_repos=bool(req.role_repos),
             use_llm=bool(self.cfg.pipeline_llm),
             client=llm,
         )
         auto_confirm = bool(req.auto_confirm_pipeline or req.auto_start)
         track_hint = proposal.get("track_hint") or "default"
         enforce_track(self.org_policy, track_hint if track_hint != "custom" else None)
-        role_template = track_hint if track_hint in {"express", "standard", "default"} else "default"
+        role_template = (
+            track_hint
+            if track_hint in {"express", "standard", "default", "research", "office"}
+            else "default"
+        )
 
         role_toolkits = {k: list(v) for k, v in (req.role_toolkits or {}).items()}
         if _agent_catalog is not None:
@@ -1257,6 +1267,33 @@ class Orchestrator:
             ini = self.get(ini.id) or ini
         return ini
 
+    def _assert_tier_budget(self, ini: Initiative, specs: list[dict[str, Any]]) -> None:
+        """手动编辑航线不能突破任务档位预算（只减不加）。
+
+        档位来自建任务页；旧任务没有 ``task_kind`` / ``tier`` 时跳过校验，
+        保持升级前的编辑行为不变。
+        """
+        meta = ini.meta or {}
+        kind = str(meta.get("task_kind") or "")
+        tier = str(meta.get("tier") or "")
+        if not kind or not tier:
+            return
+        from sortie_deck.tiers import TIER_ALLOWED
+
+        allowed = set(TIER_ALLOWED.get((kind, tier)) or [])
+        if not allowed:
+            return
+        extra = [
+            s["id"]
+            for s in specs
+            if s["id"] not in allowed and s["id"] not in {"intake", "done"}
+        ]
+        if extra:
+            raise RuntimeError(
+                f"阶段 {', '.join(extra)} 超出当前 {tier} 档预算；请移除该节点，"
+                f"或在建任务时选择更高档位"
+            )
+
     async def update_pipeline(
         self, initiative_id: str, req: UpdatePipelineRequest, *, author_name: str = "Operator"
     ) -> Initiative:
@@ -1266,6 +1303,7 @@ class Orchestrator:
         if ini.status != InitiativeStatus.DRAFT:
             raise RuntimeError("pipeline can only be edited while draft")
         specs = normalize_specs([s.model_dump() for s in req.stages])
+        self._assert_tier_budget(ini, specs)
         self._apply_pipeline_specs(
             ini,
             specs,
@@ -1700,6 +1738,49 @@ class Orchestrator:
         ini.stage_started_stage = stage
         self.store.upsert(ini)
         return ini.stage_started_at.isoformat()
+
+    def record_stage_metric(
+        self,
+        *,
+        initiative_id: str,
+        stage: str,
+        role: str = "",
+        harness: str = "",
+        status: str = "",
+        started_at: float,
+        ended_at: float,
+        tool_calls: int = 0,
+        review_rounds: int = 0,
+        review_verdict: str = "",
+        meta: dict[str, Any] | None = None,
+    ) -> None:
+        """阶段收尾写入一条耗时指标（旁路，失败只告警）。
+
+        ``started_at`` / ``ended_at`` 是 epoch 秒（甘特图直接按它定位），
+        duration_ms 在这里按两者之差计算，避免调用方各自换算。
+        """
+        try:
+            self.metrics.record(
+                initiative_id=initiative_id,
+                stage=stage,
+                role=role,
+                harness=harness,
+                status=status,
+                started_at=started_at,
+                ended_at=ended_at,
+                duration_ms=int(max(0.0, ended_at - started_at) * 1000),
+                tool_calls=tool_calls,
+                review_rounds=review_rounds,
+                review_verdict=review_verdict,
+                meta=meta,
+            )
+        except Exception:  # noqa: BLE001 — 指标是旁路，不能影响任务
+            logger.warning(
+                "阶段指标写入失败 initiative=%s stage=%s",
+                initiative_id,
+                stage,
+                exc_info=True,
+            )
 
     def set_materials(
         self, initiative_id: str, materials: list[ExternalMaterial]

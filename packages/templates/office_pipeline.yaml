@@ -1,0 +1,50 @@
+name: office
+description: 办公轨 — 采集 → 产出 → 建议（周报、纪要、文案、调研等非工程需求）
+version: 1
+track: office
+complexity: normal
+# 与 research 轨的区别：research 保留给「研究/分析」场景的历史任务，
+# office 是面向日常办公的中性阶段命名（产出 = 周报/纪要/文案，不叫「结论」）。
+roles:
+  - id: product
+    title: Knowledge Worker
+    persona: product
+    executor: mock_product
+  - id: design
+    title: Analyst
+    persona: design
+    executor: mock_design
+stages:
+  - name: intake
+    role: product
+    label: 集结
+    label_en: Intake
+    output_contract:
+      - intake.md
+  - name: office_collect
+    role: design
+    label: 采集
+    label_en: Collect
+    hitl_after: false
+    output_contract:
+      - notes.md
+  - name: office_produce
+    role: product
+    label: 产出
+    label_en: Produce
+    hitl_after: false
+    output_contract:
+      - report.md
+  - name: office_recommend
+    role: product
+    label: 建议
+    label_en: Recommend
+    hitl_after: true
+    on_reject: office_recommend
+    output_contract:
+      - recommendation.md
+  - name: done
+    role: product
+    label: 完成
+    label_en: Done
+    hitl_after: false

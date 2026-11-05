@@ -6,11 +6,17 @@ import contextlib
 import re
 from typing import Any, Literal
 
-from sortie_deck.templates import TEMPLATES_DIR, load_pipeline_template
 from sortie_deck.parallel import (
     _PLATFORM_BRANCH,
     attach_depends_on,
     selftest_id_for,
+)
+from sortie_deck.templates import TEMPLATES_DIR, load_pipeline_template
+from sortie_deck.tiers import (
+    TASK_KIND_LABELS,
+    TASK_KINDS,
+    TIER_ALLOWED,
+    TIERS,
 )
 
 PipelineTrack = Literal["express", "standard", "default", "custom"]
@@ -22,6 +28,8 @@ TRACK_FILES = {
     "standard": "standard_pipeline.yaml",
     # Non-engineering requests (研究 / 育儿 / 股票 …) run on the same machinery
     "research": "research_pipeline.yaml",
+    # 日常办公（周报/纪要/文案）用中性阶段命名，research 保留给历史任务
+    "office": "office_pipeline.yaml",
 }
 
 COMPLEXITY_TO_TRACK: dict[str, PipelineTrack] = {
@@ -232,19 +240,29 @@ def _stage_from_yaml(s: dict[str, Any]) -> dict[str, Any]:
 
 
 def stage_catalog() -> list[dict[str, Any]]:
-    """Union of all known stages across tracks (canonical defs)."""
+    """Union of all known stages across tracks (canonical defs).
+
+    ``kind`` 标记阶段归属：``delivery``（工程交付）/ ``knowledge``（办公、研究）。
+    planner 按任务类型过滤 catalog，避免工程任务混进 research 阶段（反之亦然）。
+    research 轨此前不在 catalog 里，导致 LLM planner 看不到也提不了办公阶段。
+    """
     by_id: dict[str, dict[str, Any]] = {}
-    # Prefer standard (richest) then default then express
-    for track in ("standard", "default", "express"):
+    # Prefer standard (richest) then default then express then research
+    for track in ("standard", "default", "express", "research", "office"):
         tpl = load_pipeline_template(track)
+        kind = "knowledge" if track in {"research", "office"} else "delivery"
         for s in tpl.get("stages", []):
             sid = s["name"]
             if sid not in by_id:
-                by_id[sid] = _stage_from_yaml(s)
+                spec = _stage_from_yaml(s)
+                spec["kind"] = kind
+                by_id[sid] = spec
     for s in _EXTRA_STAGES:
         sid = s["name"]
         if sid not in by_id:
-            by_id[sid] = _stage_from_yaml(s)
+            spec = _stage_from_yaml(s)
+            spec["kind"] = "delivery"
+            by_id[sid] = spec
     # Stable order
     order = [
         "intake",
@@ -267,6 +285,12 @@ def stage_catalog() -> list[dict[str, Any]]:
         "qa_handoff",
         "qa_verify",
         "deploy_preview",
+        "research_scan",
+        "research_synthesize",
+        "research_recommend",
+        "office_collect",
+        "office_produce",
+        "office_recommend",
         "done",
     ]
     out = [by_id[i] for i in order if i in by_id]
@@ -303,6 +327,11 @@ def list_tracks() -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+def track_allowed_stages(track: str) -> list[str]:
+    """某条 yaml 航线允许的阶段 id（显式 track 的「只减不加」预算）。"""
+    return [s["name"] for s in load_pipeline_template(track).get("stages", [])]
 
 
 def stage_rail(track: str, *, lang: str = "zh") -> list[dict[str, str]]:
@@ -381,15 +410,92 @@ def _yaml_stages(track: str) -> list[dict[str, Any]]:
     return [_stage_from_yaml(s) for s in tpl.get("stages", [])]
 
 
+def _tier_stage_ids(task_kind: str, tier: str, text: str) -> list[str]:
+    """按档位生成规则版阶段 id。
+
+    express/standard 是固定链路；full 档按简报命中的平台展开工种，不能把
+    TIER_ALLOWED 里的全部工种一次性塞进航线——那是「预算」，不是「必选清单」。
+    """
+    if task_kind != "delivery" or tier != "full":
+        return list(TIER_ALLOWED.get((task_kind, tier)) or [])
+
+    blob = text.lower()
+    platforms = [
+        sid
+        for sid, pats in _PLATFORM_SIGNALS
+        if any(re.search(p, blob, re.IGNORECASE) for p in pats)
+    ]
+    builds = platforms or ["eng_implement"]
+    return [
+        "intake",
+        "product_prd",
+        "design_ui",
+        "qa_cases",
+        *[f"{sid}_tech_design" for sid in platforms],
+        *builds,
+        *[f"{sid}_selftest" for sid in platforms],
+        "eng_integrate",
+        "qa_handoff",
+        "qa_verify",
+        "deploy_preview",
+        "done",
+    ]
+
+
 def plan_pipeline(
     *,
     title: str = "",
     brief: str = "",
     hint_track: str | None = None,
     complexity: Complexity | str = "auto",
+    task_kind: str | None = None,
+    tier: str | None = None,
 ) -> dict[str, Any]:
-    """Internal pipeline_planner agent — proposes stages pending human confirm."""
+    """Internal pipeline_planner agent — proposes stages pending human confirm.
+
+    指定 ``task_kind`` + ``tier`` 时直接按档位允许集合生成，跳过快轨/复杂度的
+    启发式增删。档位是显式预算，planner 只能在预算内排序与删减。
+    """
     text = f"{title}\n{brief}"
+    if task_kind in TASK_KINDS and tier in TIERS:
+        catalog = catalog_by_id()
+        stages: list[dict[str, Any]] = []
+        for sid in _tier_stage_ids(task_kind, tier, text):
+            if sid not in catalog:
+                continue
+            spec = dict(catalog[sid])
+            # full 档多工种：补并行组与分支，否则图里会退化成全串行
+            if sid.endswith("_tech_design"):
+                spec["parallel_group"] = "eng_planning"
+            elif sid in _PLATFORM_BRANCH:
+                spec["parallel_group"] = "eng_delivery"
+                spec["branch"] = _PLATFORM_BRANCH[sid]
+            elif sid.endswith("_selftest") and sid != "eng_selftest":
+                spec["parallel_group"] = "eng_delivery"
+                spec["branch"] = sid.removesuffix("_selftest")
+            stages.append(spec)
+        return {
+            "agent": PLANNER_AGENT,
+            "agent_title": PLANNER_TITLE,
+            "track_hint": (
+                "office"
+                if task_kind == "knowledge"
+                else ("express" if tier == "express" else "standard")
+            ),
+            "rationale": (
+                f"{TASK_KIND_LABELS.get(task_kind, task_kind)} · "
+                f"{tier} 档：预算内直接生成 {len(stages)} 个节点"
+            ),
+            "notes": [f"tier={task_kind}/{tier}"],
+            "stages": stages,
+            "status": "pending",
+            # 档位分支属于规则生成，沿用 heuristic 语义（planner 字段不新增枚举值）
+            "planner": "heuristic",
+            "task_kind": task_kind,
+            "tier": tier,
+            "tier_pruned": [],
+        }
+
     if hint_track in TRACK_FILES:
         track, reason = hint_track, f"hint track={hint_track}"
     else:
@@ -704,6 +810,15 @@ def apply_proposal_to_meta(meta: dict[str, Any], proposal: dict[str, Any], *, co
     meta["pipeline_track"] = "custom" if confirmed else proposal.get("track_hint") or meta.get("pipeline_track")
     meta["pipeline_confirmed"] = confirmed
     meta["track_reason"] = proposal.get("rationale") or meta.get("track_reason")
+    # 档位信息：旧任务没有这两个字段，读取时按 full 处理（行为保持不变）
+    if proposal.get("task_kind"):
+        meta["task_kind"] = proposal["task_kind"]
+    if proposal.get("tier"):
+        meta["tier"] = proposal["tier"]
+    if proposal.get("tier_pruned") is not None:
+        meta["tier_pruned"] = list(proposal.get("tier_pruned") or [])
+    if proposal.get("tier_reason"):
+        meta["tier_reason"] = proposal["tier_reason"]
     return meta
 
 

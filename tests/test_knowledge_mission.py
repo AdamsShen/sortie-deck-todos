@@ -204,6 +204,8 @@ async def test_orchestrator_stage_artifacts_auto_indexed(tmp_path):
                 coding_executor="mock",
                 creator_name="Ada",
                 harness="mock",
+                # 显式标准档：本用例断言 product_prd 产物被索引，不能被档位推荐裁掉
+                tier="standard",
                 auto_start=True,
             )
         )

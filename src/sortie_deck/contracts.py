@@ -38,12 +38,12 @@ OPTIONAL: dict[str, list[str]] = {
     "eng_web": ["checklist.md", "selftest_log.json"],
     "eng_backend": ["checklist.md", "selftest_log.json"],
     "eng_agent": ["checklist.md", "selftest_log.json"],
-    "eng_selftest": ["checklist.md", "selftest_log.json"],
-    "eng_ios_selftest": ["checklist.md", "selftest_log.json"],
-    "eng_android_selftest": ["checklist.md", "selftest_log.json"],
-    "eng_web_selftest": ["checklist.md", "selftest_log.json"],
-    "eng_backend_selftest": ["checklist.md", "selftest_log.json"],
-    "eng_agent_selftest": ["checklist.md", "selftest_log.json"],
+    "eng_selftest": ["checklist.md", "selftest_log.json", "selftest_result.json"],
+    "eng_ios_selftest": ["checklist.md", "selftest_log.json", "selftest_result.json"],
+    "eng_android_selftest": ["checklist.md", "selftest_log.json", "selftest_result.json"],
+    "eng_web_selftest": ["checklist.md", "selftest_log.json", "selftest_result.json"],
+    "eng_backend_selftest": ["checklist.md", "selftest_log.json", "selftest_result.json"],
+    "eng_agent_selftest": ["checklist.md", "selftest_log.json", "selftest_result.json"],
     "eng_integrate": ["selftest_log.json"],
 }
 # 技术方案阶段的实现清单（按后缀匹配：eng_backend_tech_design / eng_web_tech_design …）
@@ -88,6 +88,14 @@ REQUIRED: dict[str, list[str]] = {
     "qa_handoff": ["handoff.md"],
     "qa_verify": ["test_report.json", "test_cases.md"],
     "deploy_preview": ["deploy_plan.md", "deploy_result.json"],
+    # 非开发（研究/办公）阶段：此前没有契约，产物质量完全没有校验。
+    # research_* 保留给历史任务，office_* 是新的中性命名。
+    "research_scan": ["notes.md"],
+    "research_synthesize": ["report.md"],
+    "research_recommend": ["recommendation.md"],
+    "office_collect": ["notes.md"],
+    "office_produce": ["report.md"],
+    "office_recommend": ["recommendation.md"],
 }
 
 

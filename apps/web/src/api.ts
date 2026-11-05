@@ -8,6 +8,9 @@ import type {
   HarnessesResponse,
   HumanDecisionRecord,
   Initiative,
+  InsightMissionDetail,
+  InsightMissionSummary,
+  InsightTotals,
   KnowledgeBaseInfo,
   KnowledgeBaseScope,
   KnowledgeDoc,
@@ -16,6 +19,7 @@ import type {
   PublicUser,
   RoleSpec,
   SubRoomRecord,
+  TierGroup,
   UserStatus,
   UserRole,
 } from "./types";
@@ -252,6 +256,60 @@ export async function listRoles(token: string): Promise<RoleSpec[]> {
 }
 
 // --- mission intake -------------------------------------------------------
+
+/** 建任务页的档位数据：开发/办公两套各三档（阶段链路 + 预估时长）。 */
+export async function listPipelineTiers(
+  token: string,
+  taskKind?: "delivery" | "knowledge",
+): Promise<{ task_kinds: TierGroup[] }> {
+  const qs = taskKind ? `?task_kind=${encodeURIComponent(taskKind)}` : "";
+  return api<{ task_kinds: TierGroup[] }>(`/api/pipelines/tiers${qs}`, { token });
+}
+
+// --- 耗时分析（严格只看自己创建的任务） ------------------------------------
+
+export async function listInsightMissions(
+  token: string,
+  limit = 100,
+): Promise<{ missions: InsightMissionSummary[]; totals: InsightTotals }> {
+  return api<{ missions: InsightMissionSummary[]; totals: InsightTotals }>(
+    `/api/insights/missions?limit=${limit}`,
+    { token },
+  );
+}
+
+export async function getInsightMission(
+  token: string,
+  initiativeId: string,
+): Promise<InsightMissionDetail> {
+  return api<InsightMissionDetail>(
+    `/api/insights/missions/${encodeURIComponent(initiativeId)}`,
+    { token },
+  );
+}
+
+export async function compareInsightMissions(
+  token: string,
+  ids: string[],
+): Promise<{ missions: InsightMissionDetail[] }> {
+  const qs = ids.map((id) => encodeURIComponent(id)).join(",");
+  return api<{ missions: InsightMissionDetail[] }>(`/api/insights/compare?ids=${qs}`, {
+    token,
+  });
+}
+
+/** 保存建任务页的档位选择；确认建队时据此裁剪航线。 */
+export async function updateBriefingPrefs(
+  token: string,
+  sessionId: string,
+  body: { task_kind?: string; tier?: string },
+): Promise<unknown> {
+  return api(`/api/briefing/sessions/${encodeURIComponent(sessionId)}/prefs`, {
+    token,
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
 
 export async function updateInitiativeMaterials(
   token: string,

@@ -81,6 +81,86 @@ export interface PipelineProposal {
   status?: string;
 }
 
+export type TaskKind = "auto" | "delivery" | "knowledge";
+export type PipelineTier = "auto" | "express" | "standard" | "full";
+
+export interface TierStageInfo {
+  id: string;
+  label: string;
+  label_en?: string;
+}
+
+/** 单档定义：阶段链路 + 预估时长，来自 GET /api/pipelines/tiers。 */
+export interface TierDefinition {
+  tier: Exclude<PipelineTier, "auto">;
+  label: string;
+  label_en: string;
+  description: string;
+  stages: TierStageInfo[];
+  stage_count: number;
+  eta_minutes: [number, number];
+  max_roles: number;
+}
+
+export interface TierGroup {
+  task_kind: Exclude<TaskKind, "auto">;
+  label: string;
+  tiers: TierDefinition[];
+}
+
+/** 耗时分析：任务摘要 / 单阶段指标 / 单任务详情。 */
+export interface InsightMissionBrief {
+  id: string;
+  title: string;
+  status: string;
+  current_stage: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InsightMissionSummary extends InsightMissionBrief {
+  has_metrics: boolean;
+  stage_count: number;
+  total_duration_ms: number;
+  tool_calls: number;
+  review_rounds: number;
+}
+
+export interface InsightStage {
+  stage: string;
+  role: string;
+  harness: string;
+  attempt: number;
+  status: string;
+  started_at: number;
+  ended_at: number;
+  offset_ms: number;
+  duration_ms: number;
+  tool_calls: number;
+  review_rounds: number;
+  review_verdict: string;
+  meta: Record<string, unknown>;
+}
+
+export interface InsightSpan {
+  started_at: number;
+  ended_at: number;
+  duration_ms: number;
+}
+
+export interface InsightMissionDetail {
+  mission: InsightMissionBrief;
+  stages: InsightStage[];
+  span: InsightSpan | null;
+}
+
+export interface InsightTotals {
+  mission_count: number;
+  total_duration_ms: number;
+  tool_calls: number;
+  review_rounds: number;
+}
+
 export type KnowledgeCategory = "playbook" | "runbook" | "lore" | "reference";
 
 export type KnowledgeBaseScope = "global" | "user" | "task";

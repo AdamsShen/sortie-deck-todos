@@ -1,8 +1,19 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
-import { updateInitiativeMaterials, uploadMissionInput } from "../api";
+import {
+  listPipelineTiers,
+  updateBriefingPrefs,
+  updateInitiativeMaterials,
+  uploadMissionInput,
+} from "../api";
 import { playSfx } from "../sfx";
 import type { I18nKey } from "../i18n";
-import type { ExternalMaterial, Lang } from "../types";
+import type {
+  ExternalMaterial,
+  Lang,
+  PipelineTier,
+  TaskKind,
+  TierGroup,
+} from "../types";
 import { MissionBriefingChat } from "./MissionBriefingChat";
 import type { ComposerAttachment } from "./ChatComposer";
 
@@ -159,6 +170,11 @@ export function NewTaskPage({ token, lang, tr, busy, setBusy, onCancel, onCreate
   // 规划会话一开启就会预生成任务 id，拿到 id 后立刻把原件传进任务目录
   const [missionId, setMissionId] = useState("");
   const uploadedRef = useRef<Set<string>>(new Set());
+  // 执行档位：auto 交给后端按简报推荐；显式选择则写进 briefing session，
+  // 确认建队时作为阶段预算（planner 只能在预算内减，不能加）
+  const [taskKind, setTaskKind] = useState<TaskKind>("auto");
+  const [tier, setTier] = useState<PipelineTier>("auto");
+  const [tierGroups, setTierGroups] = useState<TierGroup[]>([]);
 
   async function uploadDraft(id: string, m: DraftMaterial) {
     if (!m.file || uploadedRef.current.has(m.uid)) return;
@@ -177,6 +193,31 @@ export function NewTaskPage({ token, lang, tr, busy, setBusy, onCancel, onCreate
       onError(err instanceof Error ? err.message : String(err));
     }
   }
+
+  // 档位数据：后端返回两套（开发/办公）各三档，前端不硬编码阶段清单
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const data = await listPipelineTiers(token);
+        if (!cancelled) setTierGroups(data.task_kinds || []);
+      } catch {
+        // 档位是增强项：加载失败退回 auto，不影响建队
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  // 会话就绪 / 档位变化时同步到后端；保存失败不阻断建队（后端按 auto 处理）
+  useEffect(() => {
+    if (!missionId) return;
+    void updateBriefingPrefs(token, missionId, { task_kind: taskKind, tier }).catch(
+      () => undefined,
+    );
+  }, [missionId, taskKind, tier, token]);
 
   // 会话 id 到位后补传「先选文件、后建会话」的那批；上传成功会写回 stored_path
   useEffect(() => {
@@ -295,6 +336,34 @@ export function NewTaskPage({ token, lang, tr, busy, setBusy, onCancel, onCreate
 
   const zh = lang === "zh";
 
+  const taskKindOptions = useMemo(
+    () => [
+      { value: "auto" as TaskKind, label: zh ? "自动" : "Auto" },
+      { value: "delivery" as TaskKind, label: zh ? "开发交付" : "Delivery" },
+      { value: "knowledge" as TaskKind, label: zh ? "办公/研究" : "Knowledge" },
+    ],
+    [zh],
+  );
+
+  const tierOptions = useMemo(
+    () => [
+      { value: "auto" as PipelineTier, label: zh ? "自动" : "Auto" },
+      { value: "express" as PipelineTier, label: zh ? "极速" : "Express" },
+      { value: "standard" as PipelineTier, label: zh ? "标准" : "Standard" },
+      { value: "full" as PipelineTier, label: zh ? "完整" : "Full" },
+    ],
+    [zh],
+  );
+
+  const activeGroup = useMemo(
+    () => tierGroups.find((g) => g.task_kind === taskKind) ?? null,
+    [tierGroups, taskKind],
+  );
+  const activeTier = useMemo(
+    () => activeGroup?.tiers.find((t) => t.tier === tier) ?? null,
+    [activeGroup, tier],
+  );
+
   const plannerLabels = useMemo(
     () => ({
       title: zh ? "建队规划官" : "Squad planner",
@@ -321,6 +390,71 @@ export function NewTaskPage({ token, lang, tr, busy, setBusy, onCancel, onCreate
             ? "与建队规划官多轮对话组建小队；导入的外部资料全部参与规划讨论，被钉住的将在任务创建后持续注入每轮对话的上下文。"
             : "Chat with the squad planner to form the squad; all imported materials join the planning discussion, and pinned ones keep feeding every squad turn after creation."}
         </p>
+
+        <section className="panel tier-panel">
+          <div className="panel-label">
+            {zh ? "执行档位" : "Execution tier"}
+            <span className="aux">PIPELINE TIER</span>
+          </div>
+          <div className="tier-row">
+            <span className="tier-row-label">{zh ? "任务类型" : "Task type"}</span>
+            <div className="tier-chips">
+              {taskKindOptions.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  className={`tier-chip${taskKind === opt.value ? " on" : ""}`}
+                  onClick={() => {
+                    playSfx("toggle");
+                    setTaskKind(opt.value);
+                  }}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="tier-row">
+            <span className="tier-row-label">{zh ? "档位" : "Tier"}</span>
+            <div className="tier-chips">
+              {tierOptions.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  className={`tier-chip${tier === opt.value ? " on" : ""}`}
+                  onClick={() => {
+                    playSfx("toggle");
+                    setTier(opt.value);
+                  }}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="tier-chain">
+            {activeTier ? (
+              <>
+                <span className="tier-chain-meta">
+                  {activeTier.stage_count} {zh ? "个阶段" : "stages"} ·{" "}
+                  {activeTier.eta_minutes[0]}-{activeTier.eta_minutes[1]} min
+                </span>
+                <span className="tier-chain-path">
+                  {activeTier.stages
+                    .map((s) => (zh ? s.label : s.label_en || s.label))
+                    .join(" → ")}
+                </span>
+                <span className="tier-chain-desc">{activeTier.description}</span>
+              </>
+            ) : (
+              <span className="tier-chain-desc">
+                {zh
+                  ? "按简报自动判定任务类型与档位；选定具体类型和档位后可预览阶段链路。"
+                  : "Task type and tier are inferred from the brief; pick both to preview the stage chain."}
+              </span>
+            )}
+          </div>
+        </section>
 
         <div className="intake-grid">
           <div className="intake-col intake-chat-col">

@@ -13,6 +13,12 @@ from sortie_deck.pipeline import (
     normalize_specs,
     plan_pipeline,
     resolve_track,
+    track_allowed_stages,
+)
+from sortie_deck.tiers import (
+    enforce_tier,
+    resolve_task_kind,
+    resolve_tier,
 )
 
 _SYSTEM = """You are Sortie Deck's pipeline_planner agent.
@@ -21,6 +27,9 @@ Propose a software delivery pipeline as JSON with keys:
   rationale: short Chinese or English explanation
   stages: array of {id, label?, role?, hitl_after?, parallel_group?, branch?, depends_on?}
 Only use stage ids from the provided catalog. Always include intake first and done last.
+The caller enforces a stage budget for the selected task_kind + tier: the catalog you
+receive is already filtered to that kind, and any stage outside the tier budget will be
+pruned before the human sees the proposal. Keep the pipeline as small as the tier allows.
 When multiple eng_* specialists (eng_web, eng_backend, eng_ios, …) should run together,
 give EACH its own tech design stage (`<role>_tech_design`, owned by that role) in an
 `eng_planning` parallel wave, then independent build→selftest branch chains in an
@@ -140,6 +149,7 @@ async def plan_pipeline_llm(
     brief: str = "",
     hint_track: str | None = None,
     complexity: str = "auto",
+    task_kind: str = "delivery",
     client: LlmClient | None = None,
 ) -> dict[str, Any] | None:
     """Optional LLM planner. Returns None on failure so caller can fall back."""
@@ -147,8 +157,11 @@ async def plan_pipeline_llm(
     if not llm.enabled:
         return None
     catalog = catalog_by_id()
+    # 只把本任务类型可用的阶段给模型：工程任务看不到 research 阶段，反之亦然
     catalog_summary = [
-        {"id": s["id"], "label": s.get("label"), "role": s.get("role")} for s in catalog.values()
+        {"id": s["id"], "label": s.get("label"), "role": s.get("role")}
+        for s in catalog.values()
+        if s.get("kind", "delivery") == task_kind
     ]
     hint = hint_track if hint_track in TRACK_FILES else None
     user = json.dumps(
@@ -156,6 +169,7 @@ async def plan_pipeline_llm(
             "title": title,
             "brief": brief,
             "complexity": complexity,
+            "task_kind": task_kind,
             "hint_track": hint,
             "catalog": catalog_summary,
         },
@@ -187,6 +201,7 @@ async def plan_pipeline_llm(
         "status": "pending",
         "planner": "llm",
         "planner_backend": llm.backend,
+        "task_kind": task_kind,
         "confidence": float(data.get("confidence") or 0.6),
     }
 
@@ -313,25 +328,74 @@ async def plan_pipeline_smart(
     brief: str = "",
     hint_track: str | None = None,
     complexity: str = "auto",
+    task_kind: str = "auto",
+    tier: str = "auto",
+    has_repos: bool = False,
     use_llm: bool = False,
     client: LlmClient | None = None,
 ) -> dict[str, Any]:
+    """规划航线：先判任务类型与档位，再让 LLM 在预算内提案，最后强制收敛。
+
+    档位是硬约束：LLM 提案超出预算会被 ``enforce_tier`` 裁剪；裁剪后缺少核心
+    产出阶段（或 LLM 不可用）时，回落到按档位定义的规则版航线。
+    """
+    # 兼容旧入口：显式 pipeline_track 优先于档位推荐，档位只作为记录
+    explicit_track = hint_track if hint_track in TRACK_FILES else None
+    if task_kind == "auto" and explicit_track == "research":
+        task_kind = "knowledge"
+
+    kind, kind_reason = resolve_task_kind(
+        title, brief, has_repos=has_repos, requested=task_kind
+    )
+    if explicit_track:
+        # 用户明确选了航线：以该航线的阶段集合为预算，不再用档位推荐覆盖
+        final_tier = {"express": "express", "standard": "standard"}.get(explicit_track, "full")
+        tier_reason = f"显式航线 {explicit_track}"
+    else:
+        final_tier, tier_reason = resolve_tier(kind, title, brief, requested=tier)
+    tier_note = f"{kind_reason}; {tier_reason}"
+    allowed = track_allowed_stages(explicit_track) if explicit_track else None
+
     if use_llm:
         llm_proposal = await plan_pipeline_llm(
             title=title,
             brief=brief,
             hint_track=hint_track,
             complexity=complexity,
+            task_kind=kind,
             client=client,
         )
         if llm_proposal:
-            return llm_proposal
-    proposal = plan_pipeline(
-        title=title,
-        brief=brief,
-        hint_track=hint_track,
-        complexity=complexity,
-    )
-    proposal["planner"] = "heuristic"
+            enforced = enforce_tier(
+                llm_proposal,
+                task_kind=kind,
+                tier=final_tier,
+                catalog=catalog_by_id(),
+                allowed_override=allowed,
+            )
+            if enforced:
+                enforced["tier_reason"] = tier_note
+                return enforced
+
+    if explicit_track:
+        proposal = plan_pipeline(
+            title=title,
+            brief=brief,
+            hint_track=explicit_track,
+            complexity=complexity,
+        )
+    else:
+        proposal = plan_pipeline(
+            title=title,
+            brief=brief,
+            hint_track=hint_track,
+            complexity=complexity,
+            task_kind=kind,
+            tier=final_tier,
+        )
+    proposal["planner"] = proposal.get("planner") or "heuristic"
     proposal.setdefault("confidence", 0.85)
+    proposal["task_kind"] = kind
+    proposal["tier"] = final_tier
+    proposal["tier_reason"] = tier_note
     return proposal

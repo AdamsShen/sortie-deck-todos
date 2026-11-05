@@ -79,6 +79,10 @@ class BriefingSession(BaseModel):
     title: str = ""
     brief: str = ""
     coding_executor: str = "auto"
+    # 建队档位（建任务页选择）：确认建队时传给 CreateInitiativeRequest，
+    # 也用于收敛规划会话 draft 里携带的 stages 提案。
+    task_kind: str = "auto"
+    tier: str = "auto"
     messages: list[BriefingMessage] = Field(default_factory=list)
     events: list[HarnessEvent] = Field(default_factory=list)
     draft: dict[str, Any] = Field(default_factory=dict)
@@ -635,6 +639,42 @@ class MissionBriefingAgent:
         sess.draft = {**(sess.draft or {}), "role_repos": clean}
         return self.store.save(sess)
 
+    def _apply_tier_to_proposal(
+        self, proposal: dict[str, Any], ini: Any
+    ) -> dict[str, Any] | None:
+        """把规划会话的提案收敛到任务档位预算内。
+
+        规划官在会话里可能给出 15 个阶段；建队时必须服从建任务页选的档位，
+        否则 draft 会盖掉 orchestrator 已经裁剪好的航线。收敛失败（缺核心
+        产出阶段）时返回 None，调用方保留 orchestrator 的结果。
+        """
+        from sortie_deck.pipeline import catalog_by_id, normalize_specs
+        from sortie_deck.tiers import enforce_tier
+
+        kind = str((ini.meta or {}).get("task_kind") or "delivery")
+        tier = str((ini.meta or {}).get("tier") or "full")
+        try:
+            specs = normalize_specs(proposal.get("stages") or [])
+        except Exception:  # noqa: BLE001 — 规划提案非法时放弃覆盖
+            logger.warning(
+                "规划提案 stage 归一化失败，保留档位航线: initiative=%s", ini.id
+            )
+            return None
+        constrained = enforce_tier(
+            {**proposal, "stages": specs},
+            task_kind=kind,
+            tier=tier,
+            catalog=catalog_by_id(),
+        )
+        if constrained is None:
+            logger.warning(
+                "规划提案缺少核心阶段，保留档位航线: initiative=%s kind=%s tier=%s",
+                ini.id,
+                kind,
+                tier,
+            )
+        return constrained
+
     async def _commit(
         self,
         sess: BriefingSession,
@@ -664,6 +704,9 @@ class MissionBriefingAgent:
             creator_name=user_name,
             # 归属到会话发起人；owner_id 为空时留 None（仅 admin 可见，见 app._visible_initiatives）
             created_by=sess.owner_id or None,
+            # 建任务页选择的档位：orchestrator 据此生成预算内的航线
+            task_kind=sess.task_kind or "auto",  # type: ignore[arg-type]
+            tier=sess.tier or "auto",  # type: ignore[arg-type]
             auto_confirm_pipeline=False,
             auto_start=False,
         )
@@ -678,11 +721,15 @@ class MissionBriefingAgent:
                 "stages": stages,
                 "status": "pending",
             }
-            ini.meta = apply_proposal_to_meta(ini.meta, proposal, confirmed=False)
-            if self._save_initiative:
-                maybe = self._save_initiative(ini)
-                if hasattr(maybe, "__await__"):
-                    await maybe  # type: ignore[misc]
+            # 档位是硬约束：规划会话里的提案同样要收敛，否则 draft 的 15 个阶段
+            # 会盖掉 orchestrator 已按档位裁剪好的航线；收敛失败则保留后者。
+            constrained = self._apply_tier_to_proposal(proposal, ini)
+            if constrained is not None:
+                ini.meta = apply_proposal_to_meta(ini.meta, constrained, confirmed=False)
+                if self._save_initiative:
+                    maybe = self._save_initiative(ini)
+                    if hasattr(maybe, "__await__"):
+                        await maybe  # type: ignore[misc]
         # 待审 forge 草稿写入任务 meta：出击门禁据此阻断未审核角色的任务
         # （Orchestrator.start_pipeline → forge_review_required）
         forged = [f for f in (draft.get("forged_agents") or []) if f.get("draft_id")]
@@ -757,6 +804,8 @@ class MissionBriefingAgent:
         proposal = await plan_pipeline_smart(
             title=str(args.get("title") or ""),
             brief=str(args.get("brief") or ""),
+            task_kind=str(args.get("task_kind") or "auto"),
+            tier=str(args.get("tier") or "auto"),
             use_llm=bool(self.cfg.pipeline_llm),
             client=self._llm(),
         )
