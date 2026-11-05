@@ -1,0 +1,32 @@
+{
+  "start_command": "python3 run.py --port 8731",
+  "base_url": "http://127.0.0.1:8731",
+  "health_url": "http://127.0.0.1:8731/",
+  "timeout_sec": 120,
+  "viewport": { "width": 1280, "height": 800 },
+  "scenarios": [
+    {
+      "name": "首页渲染",
+      "path": "/",
+      "steps": [
+        { "expect_visible": "#auth-view" },
+        { "expect_hidden": "#game-view" },
+        { "screenshot": "01-home.png" }
+      ]
+    },
+    {
+      "name": "注册后进入游戏",
+      "path": "/",
+      "steps": [
+        { "type": { "selector": "input[name=username]", "text": "qa_user" } },
+        { "type": { "selector": "input[name=password]", "text": "qa_pass123" } },
+        { "click": "button[type=submit]" },
+        { "wait_ms": 500 },
+        { "expect_visible": "#game-view" },
+        { "expect_hidden": "#auth-view" },
+        { "key": "ArrowUp" },
+        { "screenshot": "02-game.png" }
+      ]
+    }
+  ]
+}

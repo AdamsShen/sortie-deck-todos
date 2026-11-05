@@ -505,6 +505,49 @@ Coverage checklist (reference only — the runner executes them in one pass):
 {items}"""
 
 
+# QA 浏览器复验：把「起服务 / 找浏览器 / 手写 CDP 脚本 / 清理」从模型手里拿走。
+# 实测（2026-11-05 贪吃蛇任务）QA 52 步里 38 次是 Bash，CDP 脚本在 /tmp 里改了 3 次才跑通。
+_QA_BROWSER_RUNNER = """Browser re-verification (mandatory — do NOT hand-write CDP/Playwright scripts):
+- `scripts/qa_browser_runner.mjs` is injected for this stage. Run it ONCE:
+  `node scripts/qa_browser_runner.mjs`.
+- It starts the service from `qa.config.json`, waits for the health URL, drives headless Chrome
+  through every scenario, writes `qa_result.json` + `qa_screenshots/`, then tears everything down.
+- Read `qa_result.json`; fix ONLY the failing scenarios (usually the app, sometimes a selector),
+  then re-run the same script.
+- Never start/stop services by hand, never use pkill/kill/sleep/ps/lsof, and never write your own
+  CDP/Playwright script — add scenarios to `qa.config.json` instead.
+- Scenario steps: `{"path": "/"}`, `{"wait_ms": 500}`, `{"click": "<css>"}`,
+  `{"type": {"selector": "<css>", "text": "..."}}`, `{"key": "ArrowUp"}`,
+  `{"expect_visible": "<css>"}`, `{"expect_hidden": "<css>"}`,
+  `{"expect_text": {"selector": "<css>", "contains": "..."}}`, `{"screenshot": "<name>.png"}`.
+- `qa.config.json` missing: fill `start_command` / `base_url` / `health_url` from the project's own
+  entry (README / package.json scripts / Makefile). Do not invent ports.
+- `qa_result.json` status `browser_unavailable`: fall back to HTTP-level checks with curl and say so
+  in the report; never fabricate browser results.
+"""
+
+
+def _ensure_qa_runner(workspace: Path, stage: str) -> None:
+    """QA 阶段注入固定的浏览器复验 runner；项目已有同名脚本时不动它。
+
+    注入失败只告警：prompt 会检测脚本是否存在并回退到手工复验，不影响任务。
+    """
+    if not _is_qa_stage(stage):
+        return
+    target = workspace / "scripts" / "qa_browser_runner.mjs"
+    if target.exists():
+        return
+    from sortie_deck.templates import TEMPLATES_DIR
+
+    template = TEMPLATES_DIR / "qa" / "browser_runner.mjs"
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(template.read_text(encoding="utf-8"), encoding="utf-8")
+        target.chmod(0o755)
+    except OSError as exc:
+        logger.warning("QA 浏览器 runner 注入失败（回退手工复验）: %s", exc)
+
+
 def _ensure_selftest_runner(workspace: Path, stage: str) -> None:
     """自测阶段注入固定 e2e runner；项目已有同名脚本时不动它。
 
@@ -943,6 +986,8 @@ class HarnessStageExecutor:
         workspace = ensure_worktree(data_dir.parent, ctx.initiative_id, worktrees_dir)
         # 自测阶段注入固定 runner：把起服务/健康检查/清理从模型手里拿走
         _ensure_selftest_runner(workspace, ctx.stage)
+        # QA 阶段注入浏览器复验 runner：场景写在 qa.config.json，模型只跑脚本 + 修失败项
+        _ensure_qa_runner(workspace, ctx.stage)
         repo_section, repo_log = await clone_repos(
             ctx.repos, workspace, ctx.initiative_id, actor_user_id=ctx.actor_user_id
         )
@@ -1915,6 +1960,9 @@ class HarnessStageExecutor:
         # QA 阶段额外要求结论块：否则图无法区分"测试通过"与"需要打回"
         if _is_qa_stage(ctx.stage):
             sections.append(_QA_PROTOCOL)
+            # runner 注入成功才给硬约束，否则模型以为有脚本可跑
+            if (workspace / "scripts" / "qa_browser_runner.mjs").is_file():
+                sections.append(_QA_BROWSER_RUNNER)
         if repo_section:
             sections.append(repo_section.strip())
         artifact_index = list(pack.get("artifact_index") or [])
