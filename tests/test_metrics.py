@@ -43,6 +43,9 @@ def test_record_and_aggregate(tmp_path) -> None:
     assert agg["ini_a"]["total_duration_ms"] == 4500
     assert agg["ini_a"]["tool_calls"] == 10
     assert agg["ini_a"]["review_rounds"] == 2
+    # 执行起止取首阶段起点 / 末阶段终点，供列表「几点到几点」列
+    assert agg["ini_a"]["first_started_at"] == pytest.approx(now)
+    assert agg["ini_a"]["last_ended_at"] == pytest.approx(now + 5)
     assert "ini_b" not in agg
 
 
@@ -151,3 +154,49 @@ async def test_orchestrator_records_metrics_for_mission(tmp_path) -> None:
         assert all(r["duration_ms"] >= 0 for r in rows)
     finally:
         await orch.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_insight_list_exposes_execution_window(monkeypatch) -> None:
+    """列表接口暴露执行起止；无指标的老任务必须是 None，否则前端会把 0 渲染成 1970 年。"""
+    from importlib import import_module
+
+    from sortie_deck.auth import PublicUser
+    from sortie_deck.models import Initiative
+
+    app_mod = import_module("sortie_deck.api.app")
+    now = time.time()
+    ini_with = Initiative(title="有指标", brief="b", created_by="usr_owner")
+    ini_old = Initiative(title="老任务", brief="b", created_by="usr_owner")
+
+    class _Metrics:
+        def list_missions(self, ids):
+            assert ini_with.id in ids
+            return {
+                ini_with.id: {
+                    "stage_count": 2,
+                    "total_duration_ms": 4500,
+                    "tool_calls": 10,
+                    "review_rounds": 2,
+                    "first_started_at": now,
+                    "last_ended_at": now + 5,
+                }
+            }
+
+    class _Orch:
+        metrics = _Metrics()
+
+        def list_initiatives(self):
+            return [ini_with, ini_old]
+
+    monkeypatch.setattr(app_mod, "orch", lambda: _Orch())
+    user = PublicUser(
+        id="usr_owner", username="owner", display_name="owner", role="member"
+    )  # type: ignore[arg-type]
+    data = await app_mod.list_insight_missions(limit=10, user=user)
+    by_id = {m["id"]: m for m in data["missions"]}
+    assert by_id[ini_with.id]["first_started_at"] == pytest.approx(now)
+    assert by_id[ini_with.id]["last_ended_at"] == pytest.approx(now + 5)
+    assert by_id[ini_with.id]["created_at"]
+    assert by_id[ini_old.id]["first_started_at"] is None
+    assert by_id[ini_old.id]["last_ended_at"] is None

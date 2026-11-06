@@ -1,4 +1,4 @@
-import type { InsightMissionDetail, Lang } from "../types";
+import type { InsightMissionDetail, InsightStage, Lang } from "../types";
 
 type Props = {
   missions: InsightMissionDetail[];
@@ -21,6 +21,45 @@ export function formatDuration(ms: number): string {
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m ${String(seconds % 60).padStart(2, "0")}s`;
   return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
+}
+
+const pad = (n: number) => String(n).padStart(2, "0");
+
+/**
+ * epoch 秒（阶段指标）或 ISO 字符串（任务创建时间）→ 毫秒时间戳。
+ * 后端一律存 UTC / epoch，这里统一收口后按浏览器本地时区渲染，避免两套时间口径混用导致时区偏差。
+ */
+export function toMs(value: number | string | null | undefined): number | null {
+  if (value == null) return null;
+  const ms = typeof value === "number" ? value * 1000 : new Date(value).getTime();
+  return Number.isFinite(ms) && ms > 0 ? ms : null;
+}
+
+/** 毫秒 → MM-DD HH:mm，用于列表列与阶段明细表。 */
+export function formatClock(ms: number | null): string {
+  if (ms == null) return "—";
+  const d = new Date(ms);
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** 毫秒 → YYYY-MM-DD HH:mm:ss，用于 title 悬浮展示完整时间。 */
+export function formatClockFull(ms: number | null): string {
+  if (ms == null) return "";
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+/**
+ * 执行区间：同一天只显示时刻，跨天补日期，避免窄列被完整日期撑爆；完整时间由 title 提供。
+ */
+export function formatRange(startMs: number | null, endMs: number | null): string {
+  if (startMs == null || endMs == null) return "—";
+  const s = new Date(startMs);
+  const e = new Date(endMs);
+  const clock = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  if (s.toDateString() === e.toDateString()) return `${clock(s)} → ${clock(e)}`;
+  const md = (d: Date) => `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return `${md(s)} ${clock(s)} → ${md(e)} ${clock(e)}`;
 }
 
 function pct(value: number, total: number): number {
@@ -104,6 +143,75 @@ export function MissionGantt({ missions, lang }: Props) {
               </div>
             )}
           </section>
+        );
+      })}
+    </div>
+  );
+}
+
+type StageTableProps = {
+  stages: InsightStage[];
+  lang: Lang;
+};
+
+/**
+ * 阶段耗时明细表：每阶段一行，给出精确起止时刻、耗时与占比。
+ *
+ * 为什么与甘特图并存：甘特图看相对位置与间隙，明细表给可读数字（Airflow Task Instances /
+ * Langfuse observations 也都同时提供两者）。耗时最长的行高亮并标占比，但这是「最慢阶段」
+ * 而非关键路径 —— stage_metrics 没有依赖边，并行波次下最长单阶段不等于决定总时长的链路。
+ */
+export function MissionStageTable({ stages, lang }: StageTableProps) {
+  const zh = lang === "zh";
+  const total = stages.reduce((sum, s) => sum + s.duration_ms, 0);
+  const slowest = stages.reduce((max, s) => Math.max(max, s.duration_ms), 0);
+  return (
+    <div className="stage-table">
+      <div className="stage-table-row stage-table-head">
+        <span>{zh ? "阶段" : "Stage"}</span>
+        <span>{zh ? "状态" : "Status"}</span>
+        <span>{zh ? "开始" : "Start"}</span>
+        <span>{zh ? "结束" : "End"}</span>
+        <span>{zh ? "耗时 / 占比" : "Duration / share"}</span>
+        <span>{zh ? "工具" : "Tools"}</span>
+        <span>{zh ? "自审" : "Reviews"}</span>
+      </div>
+      {stages.map((stage) => {
+        const share = total > 0 ? Math.round((stage.duration_ms / total) * 100) : 0;
+        const status = STATUS_LABEL[stage.status] || {
+          zh: stage.status || "未知",
+          en: stage.status || "unknown",
+        };
+        const startMs = toMs(stage.started_at);
+        const endMs = toMs(stage.ended_at);
+        return (
+          <div
+            className={`stage-table-row${slowest > 0 && stage.duration_ms === slowest ? " slowest" : ""}`}
+            key={`${stage.stage}-${stage.attempt}`}
+          >
+            <span className="stage-table-name">
+              {stage.stage}
+              {stage.attempt > 1 && <em>#{stage.attempt}</em>}
+            </span>
+            <span className={`stage-table-status s-${stage.status || "ok"}`}>
+              {zh ? status.zh : status.en}
+            </span>
+            <span className="insights-time" title={formatClockFull(startMs)}>
+              {formatClock(startMs)}
+            </span>
+            <span className="insights-time" title={formatClockFull(endMs)}>
+              {formatClock(endMs)}
+            </span>
+            <span className="stage-table-duration">
+              <b>{formatDuration(stage.duration_ms)}</b>
+              <i className="stage-table-bar">
+                <i style={{ width: `${share}%` }} />
+              </i>
+              <em>{share}%</em>
+            </span>
+            <span>{stage.tool_calls}</span>
+            <span>{stage.review_rounds}</span>
+          </div>
         );
       })}
     </div>

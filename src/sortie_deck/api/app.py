@@ -2765,7 +2765,7 @@ async def list_insight_missions(
     limit: int = Query(default=100, ge=1, le=300),
     user: PublicUser = Depends(require_user),
 ) -> dict[str, Any]:
-    """当前用户创建的任务 + 阶段指标聚合。"""
+    """当前用户创建的任务 + 阶段指标聚合（含执行起止，供列表展示）。"""
     items = [
         i
         for i in orch().list_initiatives()
@@ -2777,6 +2777,9 @@ async def list_insight_missions(
     missions: list[dict[str, Any]] = []
     for ini in items:
         metrics = agg.get(ini.id) or {}
+        # 首/末阶段时刻取自聚合结果，0 表示该任务无指标（功能上线前创建），返回 None 让前端显示占位符
+        first_started = float(metrics.get("first_started_at") or 0)
+        last_ended = float(metrics.get("last_ended_at") or 0)
         missions.append(
             {
                 **_insight_mission_brief(ini),
@@ -2785,6 +2788,8 @@ async def list_insight_missions(
                 "total_duration_ms": int(metrics.get("total_duration_ms") or 0),
                 "tool_calls": int(metrics.get("tool_calls") or 0),
                 "review_rounds": int(metrics.get("review_rounds") or 0),
+                "first_started_at": first_started or None,
+                "last_ended_at": last_ended or None,
             }
         )
     return {

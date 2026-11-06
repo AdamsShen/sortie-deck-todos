@@ -268,9 +268,13 @@ export async function listPipelineTiers(
 
 // --- 耗时分析（严格只看自己创建的任务） ------------------------------------
 
+/**
+ * 耗时分析任务列表，默认取后端硬上限 300 条。
+ * TODO: 前端搜索只覆盖这 300 条，任务数增长后需在列表接口增加 q 参数做服务端过滤。
+ */
 export async function listInsightMissions(
   token: string,
-  limit = 100,
+  limit = 300,
 ): Promise<{ missions: InsightMissionSummary[]; totals: InsightTotals }> {
   return api<{ missions: InsightMissionSummary[]; totals: InsightTotals }>(
     `/api/insights/missions?limit=${limit}`,

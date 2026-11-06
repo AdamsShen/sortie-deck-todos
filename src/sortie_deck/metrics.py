@@ -128,7 +128,11 @@ class StageMetricsStore:
             return 0
 
     def list_missions(self, initiative_ids: list[str]) -> dict[str, dict[str, Any]]:
-        """按任务聚合指标：阶段数（去重）、累计耗时、工具步数、review 轮次。"""
+        """按任务聚合指标：阶段数（去重）、累计耗时、工具步数、review 轮次、执行起止。
+
+        执行起止取首阶段 MIN(started_at) 与末阶段 MAX(ended_at)，供列表展示「几点到几点」。
+        它与 SUM(duration_ms) 口径不同（含阶段间隙与人工 HITL 等待），前端另算差值展示。
+        """
         ids = [i for i in initiative_ids if i]
         if not ids:
             return {}
@@ -142,6 +146,7 @@ class StageMetricsStore:
                            SUM(duration_ms) AS total_duration_ms,
                            SUM(tool_calls) AS tool_calls,
                            SUM(review_rounds) AS review_rounds,
+                           MIN(started_at) AS first_started_at,
                            MAX(ended_at) AS last_ended_at
                     FROM stage_metrics
                     WHERE initiative_id IN ({placeholders})
@@ -158,6 +163,7 @@ class StageMetricsStore:
                 "total_duration_ms": int(row["total_duration_ms"] or 0),
                 "tool_calls": int(row["tool_calls"] or 0),
                 "review_rounds": int(row["review_rounds"] or 0),
+                "first_started_at": float(row["first_started_at"] or 0.0),
                 "last_ended_at": float(row["last_ended_at"] or 0.0),
             }
             for row in rows

@@ -124,6 +124,9 @@ export interface InsightMissionSummary extends InsightMissionBrief {
   total_duration_ms: number;
   tool_calls: number;
   review_rounds: number;
+  /** 首阶段起点 / 末阶段终点（epoch 秒）；无指标的老任务为 null */
+  first_started_at: number | null;
+  last_ended_at: number | null;
 }
 
 export interface InsightStage {
