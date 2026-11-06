@@ -4653,50 +4653,231 @@ textarea {
   gap: 0.5rem;
 }
 
+/* 开发仓库绑定：角色槽位卡片 + grid 定宽列，避免全局 select 的 width:100% 在 flex 行里挤掉 URL 输入框 */
 .briefing-repos {
   display: flex;
   flex-direction: column;
-  gap: 0.45rem;
-  padding: 0.6rem;
+  gap: 0.65rem;
+  padding: 0.75rem 0.85rem 0.85rem;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: 0 1px 2px rgba(26, 31, 54, 0.04);
+}
+
+.briefing-repos-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.briefing-repos-head .panel-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
 }
 
 .briefing-repos-hint {
-  font-size: 0.7rem;
+  margin: 0.25rem 0 0;
+  font-size: 0.68rem;
+  line-height: 1.5;
+}
+
+.briefing-repos-count {
+  flex: 0 0 auto;
+  padding: 0.1rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  white-space: nowrap;
+}
+
+.briefing-repos-empty {
   margin: 0;
+  padding: 0.45rem 0.55rem;
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 0.66rem;
+  line-height: 1.5;
+}
+
+.briefing-repos-empty.warn {
+  background: color-mix(in srgb, var(--danger) 8%, var(--panel-2));
+  color: var(--danger);
+}
+
+.briefing-repos-retry {
+  margin-left: 0.45rem;
+  padding: 0.05rem 0.35rem;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font-size: 0.62rem;
+}
+
+.briefing-repo-slots {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
 }
 
 .briefing-repo-slot {
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
+  gap: 0.4rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
 }
 
-.briefing-repo-row {
+.briefing-repo-slot.has-repos {
+  border-color: color-mix(in srgb, var(--signal) 32%, var(--line));
+  background: color-mix(in srgb, var(--signal-dim) 35%, var(--panel));
+}
+
+.briefing-repo-slot-head {
   display: flex;
-  gap: 0.35rem;
   align-items: center;
-}
-
-.briefing-repo-row input {
-  flex: 1;
+  gap: 0.45rem;
   min-width: 0;
-  font-size: 0.75rem;
-  padding: 0.25rem 0.4rem;
 }
 
-.briefing-repo-row input.briefing-repo-branch {
-  flex: 0 0 9rem;
-}
-
-.briefing-repo-cred {
+.briefing-repo-slot-name {
   flex: 0 0 auto;
-  max-width: 10rem;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.briefing-repo-slot-meta {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--muted);
+  font-size: 0.64rem;
+}
+
+.briefing-repo-add {
+  flex: 0 0 auto;
+  appearance: none;
+  padding: 0.2rem 0.5rem;
+  border: 1px dashed var(--line-hot);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--copper);
+  font-size: 0.66rem;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+
+.briefing-repo-add:hover {
+  border-style: solid;
+  border-color: var(--copper);
+  background: color-mix(in srgb, var(--copper) 8%, var(--panel));
+}
+
+.briefing-repo-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.briefing-repo-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 1.6rem;
+  gap: 0.35rem 0.4rem;
+  padding: 0.45rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.briefing-repo-picker {
+  grid-column: 1;
+  min-width: 0;
+  width: 100%;
+  padding: 0.3rem 0.45rem;
+  border-radius: 6px;
+  background: var(--panel-2);
+  font-size: 0.72rem;
+}
+
+.briefing-repo-remove {
+  grid-column: 2;
+  grid-row: 1;
+  appearance: none;
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.briefing-repo-remove:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.briefing-repo-fields {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 6.5rem;
+  gap: 0.35rem;
+}
+
+.briefing-repo-fields input {
+  min-width: 0;
+  width: 100%;
+  padding: 0.3rem 0.45rem;
+  border-radius: 6px;
+  font-size: 0.7rem;
+}
+
+.briefing-repo-fields input.briefing-repo-branch {
+  font-family: var(--mono);
+}
+
+.briefing-repo-source {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--muted);
+  font-size: 0.62rem;
+}
+
+.briefing-repo-badge {
+  padding: 0.05rem 0.35rem;
+  border-radius: 999px;
+  font-size: 0.6rem;
+  background: color-mix(in srgb, var(--copper) 12%, var(--panel-2));
+  color: var(--copper);
+}
+
+.briefing-repo-badge.mine {
+  background: color-mix(in srgb, var(--signal) 12%, var(--panel-2));
+  color: var(--signal);
+}
+
+@media (max-width: 560px) {
+  .briefing-repo-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 @media (max-width: 900px) {

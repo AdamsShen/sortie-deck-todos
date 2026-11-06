@@ -529,147 +529,213 @@ export function MissionBriefingChat({
       {awaiting && !sending && (
         <>
           {repoSlots().length > 0 && (
-            <div className="briefing-repos">
-              <div className="panel-label">
-                {lang === "zh" ? "开发仓库（可选，多个用「+」添加）" : "Dev repos (optional, add multiple)"}
+            <section className="briefing-repos" aria-label={lang === "zh" ? "开发仓库" : "Dev repos"}>
+              <div className="briefing-repos-head">
+                <div>
+                  <div className="panel-label">
+                    {lang === "zh" ? "开发仓库 · 可选" : "Dev repos · optional"}
+                  </div>
+                  <p className="muted briefing-repos-hint">
+                    {lang === "zh"
+                      ? "按角色绑定仓库与分支，确认后 Agent 会先 clone 再开发。"
+                      : "Bind repos & branches per role; agents clone them before coding."}
+                  </p>
+                </div>
+                <span className="briefing-repos-count">
+                  {repoSlots().length} {lang === "zh" ? "角色" : "roles"}
+                </span>
               </div>
-              <p className="muted briefing-repos-hint">
-                {lang === "zh"
-                  ? "为对应开发 Agent 绑定 git 仓库与分支；确认后其工作区会先 clone 这些仓库，读代码再迭代。"
-                  : "Bind git repos & branches per dev agent; on confirm the agent clones and reads them before iterating."}
-              </p>
-              {repoSourceError && (
-                <p className="tiny" role="status">
+
+              {repoSourceError ? (
+                <p className="briefing-repos-empty warn">
                   {lang === "zh" ? "仓库清单加载失败：" : "Repo list failed: "}
                   {repoSourceError}
+                  {lang === "zh" ? "，可直接手填 URL。" : " — enter a URL manually."}
                   <button
                     type="button"
-                    className="btn linkish"
-                    onClick={() => setRepoLoadTick((v) => v + 1)}
+                    className="briefing-repos-retry"
+                    onClick={() => setRepoLoadTick((n) => n + 1)}
                   >
                     {lang === "zh" ? "重试" : "Retry"}
                   </button>
                 </p>
-              )}
-              {repoSlots().map((slot) => (
-                <div key={slot} className="briefing-repo-slot">
-                  <span className="loadout-label">{slot}</span>
-                  {(repos[slot] || []).map((row, i) => (
-                    <div key={i} className="briefing-repo-row">
-                      <select
-                        value=""
-                        onChange={(e) => {
-                          const [source, id] = (e.target.value || "").split(":");
-                          if (!source || !id) return;
-                          if (source === "workspace") {
-                            const ws = workspaceRepos.find((r) => r.id === id);
-                            if (!ws) return;
-                            // 同一角色内同一仓库只允许一行，避免重复 clone
-                            if ((repos[slot] || []).some((r, j) => j !== i && r.repo_id === ws.id))
-                              return;
-                            updateRepoRow(slot, i, {
-                              url: ws.url,
-                              name: ws.name,
-                              branch: row.branch || ws.default_branch,
-                              source: "workspace",
-                              repo_id: ws.id,
-                              credential_id: ws.credential_id,
-                            });
-                            return;
-                          }
-                          const mine = myRepos.find((r) => r.id === id);
-                          if (!mine) return;
-                          if ((repos[slot] || []).some((r, j) => j !== i && r.repo_id === mine.id))
-                            return;
-                          updateRepoRow(slot, i, {
-                            url: mine.url,
-                            name: mine.name,
-                            branch: row.branch || mine.default_branch,
-                            source: "custom",
-                            repo_id: mine.id,
-                            credential_id: mine.credential_id,
-                          });
-                        }}
-                      >
-                        <option value="">{lang === "zh" ? "选择仓库…" : "pick a repo…"}</option>
-                        {workspaceRepos.length > 0 && (
-                          <optgroup label={lang === "zh" ? "工作区仓库" : "Workspace repos"}>
-                            {workspaceRepos.map((r) => {
-                              const cred = wsCreds.find((c) => c.id === r.credential_id);
-                              return (
-                                <option
-                                  key={r.id}
-                                  value={`workspace:${r.id}`}
-                                  disabled={!cred}
-                                >
-                                  {r.name}
-                                  {cred
-                                    ? ` · ${cred.label}`
-                                    : lang === "zh"
-                                      ? " · 未绑定凭据"
-                                      : " · unbound"}
-                                </option>
-                              );
-                            })}
-                          </optgroup>
-                        )}
-                        {myRepos.length > 0 && (
-                          <optgroup label={lang === "zh" ? "我的私有仓库" : "My private repos"}>
-                            {myRepos.map((r) => {
-                              const cred = [...wsCreds, ...myCreds].find(
-                                (c) => c.id === r.credential_id,
-                              );
-                              return (
-                                <option key={r.id} value={`custom:${r.id}`} disabled={!cred}>
-                                  {r.name}
-                                  {cred
-                                    ? ` · ${cred.label}`
-                                    : lang === "zh"
-                                      ? " · 未绑定凭据"
-                                      : " · unbound"}
-                                </option>
-                              );
-                            })}
-                          </optgroup>
-                        )}
-                      </select>
-                      <input
-                        value={row.url}
-                        placeholder="https://github.com/org/repo.git"
-                        onChange={(e) =>
-                          updateRepoRow(slot, i, {
-                            url: e.target.value,
-                            source: "custom",
-                            credential_id: null,
-                          })
-                        }
-                      />
-                      <input
-                        className="briefing-repo-branch"
-                        value={row.branch}
-                        placeholder={lang === "zh" ? "分支（必填）" : "branch (required)"}
-                        onChange={(e) => updateRepoRow(slot, i, { branch: e.target.value })}
-                      />
-                      {row.repo_id && credentialLabel(selectedRepoInfo(row)?.credential_id) && (
-                        <span className="tiny briefing-repo-cred">
-                          {credentialLabel(selectedRepoInfo(row)?.credential_id)}
+              ) : workspaceRepos.length === 0 && myRepos.length === 0 ? (
+                <p className="briefing-repos-empty">
+                  {lang === "zh"
+                    ? "暂无可选仓库：可在「设置 → Git」登记，或直接手填 URL。"
+                    : "No registered repos: add one in Settings → Git, or enter a URL manually."}
+                </p>
+              ) : null}
+
+              <div className="briefing-repo-slots">
+                {repoSlots().map((slot) => {
+                  const rows = repos[slot] || [];
+                  return (
+                    <div key={slot} className={`briefing-repo-slot${rows.length ? " has-repos" : ""}`}>
+                      <div className="briefing-repo-slot-head">
+                        <span className="briefing-repo-slot-name">{slot}</span>
+                        <span className="briefing-repo-slot-meta">
+                          {rows.length
+                            ? rows
+                                .map((r) => r.name || r.url || (lang === "zh" ? "未选择" : "unset"))
+                                .join("、")
+                            : lang === "zh"
+                              ? "未绑定"
+                              : "no repo"}
                         </span>
+                        <button
+                          type="button"
+                          className="briefing-repo-add"
+                          onClick={() => addRepoRow(slot)}
+                        >
+                          + {lang === "zh" ? "添加仓库" : "Add repo"}
+                        </button>
+                      </div>
+
+                      {rows.length > 0 && (
+                        <div className="briefing-repo-rows">
+                          {rows.map((row, i) => {
+                            // 绑定了注册表条目时回显该项，避免下拉框永远停在「选择仓库…」
+                            const selected = row.repo_id
+                              ? `${row.source || "custom"}:${row.repo_id}`
+                              : "";
+                            const bound = selectedRepoInfo(row);
+                            return (
+                              <div className="briefing-repo-row" key={i}>
+                                <select
+                                  className="briefing-repo-picker"
+                                  value={selected}
+                                  aria-label={`${slot} ${lang === "zh" ? "仓库" : "repo"}`}
+                                  onChange={(e) => {
+                                    const [source, id] = (e.target.value || "").split(":");
+                                    if (!source || !id) {
+                                      // 切回手填 URL：清掉注册表引用，否则后端仍按 repo_id 回查旧仓库
+                                      updateRepoRow(slot, i, {
+                                        source: "custom",
+                                        repo_id: null,
+                                        name: undefined,
+                                        credential_id: null,
+                                      });
+                                      return;
+                                    }
+                                    const list = source === "workspace" ? workspaceRepos : myRepos;
+                                    const hit = list.find((r) => r.id === id);
+                                    if (!hit) return;
+                                    // 同一角色内同一仓库只允许一行，避免重复 clone
+                                    if (rows.some((r, j) => j !== i && r.repo_id === hit.id)) return;
+                                    updateRepoRow(slot, i, {
+                                      url: hit.url,
+                                      name: hit.name,
+                                      branch: row.branch || hit.default_branch || "",
+                                      source: source === "workspace" ? "workspace" : "custom",
+                                      repo_id: hit.id,
+                                      credential_id: hit.credential_id ?? null,
+                                    });
+                                  }}
+                                >
+                                  <option value="">
+                                    {lang === "zh" ? "手填 URL / 选择仓库…" : "Pick a repo or enter URL…"}
+                                  </option>
+                                  {/* 清单接口暂时不可用时仍显示已绑定项，不出现空白下拉 */}
+                                  {selected && !bound && (
+                                    <option value={selected}>
+                                      {row.name || row.url || (lang === "zh" ? "已绑定仓库" : "bound repo")}
+                                    </option>
+                                  )}
+                                  {workspaceRepos.length > 0 && (
+                                    <optgroup label={lang === "zh" ? "工作区仓库" : "Workspace repos"}>
+                                      {workspaceRepos.map((r) => (
+                                        <option key={r.id} value={`workspace:${r.id}`}>
+                                          {r.name}
+                                          {credentialLabel(r.credential_id)
+                                            ? ` · ${credentialLabel(r.credential_id)}`
+                                            : r.credential_id
+                                              ? ""
+                                              : lang === "zh"
+                                                ? " · 未绑定凭据"
+                                                : " · unbound"}
+                                        </option>
+                                      ))}
+                                    </optgroup>
+                                  )}
+                                  {myRepos.length > 0 && (
+                                    <optgroup label={lang === "zh" ? "我的私有仓库" : "My private repos"}>
+                                      {myRepos.map((r) => (
+                                        <option key={r.id} value={`custom:${r.id}`}>
+                                          {r.name}
+                                          {r.credential_id
+                                            ? ""
+                                            : lang === "zh"
+                                              ? " · 未绑定凭据"
+                                              : " · unbound"}
+                                        </option>
+                                      ))}
+                                    </optgroup>
+                                  )}
+                                </select>
+                                <button
+                                  type="button"
+                                  className="briefing-repo-remove"
+                                  title={lang === "zh" ? "移除" : "Remove"}
+                                  aria-label={lang === "zh" ? "移除仓库" : "Remove repo"}
+                                  onClick={() => removeRepoRow(slot, i)}
+                                >
+                                  ×
+                                </button>
+                                <div className="briefing-repo-fields">
+                                  <input
+                                    value={row.url}
+                                    placeholder="https://github.com/org/repo.git"
+                                    aria-label={lang === "zh" ? "仓库 URL" : "Repo URL"}
+                                    onChange={(e) =>
+                                      updateRepoRow(slot, i, {
+                                        url: e.target.value,
+                                        source: "custom",
+                                        repo_id: null,
+                                        name: undefined,
+                                        credential_id: null,
+                                      })
+                                    }
+                                  />
+                                  <input
+                                    className="briefing-repo-branch"
+                                    value={row.branch}
+                                    placeholder={lang === "zh" ? "分支 *" : "branch *"}
+                                    aria-label={lang === "zh" ? "分支" : "Branch"}
+                                    onChange={(e) => updateRepoRow(slot, i, { branch: e.target.value })}
+                                  />
+                                </div>
+                                {bound && (
+                                  <div className="briefing-repo-source">
+                                    <span
+                                      className={`briefing-repo-badge ${row.source === "workspace" ? "ws" : "mine"}`}
+                                    >
+                                      {row.source === "workspace"
+                                        ? lang === "zh"
+                                          ? "工作区"
+                                          : "Workspace"
+                                        : lang === "zh"
+                                          ? "我的仓库"
+                                          : "Mine"}
+                                    </span>
+                                    {bound.credential_id
+                                      ? credentialLabel(bound.credential_id) ||
+                                        (lang === "zh" ? "凭据已绑定" : "credential bound")
+                                      : lang === "zh"
+                                        ? "未绑定凭据，执行时可能失败"
+                                        : "no credential bound"}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
                       )}
-                      <button
-                        type="button"
-                        className="btn linkish"
-                        onClick={() => removeRepoRow(slot, i)}
-                      >
-                        ×
-                      </button>
                     </div>
-                  ))}
-                  <button type="button" className="toolkit-chip" onClick={() => addRepoRow(slot)}>
-                    + {lang === "zh" ? "仓库" : "repo"}
-                  </button>
-                </div>
-              ))}
-            </div>
+                  );
+                })}
+              </div>
+            </section>
           )}
           <div className="briefing-actions">
             <button type="button" className="btn primary" disabled={locked} onClick={() => void confirmPlan()}>
