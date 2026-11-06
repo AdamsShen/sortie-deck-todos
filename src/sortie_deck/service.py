@@ -94,22 +94,29 @@ def _clean_role_repos(
             if isinstance(row, RepoConfig):
                 if row.token:
                     logger.warning("忽略 RepoConfig.token（已废弃），请改用 source/credential_id")
-                    row = row.model_copy(update={"token": None})
-                items.append(row)
+                # 新模型（有 repo_id）必须写分支；历史 payload 保持兼容
+                if row.repo_id and not (row.branch or "").strip():
+                    raise ServiceError("validation", f"{slot}: 请填写仓库分支（{row.url}）")
+                items.append(row.model_copy(update={"token": None}))
                 continue
             if not isinstance(row, dict):
                 continue
             url = str(row.get("url") or "").strip()
             if not url:
                 continue
+            branch = str(row.get("branch") or "").strip()
+            repo_id = str(row.get("repo_id") or "").strip() or None
+            if repo_id and not branch:
+                raise ServiceError("validation", f"{slot}: 请填写仓库分支（{url}）")
             if row.get("token"):
                 logger.warning("忽略请求中的 repo token（已废弃），请改用 source/credential_id")
             items.append(
                 RepoConfig(
                     url=url,
-                    branch=str(row.get("branch") or "").strip(),
+                    branch=branch,
                     name=str(row.get("name") or "").strip(),
                     source="workspace" if row.get("source") == "workspace" else "custom",
+                    repo_id=str(row.get("repo_id") or "").strip() or None,
                     credential_id=str(row.get("credential_id") or "").strip() or None,
                 )
             )
@@ -121,53 +128,74 @@ def _clean_role_repos(
 def _validate_repo_credentials(
     clean: dict[str, list[RepoConfig]], *, actor_user_id: str
 ) -> None:
-    """绑定前校验凭据归属（不联网；网络探活由 API 层的 preflight 负责）。
+    """绑定前校验「仓库 ↔ 凭据」绑定（不联网；网络探活由 preflight 负责）。
 
-    - workspace：credential_id 必填且存在、未禁用（执行期不会再用个人凭据兜底）；
-    - custom：操作人必须已配置该 host 的个人凭据。
+    - 有 repo_id：回查注册表，用仓库当前 credential_id；
+    - workspace 仓库只允许工作区凭据；个人仓库可选工作区或个人凭据；
+    - 凭据必须存在、active，且 host/scheme 与仓库 URL 完全一致；
+    - 无 repo_id 的历史 payload：保留旧的 host 匹配兜底。
     """
     from sortie_deck.git_cred import (
         GitCredentialError,
         host_of,
         scheme_of,
         stores_from_settings,
+        validate_repo_credential,
     )
 
     if not clean:
         return
     try:
-        creds, _workspace_repos, _user_repos = stores_from_settings()
+        creds, workspace_repos, user_repos = stores_from_settings()
     except GitCredentialError as exc:
         raise ServiceError("validation", f"git 凭据存储不可用：{exc}") from exc
 
     for slot, rows in clean.items():
         for repo in rows:
-            if repo.source == "workspace":
-                if not repo.credential_id:
-                    raise ServiceError(
-                        "validation",
-                        f"{slot}: 工作区仓库必须指定 credential_id（{repo.url}）",
+            try:
+                if repo.repo_id:
+                    if repo.source == "workspace":
+                        row = workspace_repos.get(repo.repo_id)
+                        if row is None or not row.enabled:
+                            raise GitCredentialError(f"工作区仓库不存在或已停用: {repo.repo_id}")
+                        validate_repo_credential(
+                            row.url,
+                            row.credential_id or "",
+                            credentials=creds,
+                            allow_user=False,
+                        )
+                    else:
+                        row = user_repos.get_for_owner(actor_user_id, repo.repo_id)
+                        if row is None:
+                            raise GitCredentialError(f"个人仓库不存在: {repo.repo_id}")
+                        validate_repo_credential(
+                            row.url,
+                            row.credential_id or "",
+                            credentials=creds,
+                            owner_id=actor_user_id,
+                        )
+                    continue
+                # ---- 历史 payload（无 repo_id）----
+                if repo.source == "workspace":
+                    validate_repo_credential(
+                        repo.url,
+                        repo.credential_id or "",
+                        credentials=creds,
+                        allow_user=False,
                     )
-                credential = creds.get(repo.credential_id)
-                if credential is None or not credential.is_active():
-                    raise ServiceError(
-                        "validation",
-                        f"{slot}: 工作区仓库凭据不存在或已禁用（{repo.credential_id}）",
+                    continue
+                host = host_of(repo.url)
+                if not host:
+                    logger.warning("%s: 无法从 URL 解析 host，跳过个人凭据校验（%s）", slot, repo.url)
+                    continue
+                if actor_user_id and creds.find_for_host(
+                    owner_id=actor_user_id, host=host, scheme=scheme_of(repo.url)
+                ) is None:
+                    raise GitCredentialError(
+                        f"未配置 {host} 的个人 git 凭据，请先在「设置 → Git 凭据」中添加"
                     )
-                continue
-            host = host_of(repo.url)
-            if not host:
-                # 非常规 URL（本地路径 / 自定义 remote helper）：无法按 host 匹配凭据，
-                # 放行交给执行期 git 自行处理，避免误伤本机路径类仓库
-                logger.warning("%s: 无法从 URL 解析 host，跳过个人凭据校验（%s）", slot, repo.url)
-                continue
-            if actor_user_id and creds.find_for_host(
-                owner_id=actor_user_id, host=host, scheme=scheme_of(repo.url)
-            ) is None:
-                raise ServiceError(
-                    "validation",
-                    f"{slot}: 未配置 {host} 的个人 git 凭据，请先在「设置 → Git 凭据」中添加",
-                )
+            except GitCredentialError as exc:
+                raise ServiceError("validation", f"{slot}: {exc}") from exc
 
 
 async def preflight_role_repos(

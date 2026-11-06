@@ -55,6 +55,7 @@ def test_validate_workspace_requires_credential_id(git_db: Path):
                     "eng": [
                         {
                             "url": "https://gitlab.example.com/group/app.git",
+                            "branch": "main",
                             "source": "workspace",
                         }
                     ]
@@ -62,7 +63,7 @@ def test_validate_workspace_requires_credential_id(git_db: Path):
             ),
             actor_user_id="usr_1",
         )
-    assert "credential_id" in str(exc.value)
+    assert "绑定凭据" in str(exc.value)
 
 
 def test_validate_workspace_rejects_unknown_credential(git_db: Path):
@@ -73,6 +74,7 @@ def test_validate_workspace_rejects_unknown_credential(git_db: Path):
                     "eng": [
                         {
                             "url": "https://gitlab.example.com/group/app.git",
+                            "branch": "main",
                             "source": "workspace",
                             "credential_id": "crd_missing",
                         }
@@ -81,7 +83,7 @@ def test_validate_workspace_rejects_unknown_credential(git_db: Path):
             ),
             actor_user_id="usr_1",
         )
-    assert "不存在或已禁用" in str(exc.value)
+    assert "凭据不存在" in str(exc.value)
 
 
 def test_validate_workspace_accepts_valid_credential(git_db: Path):
@@ -101,6 +103,7 @@ def test_validate_workspace_accepts_valid_credential(git_db: Path):
                 "eng": [
                     {
                         "url": "https://gitlab.example.com/group/app.git",
+                        "branch": "main",
                         "source": "workspace",
                         "credential_id": cred.id,
                     }
@@ -113,7 +116,15 @@ def test_validate_workspace_accepts_valid_credential(git_db: Path):
 
 def test_validate_custom_requires_personal_credential(git_db: Path):
     clean = _clean_role_repos(
-        {"eng": [{"url": "https://github.com/alice/app.git", "source": "custom"}]}
+        {
+            "eng": [
+                {
+                    "url": "https://github.com/alice/app.git",
+                    "branch": "main",
+                    "source": "custom",
+                }
+            ]
+        }
     )
     with pytest.raises(ServiceError) as exc:
         _validate_repo_credentials(clean, actor_user_id="usr_1")

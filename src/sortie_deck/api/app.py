@@ -2073,6 +2073,7 @@ class WorkspaceRepoPatch(BaseModel):
     url: str | None = None
     default_branch: str | None = None
     role_slots: list[str] | None = None
+    credential_id: str | None = None
     enabled: bool | None = None
     credential_id: str | None = None
 
@@ -2081,12 +2082,21 @@ class UserRepoBody(BaseModel):
     name: str = ""
     url: str
     default_branch: str = ""
+    credential_id: str | None = None
+
+
+class UserRepoPatch(BaseModel):
+    name: str | None = None
+    default_branch: str | None = None
+    credential_id: str | None = None
 
 
 class PreflightBody(BaseModel):
-    url: str
+    url: str = ""
     branch: str = ""
-    workspace_repo_id: str | None = None
+    repo_id: str | None = None
+    source: str | None = None
+    workspace_repo_id: str | None = None  # @deprecated 用 repo_id + source=workspace
 
 
 def _git_stores():
@@ -2121,11 +2131,78 @@ async def list_workspace_credentials(
     ]
 
 
+@app.post("/api/admin/git/workspace-credentials")
+async def admin_upsert_workspace_credential(
+    body: GitCredentialBody, _admin: PublicUser = Depends(require_admin)
+) -> dict[str, Any]:
+    """管理员新增/覆盖工作区凭据（同 host+scheme+username 命中唯一键即覆盖）。
+
+    工作区凭据供所有成员的任务使用；写入口只对管理员开放，且密钥永不读回。
+    """
+    from sortie_deck.git_cred import SCOPE_WORKSPACE, GitCredentialError
+
+    creds, _repos, _user_repos = _git_stores()
+    try:
+        credential = creds.upsert(
+            scope=SCOPE_WORKSPACE,
+            owner_id="workspace",
+            label=body.label or body.host,
+            host=body.host,
+            scheme=body.scheme,
+            username=body.username,
+            secret=body.secret,
+            expires_at=body.expires_at,
+        )
+    except GitCredentialError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return credential.to_public()
+
+
+@app.patch("/api/admin/git/workspace-credentials/{cred_id}")
+async def admin_rename_workspace_credential(
+    cred_id: str, body: GitCredentialPatch, _admin: PublicUser = Depends(require_admin)
+) -> dict[str, Any]:
+    """只改工作区凭据展示名；密钥替换走 POST 覆盖写入。"""
+    from sortie_deck.git_cred import SCOPE_WORKSPACE
+
+    creds, _repos, _user_repos = _git_stores()
+    credential = creds.get(cred_id)
+    if credential is None or credential.scope != SCOPE_WORKSPACE:
+        raise HTTPException(404, "credential not found")
+    label = (body.label or "").strip()
+    if not label:
+        raise HTTPException(400, "label 不能为空")
+    updated = creds.update_label(cred_id, label)
+    if updated is None:
+        raise HTTPException(404, "credential not found")
+    return updated.to_public()
+
+
+@app.delete("/api/admin/git/workspace-credentials/{cred_id}")
+async def admin_disable_workspace_credential(
+    cred_id: str, _admin: PublicUser = Depends(require_admin)
+) -> dict[str, str]:
+    """停用工作区凭据（不物理删除，避免历史任务/仓库引用变成悬空）。"""
+    from sortie_deck.git_cred import SCOPE_WORKSPACE
+
+    creds, _repos, _user_repos = _git_stores()
+    credential = creds.get(cred_id)
+    if credential is None or credential.scope != SCOPE_WORKSPACE:
+        raise HTTPException(404, "credential not found")
+    creds.disable(cred_id)
+    return {"status": "disabled"}
+
+
 @app.post("/api/admin/git/workspace-repos")
 async def admin_create_workspace_repo(
     body: WorkspaceRepoBody, admin: PublicUser = Depends(require_admin)
 ) -> dict[str, Any]:
-    from sortie_deck.git_cred import SCOPE_WORKSPACE, GitCredentialError, GitRepoError
+    from sortie_deck.git_cred import (
+        SCOPE_WORKSPACE,
+        GitCredentialError,
+        GitRepoError,
+        validate_repo_credential,
+    )
 
     creds, repos, _user_repos = _git_stores()
     try:
@@ -2143,6 +2220,10 @@ async def admin_create_workspace_repo(
             ).id
         if not credential_id:
             raise HTTPException(400, "credential 或 credential_id 必填")
+        # 工作区仓库只允许工作区凭据，且 host/scheme 必须与仓库 URL 一致
+        validate_repo_credential(
+            body.url, credential_id, credentials=creds, allow_user=False
+        )
         repo = repos.create(
             name=body.name,
             url=body.url,
@@ -2160,11 +2241,21 @@ async def admin_create_workspace_repo(
 async def admin_update_workspace_repo(
     repo_id: str, body: WorkspaceRepoPatch, _admin: PublicUser = Depends(require_admin)
 ) -> dict[str, Any]:
-    from sortie_deck.git_cred import GitRepoError
+    from sortie_deck.git_cred import GitRepoError, validate_repo_credential
 
-    _creds, repos, _user_repos = _git_stores()
+    creds, repos, _user_repos = _git_stores()
     payload = body.model_dump(exclude_none=True)
     try:
+        current = repos.get(repo_id)
+        if current is None:
+            raise HTTPException(404, "workspace repo not found")
+        if "url" in payload or "credential_id" in payload:
+            validate_repo_credential(
+                payload.get("url", current.url),
+                payload.get("credential_id", current.credential_id) or "",
+                credentials=creds,
+                allow_user=False,
+            )
         repo = repos.update(repo_id, **payload)
     except GitRepoError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -2178,7 +2269,12 @@ async def admin_set_workspace_credential(
     repo_id: str, body: GitCredentialBody, _admin: PublicUser = Depends(require_admin)
 ) -> dict[str, Any]:
     """覆盖注入工作区凭据（同 host 覆盖密钥，只写不读）。"""
-    from sortie_deck.git_cred import SCOPE_WORKSPACE, GitCredentialError, GitRepoError
+    from sortie_deck.git_cred import (
+        SCOPE_WORKSPACE,
+        GitCredentialError,
+        GitRepoError,
+        validate_repo_credential,
+    )
 
     creds, repos, _user_repos = _git_stores()
     repo = repos.get(repo_id)
@@ -2194,6 +2290,9 @@ async def admin_set_workspace_credential(
             username=body.username,
             secret=body.secret,
             expires_at=body.expires_at,
+        )
+        validate_repo_credential(
+            repo.url, credential.id, credentials=creds, allow_user=False
         )
         updated = repos.update(repo_id, credential_id=credential.id)
     except (GitCredentialError, GitRepoError) as exc:
@@ -2318,19 +2417,63 @@ async def list_my_repos(user: PublicUser = Depends(require_user)) -> list[dict[s
 async def create_my_repo(
     body: UserRepoBody, user: PublicUser = Depends(require_user)
 ) -> dict[str, Any]:
-    from sortie_deck.git_cred import GitRepoError
+    from sortie_deck.git_cred import (
+        GitCredentialError,
+        GitRepoError,
+        validate_repo_credential,
+    )
 
-    _creds, _repos, user_repos = _git_stores()
+    creds, _repos, user_repos = _git_stores()
     try:
+        if body.credential_id:
+            # host/scheme 强校验：私有仓库可用本人凭据或同 host 的工作区凭据
+            validate_repo_credential(
+                body.url, body.credential_id, credentials=creds, owner_id=user.id
+            )
         repo = user_repos.create(
             owner_id=user.id,
             name=body.name,
             url=body.url,
             default_branch=body.default_branch,
+            credential_id=body.credential_id,
         )
-    except GitRepoError as exc:
+    except (GitRepoError, GitCredentialError) as exc:
         raise HTTPException(400, str(exc)) from exc
     return repo.to_public()
+
+
+@app.patch("/api/me/git/repos/{repo_id}")
+async def update_my_repo(
+    repo_id: str, body: UserRepoPatch, user: PublicUser = Depends(require_user)
+) -> dict[str, Any]:
+    """本人仓库补绑/改绑凭据与默认分支（任务绑定前必须已绑定）。"""
+    from sortie_deck.git_cred import (
+        GitCredentialError,
+        GitRepoError,
+        validate_repo_credential,
+    )
+
+    creds, _repos, user_repos = _git_stores()
+    repo = user_repos.get_for_owner(user.id, repo_id)
+    if repo is None:
+        raise HTTPException(404, "repo not found")
+    try:
+        if body.credential_id:
+            validate_repo_credential(
+                repo.url, body.credential_id, credentials=creds, owner_id=user.id
+            )
+        updated = user_repos.update(
+            repo_id,
+            owner_id=user.id,
+            name=body.name,
+            default_branch=body.default_branch,
+            credential_id=body.credential_id,
+        )
+    except (GitRepoError, GitCredentialError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if updated is None:
+        raise HTTPException(404, "repo not found")
+    return updated.to_public()
 
 
 @app.delete("/api/me/git/repos/{repo_id}")
@@ -2350,21 +2493,30 @@ async def git_preflight(
     """绑定前的连通性/鉴权探活：返回将使用的凭据来源 + ls-remote 结果。"""
     from sortie_deck.git_cred import preflight_git_access, resolver_from_settings
 
-    _creds, repos, _user_repos = _git_stores()
-    source = "custom"
+    _creds, repos, user_repos = _git_stores()
+    source = body.source or ("workspace" if body.workspace_repo_id else "custom")
+    repo_id = body.repo_id or body.workspace_repo_id
     credential_id = None
     url = body.url
-    if body.workspace_repo_id:
-        workspace_repo = repos.get(body.workspace_repo_id)
-        if workspace_repo is None:
-            raise HTTPException(404, "workspace repo not found")
-        source = "workspace"
-        credential_id = workspace_repo.credential_id
-        url = url or workspace_repo.url
+    if repo_id:
+        if source == "workspace":
+            row = repos.get(repo_id)
+            if row is None:
+                raise HTTPException(404, "workspace repo not found")
+            credential_id = row.credential_id
+            url = url or row.url
+        else:
+            row = user_repos.get_for_owner(user.id, repo_id)
+            if row is None:
+                raise HTTPException(404, "repo not found")
+            credential_id = row.credential_id
+            url = url or row.url
+        source = "workspace" if source == "workspace" else "custom"
     repo = RepoConfig(
         url=url,
         branch=body.branch,
         source="workspace" if source == "workspace" else "custom",
+        repo_id=repo_id,
         credential_id=credential_id,
     )
     ok, reason = await preflight_git_access(
@@ -2965,12 +3117,23 @@ async def mission_memories(
 async def start_initiative(
     initiative_id: str, user: PublicUser = Depends(_mission_control_guard)
 ) -> dict[str, Any]:
+    from sortie_deck.service import ServiceError, _clean_role_repos, preflight_role_repos
+
     try:
+        # 启动前再探一次：绑定后管理员可能轮换了凭据，避免带着失效凭据进入 coding
+        current = orch().get(initiative_id)
+        if current is not None:
+            await preflight_role_repos(
+                _clean_role_repos((current.meta or {}).get("role_repos")),
+                actor_user_id=user.id,
+            )
         ini = await orch().start_pipeline(initiative_id, author_name=user.display_name)
         await asyncio.sleep(0.2)
         return (orch().get(ini.id) or ini).model_dump(mode="json")
     except KeyError:
         raise HTTPException(404, "Initiative not found") from None
+    except ServiceError as exc:
+        raise HTTPException(exc.http_status, exc.message) from exc
     except ForgeReviewRequiredError as exc:
         # 409：任务本身合法，只是缺一步人工审核（审核通过后可直接重试 /start）
         raise HTTPException(

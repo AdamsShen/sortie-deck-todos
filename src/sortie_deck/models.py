@@ -186,6 +186,9 @@ class RepoConfig(BaseModel):
     branch: str = ""
     name: str = ""
     source: Literal["workspace", "custom"] = "custom"
+    # 新任务只存仓库 id，执行期回查注册表拿当前绑定的凭据
+    repo_id: str | None = None
+    # 历史 payload 兼容：旧任务把凭据 id 快照在这里
     credential_id: str | None = None
     token: str | None = None  # @deprecated 旧版明文凭据，仅读不写
 

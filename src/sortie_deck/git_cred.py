@@ -74,9 +74,17 @@ def _build_fernet(secret_key: str) -> Fernet:
 
 
 def _fingerprint(secret: str) -> str:
-    """展示用指纹：只留末 4 位，长度上限 8，不足以泄露原值。"""
+    """展示用指纹：只留末 4 位，长度上限 8，不足以泄露原值。
+
+    SSH 私钥以 ``-----`` 结尾，末四位没有辨识度，改为展示 SHA256 的末四位；
+    同一条记录每次计算结果一致，仍不足以反推密钥。
+    """
     if len(secret) < 8:
         return "…"
+    if "PRIVATE KEY" in secret:
+        import hashlib
+
+        return "…" + hashlib.sha256(secret.encode("utf-8")).hexdigest()[-4:]
     return f"…{secret[-4:]}"
 
 
@@ -444,13 +452,14 @@ class WorkspaceRepo(BaseModel):
 
 
 class UserRepo(BaseModel):
-    """个人登记的私有仓库（仅本人可见，凭据按 host 另外匹配）。"""
+    """个人登记的私有仓库（仅本人可见，绑定一把本人或个人凭据）。"""
 
     id: str
     owner_id: str
     name: str
     url: str
     default_branch: str = ""
+    credential_id: str | None = None
     created_at: float
 
     def to_public(self) -> dict[str, Any]:
@@ -459,6 +468,7 @@ class UserRepo(BaseModel):
             "name": self.name,
             "url": self.url,
             "default_branch": self.default_branch,
+            "credential_id": self.credential_id,
             "created_at": self.created_at,
         }
 
@@ -619,16 +629,24 @@ class UserRepoStore:
                 name TEXT NOT NULL,
                 url TEXT NOT NULL,
                 default_branch TEXT NOT NULL DEFAULT '',
+                credential_id TEXT,
                 created_at REAL NOT NULL
             )
             """
         )
+        # 旧库升级：CREATE IF NOT EXISTS 不会补列，这里幂等 ALTER
+        cols = {row[1] for row in self._conn.execute("PRAGMA table_info(user_git_repos)")}
+        if "credential_id" not in cols:
+            self._conn.execute("ALTER TABLE user_git_repos ADD COLUMN credential_id TEXT")
         self._conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS ux_user_repo ON user_git_repos(owner_id, url)"
         )
         self._conn.commit()
 
-    _SELECT = "SELECT id, owner_id, name, url, default_branch, created_at FROM user_git_repos"
+    _SELECT = (
+        "SELECT id, owner_id, name, url, default_branch, credential_id, created_at "
+        "FROM user_git_repos"
+    )
 
     @staticmethod
     def _row(row: tuple[Any, ...]) -> UserRepo:
@@ -638,11 +656,18 @@ class UserRepoStore:
             name=row[2],
             url=row[3],
             default_branch=row[4] or "",
-            created_at=row[5],
+            credential_id=row[5],
+            created_at=row[6],
         )
 
     def create(
-        self, *, owner_id: str, name: str, url: str, default_branch: str = ""
+        self,
+        *,
+        owner_id: str,
+        name: str,
+        url: str,
+        default_branch: str = "",
+        credential_id: str | None = None,
     ) -> UserRepo:
         url = (url or "").strip()
         if not url:
@@ -653,20 +678,22 @@ class UserRepoStore:
             name=(name or url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")).strip(),
             url=url,
             default_branch=(default_branch or "").strip(),
+            credential_id=(credential_id or "").strip() or None,
             created_at=time.time(),
         )
         with self._lock:
             try:
                 self._conn.execute(
                     "INSERT INTO user_git_repos "
-                    "(id, owner_id, name, url, default_branch, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    "(id, owner_id, name, url, default_branch, credential_id, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (
                         repo.id,
                         repo.owner_id,
                         repo.name,
                         repo.url,
                         repo.default_branch,
+                        repo.credential_id,
                         repo.created_at,
                     ),
                 )
@@ -674,6 +701,41 @@ class UserRepoStore:
                 raise GitRepoConflict(f"该仓库已登记: {url}") from exc
             self._conn.commit()
         return repo
+
+    def update(
+        self,
+        repo_id: str,
+        *,
+        owner_id: str,
+        name: str | None = None,
+        default_branch: str | None = None,
+        credential_id: str | None = None,
+    ) -> UserRepo | None:
+        """更新本人仓库的名称/默认分支/绑定凭据；他人记录返回 None。
+
+        credential_id 传空串表示解绑（写 NULL），None 表示不改。
+        """
+        sets: list[str] = []
+        params: list[Any] = []
+        if name is not None:
+            sets.append("name = ?")
+            params.append((name or "").strip())
+        if default_branch is not None:
+            sets.append("default_branch = ?")
+            params.append((default_branch or "").strip())
+        if credential_id is not None:
+            sets.append("credential_id = ?")
+            params.append(credential_id.strip() or None)
+        if not sets:
+            return self.get_for_owner(owner_id, repo_id)
+        params.extend([repo_id, owner_id])
+        with self._lock:
+            cur = self._conn.execute(
+                f"UPDATE user_git_repos SET {', '.join(sets)} WHERE id = ? AND owner_id = ?",
+                params,
+            )
+            self._conn.commit()
+        return self.get_for_owner(owner_id, repo_id) if cur.rowcount > 0 else None
 
     def list_for_owner(self, owner_id: str) -> list[UserRepo]:
         rows = self._conn.execute(
@@ -719,6 +781,49 @@ def scheme_of(url: str) -> str:
     return "ssh"
 
 
+def validate_repo_credential(
+    repo_url: str,
+    credential_id: str,
+    *,
+    credentials: GitCredentialStore,
+    owner_id: str = "",
+    allow_workspace: bool = True,
+    allow_user: bool = True,
+) -> GitCredential:
+    """校验「仓库 ↔ 凭据」绑定是否合法（强校验，绑定与执行共用）。
+
+    规则：
+    - 凭据必须存在且未停用/未过期；
+    - 凭据 host/scheme 必须与仓库 URL 完全一致，防止把共享密钥发到其它域名；
+    - allow_workspace / allow_user 控制该场景能用哪些 scope；
+    - user scope 还要求 owner_id 与凭据所有者一致。
+    """
+    cred_id = (credential_id or "").strip()
+    if not cred_id:
+        raise GitCredentialError("仓库必须绑定凭据")
+    credential = credentials.get(cred_id)
+    if credential is None:
+        raise GitCredentialError(f"凭据不存在: {cred_id}")
+    if not credential.is_active():
+        raise GitCredentialError(f"凭据已停用或过期: {cred_id}")
+    host = host_of(repo_url)
+    scheme = scheme_of(repo_url)
+    if not host:
+        raise GitCredentialError(f"无法从仓库 URL 解析 host: {repo_url}")
+    if host != credential.host or scheme != credential.scheme:
+        raise GitCredentialError(
+            f"凭据 {credential.host}/{credential.scheme} 与仓库 {host}/{scheme} 不一致"
+        )
+    if credential.scope == SCOPE_WORKSPACE and not allow_workspace:
+        raise GitCredentialError("该仓库不允许使用工作区凭据")
+    if credential.scope == SCOPE_USER:
+        if not allow_user:
+            raise GitCredentialError("该仓库不允许使用个人凭据")
+        if owner_id and credential.owner_id != owner_id:
+            raise GitCredentialError("不能使用他人的个人凭据")
+    return credential
+
+
 @dataclass
 class ResolvedCredential:
     """解析结果：只在执行器内存里流通，禁止进入任何响应体或日志。"""
@@ -742,28 +847,62 @@ class GitCredentialResolver:
     """按「仓库来源」解析凭据（§4.2，不存在优先级回退）。"""
 
     def __init__(
-        self, *, credentials: GitCredentialStore, workspace_repos: WorkspaceRepoStore
+        self,
+        *,
+        credentials: GitCredentialStore,
+        workspace_repos: WorkspaceRepoStore,
+        user_repos: UserRepoStore | None = None,
     ) -> None:
         self._creds = credentials
         self._repos = workspace_repos
+        self._user_repos = user_repos
 
     def resolve(self, repo: Any, *, actor_user_id: str) -> ResolvedCredential:
-        """workspace → 条目绑定的凭据；custom → 操作人按 host 的个人凭据。"""
+        """按注册表解析凭据：repo_id 优先，历史 payload 走旧逻辑兜底。
+
+        新任务只带 ``repo_id + source + branch``；这里回查仓库当前绑定的
+        credential_id，因此管理员换绑/轮换凭据后，未完成任务自动使用新值。
+        """
         source = getattr(repo, "source", "custom") or "custom"
-        if source == "workspace":
+        repo_id = getattr(repo, "repo_id", None)
+        repo_url = getattr(repo, "url", "")
+        if repo_id:
+            if source == "workspace":
+                row = self._repos.get(repo_id)
+                if row is None or not row.enabled:
+                    raise CredentialMissing(f"工作区仓库不存在或已停用: {repo_id}")
+            else:
+                if self._user_repos is None:
+                    raise CredentialMissing("个人仓库存储不可用")
+                row = self._user_repos.get_for_owner(actor_user_id, repo_id)
+                if row is None:
+                    raise CredentialMissing(f"个人仓库不存在: {repo_id}")
+            repo_url = row.url
+            credential_id = (row.credential_id or "").strip()
+            if not credential_id:
+                raise CredentialMissing(f"仓库尚未绑定凭据: {row.name}")
+            credential = self._creds.get(credential_id)
+            if credential is None or not credential.is_active():
+                raise CredentialMissing(f"仓库绑定的凭据不可用: {credential_id}")
+            if host_of(repo_url) != credential.host or scheme_of(repo_url) != credential.scheme:
+                raise CredentialMissing(
+                    f"仓库 {host_of(repo_url)}/{scheme_of(repo_url)} 与凭据 "
+                    f"{credential.host}/{credential.scheme} 不一致"
+                )
+        elif source == "workspace":
+            # 历史 payload：凭据 id 快照在任务里
             credential_id = getattr(repo, "credential_id", None)
             if not credential_id:
-                raise CredentialMissing(
-                    f"工作区仓库缺少凭据绑定: {getattr(repo, 'url', '')}"
-                )
+                raise CredentialMissing(f"工作区仓库缺少凭据绑定: {repo_url}")
             credential = self._creds.get(credential_id)
             if credential is None or not credential.is_active():
                 raise CredentialMissing(f"工作区仓库凭据不可用: {credential_id}")
         else:
-            host = host_of(getattr(repo, "url", ""))
-            scheme = scheme_of(getattr(repo, "url", ""))
+            # 历史 payload：按 host 匹配操作人的个人凭据
+            host = host_of(repo_url)
+            scheme = scheme_of(repo_url)
             if not host:
-                raise CredentialMissing(f"无法从 URL 解析 host: {getattr(repo, 'url', '')}")
+                raise CredentialMissing(f"无法从 URL 解析 host: {repo_url}")
             credential = self._creds.find_for_host(
                 owner_id=actor_user_id, host=host, scheme=scheme
             )
@@ -827,6 +966,31 @@ def build_askpass_env(
         "GIT_TERMINAL_PROMPT": "0",
         "SORTIE_GIT_USERNAME": username or "",
         "SORTIE_GIT_PASSWORD": secret,
+    }
+    return GitEnv(env, tmpdir)
+
+
+def build_ssh_env(
+    *, secret: str, workdir: Path | None = None
+) -> GitEnv:
+    """生成 SSH 凭据注入环境：私钥写临时文件（0600）+ GIT_SSH_COMMAND 指定。
+
+    与 HTTPS 的 askpass 等价：密钥只落在进程私有临时目录，退出上下文即删除；
+    ``IdentitiesOnly=yes`` 避免 ssh-agent 里其它身份抢答，``BatchMode=yes``
+    保证非交互环境直接失败而不是卡在口令提示。
+    """
+    tmpdir = Path(
+        tempfile.mkdtemp(prefix="sortie-ssh-", dir=str(workdir) if workdir else None)
+    )
+    key_file = tmpdir / "id_key"
+    key_file.write_text(secret if secret.endswith("\n") else secret + "\n", encoding="utf-8")
+    os.chmod(key_file, 0o600)
+    env = {
+        "GIT_SSH_COMMAND": (
+            f"ssh -i {key_file} -o IdentitiesOnly=yes "
+            "-o StrictHostKeyChecking=accept-new -o BatchMode=yes"
+        ),
+        "GIT_TERMINAL_PROMPT": "0",
     }
     return GitEnv(env, tmpdir)
 
@@ -897,6 +1061,9 @@ async def preflight_git_access(
         if resolved.scheme == "https":
             git_ctx = build_askpass_env(username=resolved.username, secret=resolved.secret)
             extra_env = git_ctx.env
+        elif resolved.scheme == "ssh" and resolved.secret:
+            git_ctx = build_ssh_env(secret=resolved.secret)
+            extra_env = git_ctx.env
     try:
         proc = await asyncio.create_subprocess_exec(
             "git",
@@ -917,6 +1084,11 @@ async def preflight_git_access(
         if git_ctx is not None:
             git_ctx.__exit__()
     if (proc.returncode or 0) == 0:
+        branch = (getattr(repo, "branch", "") or "").strip()
+        if branch:
+            heads = (stdout_b or b"").decode("utf-8", errors="replace")
+            if f"refs/heads/{branch}" not in heads:
+                return False, f"分支不存在: {branch}"
         return True, ""
     text = (stderr_b or stdout_b).decode("utf-8", errors="replace")
     return False, _classify_git_error(text)
@@ -943,9 +1115,11 @@ def stores_from_settings(
 
 
 def resolver_from_settings(cfg: Any | None = None) -> GitCredentialResolver:
-    """执行链路用的解析器（clone / push 前按仓库来源取凭据）。"""
-    creds, workspace_repos, _ = stores_from_settings(cfg)
-    return GitCredentialResolver(credentials=creds, workspace_repos=workspace_repos)
+    """执行链路用的解析器（clone / push 前按 repo_id 回查注册表）。"""
+    creds, workspace_repos, user_repos = stores_from_settings(cfg)
+    return GitCredentialResolver(
+        credentials=creds, workspace_repos=workspace_repos, user_repos=user_repos
+    )
 
 
 __all__ = [

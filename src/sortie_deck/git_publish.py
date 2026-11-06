@@ -236,7 +236,7 @@ async def _push_branch(
     extra_env: dict[str, str] = {}
     git_ctx = None
     if resolver is not None:
-        from sortie_deck.git_cred import build_askpass_env
+        from sortie_deck.git_cred import build_askpass_env, build_ssh_env
 
         try:
             resolved = resolver.resolve(repo, actor_user_id=actor_user_id)
@@ -246,6 +246,9 @@ async def _push_branch(
             git_ctx = build_askpass_env(
                 username=resolved.username, secret=resolved.secret, workdir=target
             )
+            extra_env = git_ctx.env
+        elif resolved.scheme == "ssh" and resolved.secret:
+            git_ctx = build_ssh_env(secret=resolved.secret, workdir=target)
             extra_env = git_ctx.env
     try:
         code, out, err = await _git(
