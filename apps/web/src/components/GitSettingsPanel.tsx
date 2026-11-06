@@ -18,6 +18,24 @@ const ZH = {
   title: "Git 凭据",
   lede: "两套凭据，两种权限：工作区凭据由管理员维护、全员可用，你只能看；个人凭据只属于你，可增删改。",
   addCred: "添加我的凭据",
+  addWsCred: "添加工作区凭据",
+  wsAdminWritable: "管理员可管理",
+  wsCredAddTitle: "添加工作区凭据",
+  wsCredEditTitle: "编辑工作区凭据",
+  wsCredDelete: "停用",
+  wsCredDeleteConfirm: (label: string) =>
+    `停用「${label}」？\n\n所有工作区仓库会立刻失去该凭据；已开始的拉取不受影响。`,
+  wsCredDisabled: "工作区凭据已停用",
+  wsReposTitle: "工作区仓库",
+  wsReposNote: "管理员维护，全员可在任务里选择；执行时使用绑定的工作区凭据。",
+  addWsRepo: "添加工作区仓库",
+  wsRepoCred: "绑定凭据",
+  wsRepoAdded: "工作区仓库已添加",
+  wsRepoRemoved: "工作区仓库已停用",
+  wsRepoDeleteConfirm: (name: string) =>
+    `停用「${name}」？\n\n任务下拉里不再出现，历史任务引用仍可解析。`,
+  matchingEmpty:
+    "还没有仓库。登记工作区仓库或个人私有仓库后，这里会显示执行时实际使用的凭据；缺凭据会被标记出来。",
   wsTitle: "工作区凭据",
   wsMeta: "ADMIN MANAGED",
   wsReadonly: "只读",
@@ -31,7 +49,7 @@ const ZH = {
   readoutRepos: "可用仓库",
   readoutAttn: "需要处理",
   myRepos: "我的私有仓库",
-  myReposNote: "登记后会出现在任务仓库选择器的下拉里；执行时按上面的凭据自动匹配。",
+  myReposNote: "登记后会出现在任务仓库选择器的下拉里；执行时使用每条仓库绑定的凭据。",
   addRepo: "登记仓库",
   matching: "仓库匹配预览",
   matchingNote: "执行前按这张表解析凭据；匹配不到会在绑定阶段直接拒绝。",
@@ -85,7 +103,15 @@ const ZH = {
   repoNamePh: "sortie-deck-todos",
   repoUrlPh: "https://github.com/you/repo.git",
   repoBranchPh: "main",
-  repoFormNote: "按主机自动匹配上面的个人凭据。",
+  repoFormNote: "仓库必须绑定凭据；工作区凭据仅可用于同主机仓库。",
+  repoCred: "绑定凭据",
+  repoCredRequired: "请选择绑定凭据",
+  repoNoCred: "该主机还没有可用凭据，请先添加",
+  repoEdit: "编辑",
+  repoUpdated: "仓库已更新",
+  repoUnbound: "未绑定",
+  repoAddTitle: "登记私有仓库",
+  repoEditTitle: "编辑私有仓库",
   neverUsed: "从未使用",
   boundRepos: "绑定仓库",
   inactive: "已禁用或过期",
@@ -100,6 +126,24 @@ const EN: typeof ZH = {
   title: "Git credentials",
   lede: "Two tiers, two permissions: workspace credentials are maintained by admins and shared with everyone — read-only here. Personal credentials belong to you and can be changed.",
   addCred: "Add my credential",
+  addWsCred: "Add workspace credential",
+  wsAdminWritable: "Admin managed",
+  wsCredAddTitle: "Add workspace credential",
+  wsCredEditTitle: "Edit workspace credential",
+  wsCredDelete: "Disable",
+  wsCredDeleteConfirm: (label: string) =>
+    `Disable "${label}"?\n\nAll workspace repos will lose this credential immediately; running clones are unaffected.`,
+  wsCredDisabled: "Workspace credential disabled",
+  wsReposTitle: "Workspace repos",
+  wsReposNote: "Maintained by admins and selectable by everyone; runs use the bound workspace credential.",
+  addWsRepo: "Add workspace repo",
+  wsRepoCred: "Credential",
+  wsRepoAdded: "Workspace repo added",
+  wsRepoRemoved: "Workspace repo disabled",
+  wsRepoDeleteConfirm: (name: string) =>
+    `Disable "${name}"?\n\nIt disappears from the mission picker; existing missions still resolve.`,
+  matchingEmpty:
+    "No repos yet. Once a workspace or personal repo is registered, this table shows which credential a run will use; missing credentials are flagged.",
   wsTitle: "Workspace credentials",
   wsMeta: "ADMIN MANAGED",
   wsReadonly: "Read only",
@@ -113,7 +157,7 @@ const EN: typeof ZH = {
   readoutRepos: "Available repos",
   readoutAttn: "Needs attention",
   myRepos: "My private repos",
-  myReposNote: "Registered repos appear in the mission repo picker and use the credentials above at run time.",
+  myReposNote: "Registered repos appear in the mission picker and use the credential bound to each repo at run time.",
   addRepo: "Register repo",
   matching: "Repo → credential preview",
   matchingNote: "Credentials are resolved from this table before a run; a miss is rejected at bind time.",
@@ -167,7 +211,15 @@ const EN: typeof ZH = {
   repoNamePh: "sortie-deck-todos",
   repoUrlPh: "https://github.com/you/repo.git",
   repoBranchPh: "main",
-  repoFormNote: "Matched to your credentials by host.",
+  repoFormNote: "Every repo must bind a credential; workspace credentials only work on the same host.",
+  repoCred: "Credential",
+  repoCredRequired: "Pick a credential",
+  repoNoCred: "No credential for this host yet — add one first",
+  repoEdit: "Edit",
+  repoUpdated: "Repo updated",
+  repoUnbound: "Unbound",
+  repoAddTitle: "Register private repo",
+  repoEditTitle: "Edit private repo",
   neverUsed: "Never used",
   boundRepos: "Bound repos",
   inactive: "Disabled or expired",
@@ -219,11 +271,10 @@ interface Props {
   token: string;
   lang: Lang;
   isAdmin: boolean;
-  onOpenAdmin: () => void;
   onCountChange?: (n: number) => void;
 }
 
-export function GitSettingsPanel({ token, lang, isAdmin, onOpenAdmin, onCountChange }: Props) {
+export function GitSettingsPanel({ token, lang, isAdmin, onCountChange }: Props) {
   const C = lang === "zh" ? ZH : EN;
   const [wsCreds, setWsCreds] = useState<GitCredentialInfo[]>([]);
   const [myCreds, setMyCreds] = useState<GitCredentialInfo[]>([]);
@@ -235,14 +286,31 @@ export function GitSettingsPanel({ token, lang, isAdmin, onOpenAdmin, onCountCha
   const toastTimer = useRef<number | null>(null);
 
   const [modalOpen, setModalOpen] = useState(false);
+  // 同一个弹层服务「我的凭据」与「工作区凭据」，用 scope 区分提交端点
+  const [credScope, setCredScope] = useState<"mine" | "workspace">("mine");
   const [editCred, setEditCred] = useState<GitCredentialInfo | null>(null);
   const [form, setForm] = useState({ label: "", host: "", scheme: "https", username: "", secret: "" });
   const [formError, setFormError] = useState("");
   const [saving, setSaving] = useState(false);
 
   const [repoOpen, setRepoOpen] = useState(false);
-  const [repoForm, setRepoForm] = useState({ name: "", url: "", default_branch: "" });
+  const [editRepoId, setEditRepoId] = useState<string | null>(null);
+  const [repoForm, setRepoForm] = useState({
+    name: "",
+    url: "",
+    default_branch: "",
+    credential_id: "",
+  });
   const [repoError, setRepoError] = useState("");
+  // 工作区仓库（管理员）
+  const [wsRepoOpen, setWsRepoOpen] = useState(false);
+  const [wsRepoForm, setWsRepoForm] = useState({
+    name: "",
+    url: "",
+    default_branch: "",
+    credential_id: "",
+  });
+  const [wsRepoError, setWsRepoError] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -286,14 +354,16 @@ export function GitSettingsPanel({ token, lang, isAdmin, onOpenAdmin, onCountCha
     toastTimer.current = window.setTimeout(() => setToast(""), 1800);
   }
 
-  function openAdd() {
+  function openAdd(scope: "mine" | "workspace" = "mine") {
+    setCredScope(scope);
     setEditCred(null);
     setForm({ label: "", host: "", scheme: "https", username: "", secret: "" });
     setFormError("");
     setModalOpen(true);
   }
 
-  function openEdit(cred: GitCredentialInfo) {
+  function openEdit(cred: GitCredentialInfo, scope: "mine" | "workspace" = "mine") {
+    setCredScope(scope);
     setEditCred(cred);
     setForm({
       label: cred.label,
@@ -326,11 +396,16 @@ export function GitSettingsPanel({ token, lang, isAdmin, onOpenAdmin, onCountCha
     }
     setSaving(true);
     setFormError("");
+    // 工作区凭据走管理员端点；个人凭据走 /api/me（权限由后端再校验一次）
+    const base =
+      credScope === "workspace"
+        ? "/api/admin/git/workspace-credentials"
+        : "/api/me/git-credentials";
     try {
       if (editCred) {
         if (form.secret) {
           // 替换 token 走覆盖写入（同一 host + scheme + username 命中唯一键）
-          await api("/api/me/git-credentials", {
+          await api(base, {
             token,
             method: "POST",
             body: JSON.stringify({
@@ -343,14 +418,14 @@ export function GitSettingsPanel({ token, lang, isAdmin, onOpenAdmin, onCountCha
           });
         } else {
           // 不改 token 时只改展示名，避免逼用户重新贴一次密钥
-          await api(`/api/me/git-credentials/${editCred.id}`, {
+          await api(`${base}/${editCred.id}`, {
             token,
             method: "PATCH",
             body: JSON.stringify({ label: label || editCred.label }),
           });
         }
       } else {
-        await api("/api/me/git-credentials", {
+        await api(base, {
           token,
           method: "POST",
           body: JSON.stringify({
@@ -372,43 +447,118 @@ export function GitSettingsPanel({ token, lang, isAdmin, onOpenAdmin, onCountCha
     }
   }
 
-  async function removeCredential(cred: GitCredentialInfo) {
-    if (!window.confirm(C.deleteConfirm(cred.label))) return;
+  async function removeCredential(cred: GitCredentialInfo, scope: "mine" | "workspace" = "mine") {
+    const confirmText =
+      scope === "workspace" ? C.wsCredDeleteConfirm(cred.label) : C.deleteConfirm(cred.label);
+    if (!window.confirm(confirmText)) return;
+    const url =
+      scope === "workspace"
+        ? `/api/admin/git/workspace-credentials/${cred.id}`
+        : `/api/me/git-credentials/${cred.id}`;
     try {
-      await api(`/api/me/git-credentials/${cred.id}`, { token, method: "DELETE" });
+      await api(url, { token, method: "DELETE" });
       await load();
-      showToast(C.deleted);
+      showToast(scope === "workspace" ? C.wsCredDisabled : C.deleted);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
   }
 
-  async function addRepo(e: FormEvent) {
+  /** 管理员登记工作区仓库：仓库与工作区凭据是两张表，这里只选已存在的凭据 */
+  async function addWsRepo(e: FormEvent) {
+    e.preventDefault();
+    const url = wsRepoForm.url.trim();
+    if (!url) {
+      setWsRepoError(C.repoUrlRequired);
+      return;
+    }
+    if (!wsRepoForm.credential_id) {
+      setWsRepoError(C.wsRepoCred);
+      return;
+    }
+    const fallbackName = url.split("/").pop()?.replace(/\.git$/, "") || "repo";
+    try {
+      await api("/api/admin/git/workspace-repos", {
+        token,
+        method: "POST",
+        body: JSON.stringify({
+          name: wsRepoForm.name.trim() || fallbackName,
+          url,
+          default_branch: wsRepoForm.default_branch.trim(),
+          role_slots: [],
+          credential_id: wsRepoForm.credential_id,
+        }),
+      });
+      setWsRepoForm({ name: "", url: "", default_branch: "", credential_id: "" });
+      setWsRepoOpen(false);
+      setWsRepoError("");
+      await load();
+      showToast(C.wsRepoAdded);
+    } catch (err) {
+      setWsRepoError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function removeWsRepo(repo: WorkspaceRepoInfo) {
+    if (!window.confirm(C.wsRepoDeleteConfirm(repo.name))) return;
+    try {
+      await api(`/api/admin/git/workspace-repos/${repo.id}`, { token, method: "DELETE" });
+      await load();
+      showToast(C.wsRepoRemoved);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function saveRepo(e: FormEvent) {
     e.preventDefault();
     const url = repoForm.url.trim();
     if (!url) {
       setRepoError(C.repoUrlRequired);
       return;
     }
+    if (!repoForm.credential_id) {
+      setRepoError(C.repoCredRequired);
+      return;
+    }
     const fallbackName = url.split("/").pop()?.replace(/\.git$/, "") || "repo";
+    const body = {
+      name: repoForm.name.trim() || fallbackName,
+      url,
+      default_branch: repoForm.default_branch.trim(),
+      credential_id: repoForm.credential_id,
+    };
     try {
-      await api("/api/me/git/repos", {
-        token,
-        method: "POST",
-        body: JSON.stringify({
-          name: repoForm.name.trim() || fallbackName,
-          url,
-          default_branch: repoForm.default_branch.trim(),
-        }),
-      });
-      setRepoForm({ name: "", url: "", default_branch: "" });
+      if (editRepoId) {
+        await api(`/api/me/git/repos/${editRepoId}`, {
+          token,
+          method: "PATCH",
+          body: JSON.stringify(body),
+        });
+      } else {
+        await api("/api/me/git/repos", { token, method: "POST", body: JSON.stringify(body) });
+      }
+      setEditRepoId(null);
+      setRepoForm({ name: "", url: "", default_branch: "", credential_id: "" });
       setRepoOpen(false);
       setRepoError("");
       await load();
-      showToast(C.repoAdded);
+      showToast(editRepoId ? C.repoUpdated : C.repoAdded);
     } catch (err) {
       setRepoError(err instanceof Error ? err.message : String(err));
     }
+  }
+
+  function openRepoEdit(repo: UserRepoInfo) {
+    setEditRepoId(repo.id);
+    setRepoForm({
+      name: repo.name,
+      url: repo.url,
+      default_branch: repo.default_branch,
+      credential_id: repo.credential_id || "",
+    });
+    setRepoError("");
+    setRepoOpen(true);
   }
 
   async function removeRepo(repo: UserRepoInfo) {
@@ -428,33 +578,46 @@ export function GitSettingsPanel({ token, lang, isAdmin, onOpenAdmin, onCountCha
     [wsRepos],
   );
 
+  /** 私有仓库可选凭据：只列 host+scheme 与仓库 URL 一致的（后端还会再校验一次） */
+  /** 工作区仓库只能绑工作区凭据，同样按 host+scheme 过滤 */
+  const wsRepoCredOptions = useMemo(() => {
+    const host = hostOf(wsRepoForm.url);
+    const scheme = schemeOf(wsRepoForm.url);
+    if (!host) return wsCreds;
+    return wsCreds.filter((c) => c.host === host && c.scheme === scheme && isActive(c));
+  }, [wsRepoForm.url, wsCreds]);
+
+  const repoCredOptions = useMemo(() => {
+    const host = hostOf(repoForm.url);
+    const scheme = schemeOf(repoForm.url);
+    if (!host) return [] as GitCredentialInfo[];
+    return [...wsCreds, ...myCreds].filter(
+      (c) => c.host === host && c.scheme === scheme && isActive(c),
+    );
+  }, [repoForm.url, wsCreds, myCreds]);
+
   /** 仓库 → 凭据匹配结果；工作区与自定义分开解析，不做优先级回退 */
   const matchRows = useMemo(() => {
-    const ws = wsRepos.map((repo) => {
-      const cred = wsCreds.find((c) => c.id === repo.credential_id);
-      return {
-        key: `ws-${repo.id}`,
-        name: repo.name,
-        source: "workspace" as const,
-        host: hostOf(repo.url),
-        credential: cred?.label || "",
-        ok: Boolean(cred),
-      };
-    });
-    const mine = myRepos.map((repo) => {
+    const allCreds = [...wsCreds, ...myCreds];
+    /** 按仓库绑定的 credential_id 计算，且必须 host/scheme 一致（与执行期同规则） */
+    const build = (repo: WorkspaceRepoInfo | UserRepoInfo, source: "workspace" | "custom") => {
       const host = hostOf(repo.url);
       const scheme = schemeOf(repo.url);
-      const cred = myCreds.find((c) => c.host === host && c.scheme === scheme && isActive(c));
+      const cred = allCreds.find((c) => c.id === repo.credential_id && isActive(c));
+      const ok = Boolean(cred && cred.host === host && cred.scheme === scheme);
       return {
-        key: `my-${repo.id}`,
+        key: `${source}-${repo.id}`,
         name: repo.name,
-        source: "custom" as const,
+        source,
         host,
         credential: cred?.label || "",
-        ok: Boolean(cred),
+        ok,
       };
-    });
-    return [...ws, ...mine];
+    };
+    return [
+      ...wsRepos.map((repo) => build(repo, "workspace" as const)),
+      ...myRepos.map((repo) => build(repo, "custom" as const)),
+    ];
   }, [wsRepos, myRepos, wsCreds, myCreds]);
 
   const attention =
@@ -467,9 +630,16 @@ export function GitSettingsPanel({ token, lang, isAdmin, onOpenAdmin, onCountCha
           <h2>{C.title}</h2>
           <p>{C.lede}</p>
         </div>
-        <button type="button" className="stg-primary" onClick={openAdd}>
-          ＋ {C.addCred}
-        </button>
+        <div className="stg-head-actions">
+          {isAdmin && (
+            <button type="button" className="stg-quiet" onClick={() => openAdd("workspace")}>
+              ＋ {C.addWsCred}
+            </button>
+          )}
+          <button type="button" className="stg-primary" onClick={() => openAdd("mine")}>
+            ＋ {C.addCred}
+          </button>
+        </div>
       </header>
 
       {error && <p className="stg-error">{error}</p>}
@@ -503,12 +673,26 @@ export function GitSettingsPanel({ token, lang, isAdmin, onOpenAdmin, onCountCha
                 <h3>{C.wsTitle}</h3>
                 <span className="meta">{C.wsMeta}</span>
                 <span className="sp" />
-                <span className="ro">{C.wsReadonly}</span>
+                <span className="ro">{isAdmin ? C.wsAdminWritable : C.wsReadonly}</span>
               </div>
               <div className="stg-sealed-list">
                 {wsCreds.map((cred) => (
                   <article key={cred.id} className="stg-sealed">
-                    <span className="stg-stamp">READ ONLY</span>
+                    <span className="stg-stamp">{isAdmin ? "ADMIN" : "READ ONLY"}</span>
+                    {isAdmin && (
+                      <div className="stg-sealed-ops">
+                        <button type="button" onClick={() => openEdit(cred, "workspace")}>
+                          {C.edit}
+                        </button>
+                        <button
+                          type="button"
+                          className="danger"
+                          onClick={() => void removeCredential(cred, "workspace")}
+                        >
+                          {C.wsCredDelete}
+                        </button>
+                      </div>
+                    )}
                     <div className="label">{cred.label}</div>
                     <div className="host">
                       {cred.scheme}://{cred.host}
@@ -535,17 +719,7 @@ export function GitSettingsPanel({ token, lang, isAdmin, onOpenAdmin, onCountCha
                 ))}
                 {!wsCreds.length && <div className="stg-empty">{C.wsNote}</div>}
               </div>
-              <p className="stg-note">
-                {C.wsNote}
-                {isAdmin && (
-                  <>
-                    {" "}
-                    <button type="button" className="stg-link" onClick={onOpenAdmin}>
-                      {C.gotoAdmin} →
-                    </button>
-                  </>
-                )}
-              </p>
+              <p className="stg-note">{C.wsNote}</p>
             </div>
 
             <div>
@@ -602,13 +776,28 @@ export function GitSettingsPanel({ token, lang, isAdmin, onOpenAdmin, onCountCha
                 <p>{C.myReposNote}</p>
               </div>
               <span className="sp" />
-              <button type="button" className="stg-quiet" onClick={() => setRepoOpen((v) => !v)}>
+              <button
+                type="button"
+                className="stg-quiet"
+                onClick={() => {
+                  if (repoOpen) {
+                    setRepoOpen(false);
+                    setEditRepoId(null);
+                    setRepoForm({ name: "", url: "", default_branch: "", credential_id: "" });
+                  } else {
+                    setRepoOpen(true);
+                  }
+                }}
+              >
                 {repoOpen ? C.cancel : `＋ ${C.addRepo}`}
               </button>
             </div>
 
             {repoOpen && (
-              <form className="stg-repo-form" onSubmit={addRepo}>
+              <form className="stg-repo-form" onSubmit={saveRepo}>
+                <p className="stg-form-title">
+                  {editRepoId ? C.repoEditTitle : C.repoAddTitle}
+                </p>
                 <label>
                   <span>{C.repoName}</span>
                   <input
@@ -633,8 +822,27 @@ export function GitSettingsPanel({ token, lang, isAdmin, onOpenAdmin, onCountCha
                     onChange={(e) => setRepoForm({ ...repoForm, default_branch: e.target.value })}
                   />
                 </label>
+                <label>
+                  <span>{C.repoCred}</span>
+                  <select
+                    value={repoForm.credential_id}
+                    onChange={(e) =>
+                      setRepoForm({ ...repoForm, credential_id: e.target.value })
+                    }
+                  >
+                    <option value="">—</option>
+                    {repoCredOptions.map((cred) => (
+                      <option key={cred.id} value={cred.id}>
+                        {cred.label} · {cred.scope === "workspace" ? "工作区" : "个人"}
+                      </option>
+                    ))}
+                  </select>
+                  {repoForm.url.trim() && !repoCredOptions.length && (
+                    <em>{C.repoNoCred}</em>
+                  )}
+                </label>
                 <button type="submit" className="stg-primary">
-                  {C.addRepo}
+                  {editRepoId ? C.save : C.addRepo}
                 </button>
                 {repoError && <p className="stg-error inline">{repoError}</p>}
               </form>
@@ -642,16 +850,20 @@ export function GitSettingsPanel({ token, lang, isAdmin, onOpenAdmin, onCountCha
 
             <div className="stg-repo-list">
               {myRepos.map((repo) => {
-                const host = hostOf(repo.url);
-                const cred = myCreds.find(
-                  (c) => c.host === host && c.scheme === schemeOf(repo.url) && isActive(c),
+                const cred = [...wsCreds, ...myCreds].find(
+                  (c) => c.id === repo.credential_id && isActive(c),
                 );
                 return (
                   <div key={repo.id} className="stg-repo-row">
                     <div className="nm">{repo.name}</div>
                     <div className="url">{repo.url}</div>
                     <div className="branch">{repo.default_branch || "—"}</div>
-                    <div className={`cred${cred ? "" : " miss"}`}>{cred ? cred.label : "—"}</div>
+                    <div className={`cred${cred ? "" : " miss"}`}>
+                      {cred ? cred.label : C.repoUnbound}
+                    </div>
+                    <button type="button" className="stg-link" onClick={() => openRepoEdit(repo)}>
+                      {C.repoEdit}
+                    </button>
                     <button type="button" className="danger" onClick={() => void removeRepo(repo)}>
                       {C.remove}
                     </button>
@@ -661,6 +873,100 @@ export function GitSettingsPanel({ token, lang, isAdmin, onOpenAdmin, onCountCha
               {!myRepos.length && <div className="stg-empty">{C.emptyRepos}</div>}
             </div>
           </section>
+
+          {isAdmin && (
+            <section className="stg-sec">
+              <div className="stg-sec-head">
+                <div>
+                  <h3>{C.wsReposTitle}</h3>
+                  <p>{C.wsReposNote}</p>
+                </div>
+                <span className="sp" />
+                <button
+                  type="button"
+                  className="stg-quiet"
+                  onClick={() => setWsRepoOpen((v) => !v)}
+                >
+                  {wsRepoOpen ? C.cancel : `＋ ${C.addWsRepo}`}
+                </button>
+              </div>
+
+              {wsRepoOpen && (
+                <form className="stg-repo-form ws-repo-form" onSubmit={addWsRepo}>
+                  <label>
+                    <span>{C.repoName}</span>
+                    <input
+                      value={wsRepoForm.name}
+                      placeholder={C.repoNamePh}
+                      onChange={(e) => setWsRepoForm({ ...wsRepoForm, name: e.target.value })}
+                    />
+                  </label>
+                  <label className="wide">
+                    <span>{C.repoUrl}</span>
+                    <input
+                      value={wsRepoForm.url}
+                      placeholder={C.repoUrlPh}
+                      onChange={(e) => setWsRepoForm({ ...wsRepoForm, url: e.target.value })}
+                    />
+                  </label>
+                  <label>
+                    <span>{C.repoBranch}</span>
+                    <input
+                      value={wsRepoForm.default_branch}
+                      placeholder={C.repoBranchPh}
+                      onChange={(e) =>
+                        setWsRepoForm({ ...wsRepoForm, default_branch: e.target.value })
+                      }
+                    />
+                  </label>
+                  <label>
+                    <span>{C.wsRepoCred}</span>
+                    <select
+                      value={wsRepoForm.credential_id}
+                      onChange={(e) =>
+                        setWsRepoForm({ ...wsRepoForm, credential_id: e.target.value })
+                      }
+                    >
+                      <option value="">—</option>
+                      {wsRepoCredOptions.map((cred) => (
+                        <option key={cred.id} value={cred.id}>
+                          {cred.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button type="submit" className="stg-primary">
+                    {C.addWsRepo}
+                  </button>
+                  {wsRepoError && <p className="stg-error inline">{wsRepoError}</p>}
+                </form>
+              )}
+
+              <div className="stg-repo-list">
+                {wsRepos.map((repo) => {
+                  const cred = wsCreds.find((c) => c.id === repo.credential_id);
+                  return (
+                    <div key={repo.id} className="stg-repo-row">
+                      <div className="nm">{repo.name}</div>
+                      <div className="url">{repo.url}</div>
+                      <div className="branch">{repo.default_branch || "—"}</div>
+                      <div className={`cred${cred ? "" : " miss"}`}>
+                        {cred?.label || "—"}
+                      </div>
+                      <button
+                        type="button"
+                        className="danger"
+                        onClick={() => void removeWsRepo(repo)}
+                      >
+                        {C.wsCredDelete}
+                      </button>
+                    </div>
+                  );
+                })}
+                {!wsRepos.length && <div className="stg-empty">{C.wsReposNote}</div>}
+              </div>
+            </section>
+          )}
 
           <section className="stg-sec">
             <div className="stg-sec-head">
@@ -697,6 +1003,16 @@ export function GitSettingsPanel({ token, lang, isAdmin, onOpenAdmin, onCountCha
                     </td>
                   </tr>
                 ))}
+                {!matchRows.length && (
+                  <tr>
+                    <td
+                      colSpan={5}
+                      style={{ padding: "18px 12px", color: "var(--muted)", fontSize: 12 }}
+                    >
+                      {C.matchingEmpty}
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </section>
@@ -708,7 +1024,15 @@ export function GitSettingsPanel({ token, lang, isAdmin, onOpenAdmin, onCountCha
           className="stg-modal"
           role="dialog"
           aria-modal="true"
-          aria-label={editCred ? C.editTitle : C.addTitle}
+          aria-label={
+            credScope === "workspace"
+              ? editCred
+                ? C.wsCredEditTitle
+                : C.wsCredAddTitle
+              : editCred
+                ? C.editTitle
+                : C.addTitle
+          }
           onMouseDown={(e) => {
             if (e.target === e.currentTarget) closeModal();
           }}
@@ -716,7 +1040,15 @@ export function GitSettingsPanel({ token, lang, isAdmin, onOpenAdmin, onCountCha
           <form className="stg-sheet" onSubmit={saveCredential} noValidate>
             <div className="stg-sheet-head">
               <div>
-                <h3>{editCred ? C.editTitle : C.addTitle}</h3>
+                <h3>
+                  {credScope === "workspace"
+                    ? editCred
+                      ? C.wsCredEditTitle
+                      : C.wsCredAddTitle
+                    : editCred
+                      ? C.editTitle
+                      : C.addTitle}
+                </h3>
                 <p>{editCred ? C.editSub : C.addSub}</p>
               </div>
               <span className="sp" />

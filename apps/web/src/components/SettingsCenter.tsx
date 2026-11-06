@@ -65,7 +65,7 @@ const ZH = {
   deleteAccount: "删除账号",
   deleteHint: "历史消息署名会保留为「已注销用户」，不可恢复",
   remove: "删除",
-  footer: "凭据密钥只写不读；工作区凭据的维护入口在「管理 › 仓库」。",
+  footer: "凭据密钥只写不读；管理员可直接在「Git 凭据」页维护工作区凭据与仓库。",
 };
 
 const EN: typeof ZH = {
@@ -119,7 +119,7 @@ const EN: typeof ZH = {
   deleteAccount: "Delete account",
   deleteHint: "Message authorship becomes “deleted user”; this cannot be undone",
   remove: "Delete",
-  footer: "Secrets are write-only; workspace credentials are maintained in Admin › Repos.",
+  footer: "Secrets are write-only; admins manage workspace credentials and repos on this page.",
 };
 
 type Tab = "git" | "keys" | "account" | "appearance" | "data" | "insights";
@@ -145,7 +145,6 @@ interface Props {
   onDeleteAccount: () => void;
   onLogout: () => void;
   onLangChange: (lang: Lang) => void;
-  onOpenAdmin: () => void;
 }
 
 export function SettingsCenter({
@@ -169,7 +168,6 @@ export function SettingsCenter({
   onDeleteAccount,
   onLogout,
   onLangChange,
-  onOpenAdmin,
 }: Props) {
   const C = lang === "zh" ? ZH : EN;
   const [tab, setTab] = useState<Tab>("git");
@@ -288,7 +286,6 @@ export function SettingsCenter({
                 token={token}
                 lang={lang}
                 isAdmin={user.role === "admin"}
-                onOpenAdmin={onOpenAdmin}
                 onCountChange={setGitCount}
               />
             )}

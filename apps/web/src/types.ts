@@ -349,6 +349,7 @@ export interface UserRepoInfo {
   name: string;
   url: string;
   default_branch: string;
+  credential_id?: string | null;
   created_at: number;
 }
 

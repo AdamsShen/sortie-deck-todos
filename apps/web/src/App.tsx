@@ -17,7 +17,6 @@ import {
   updateInitiativeHarness,
 } from "./api";
 import { SettingsCenter } from "./components/SettingsCenter";
-import { WorkspaceReposPanel } from "./components/WorkspaceReposPanel";
 import { OperatorChip } from "./components/OperatorChip";
 import { PipelineEditor } from "./components/PipelineEditor";
 import { ChatComposer, SparkleIcon, type MentionOption } from "./components/ChatComposer";
@@ -6488,8 +6487,6 @@ export default function App() {
               </form>
             </div>
           </div>
-
-          <WorkspaceReposPanel token={token} lang={lang} />
         </main>
       )}
       <SettingsCenter
@@ -6525,10 +6522,6 @@ export default function App() {
         onDeleteAccount={doDeleteAccount}
         onLogout={doLogout}
         onLangChange={setLang}
-        onOpenAdmin={() => {
-          setSettingsOpen(false);
-          setView("admin");
-        }}
       />
     </div>
   );

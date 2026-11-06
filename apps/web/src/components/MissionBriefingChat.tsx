@@ -3,6 +3,7 @@ import { api } from "../api";
 import { playSfx } from "../sfx";
 import type {
   ExternalMaterial,
+  GitCredentialInfo,
   RepoConfig,
   UserRepoInfo,
   WorkspaceRepoInfo,
@@ -13,8 +14,11 @@ type RepoRow = {
   url: string;
   branch: string;
   name?: string;
-  /** workspace=管理员配的工作区仓库（用工作区凭据）；custom=自填 URL（用个人凭据） */
+  /** workspace=管理员配的工作区仓库；custom=本人登记的私有仓库 */
   source?: "workspace" | "custom";
+  /** 新任务只带 repo_id，执行期回查仓库当前绑定的凭据 */
+  repo_id?: string | null;
+  /** 仅历史/手填 URL 兼容用 */
   credential_id?: string | null;
 };
 type ReposBySlot = Record<string, RepoRow[]>;
@@ -119,6 +123,8 @@ export function MissionBriefingChat({
   // 仓库选择器数据源：工作区仓库（管理员配）+ 我的私有仓库（本人登记）
   const [workspaceRepos, setWorkspaceRepos] = useState<WorkspaceRepoInfo[]>([]);
   const [myRepos, setMyRepos] = useState<UserRepoInfo[]>([]);
+  const [wsCreds, setWsCreds] = useState<GitCredentialInfo[]>([]);
+  const [myCreds, setMyCreds] = useState<GitCredentialInfo[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const locked = busy || sending;
@@ -129,13 +135,17 @@ export function MissionBriefingChat({
     let cancelled = false;
     void (async () => {
       try {
-        const [ws, mine] = await Promise.all([
+        const [ws, mine, wc, mc] = await Promise.all([
           api<WorkspaceRepoInfo[]>("/api/git/workspace-repos", { token }),
           api<UserRepoInfo[]>("/api/me/git/repos", { token }),
+          api<GitCredentialInfo[]>("/api/git/workspace-credentials", { token }),
+          api<GitCredentialInfo[]>("/api/me/git-credentials", { token }),
         ]);
         if (!cancelled) {
           setWorkspaceRepos(ws);
           setMyRepos(mine);
+          setWsCreds(wc);
+          setMyCreds(mc);
         }
       } catch {
         /* 选择器退化为手填 URL */
@@ -266,7 +276,10 @@ export function MissionBriefingChat({
           branch: r.branch.trim(),
           name: r.name,
           source: r.source || "custom",
-          credential_id: r.source === "workspace" ? r.credential_id || null : null,
+          repo_id: r.repo_id || null,
+          // 新任务只传 repo_id；手填 URL 的历史兼容路径才带 credential_id
+          credential_id:
+            !r.repo_id && r.source === "workspace" ? r.credential_id || null : null,
         }))
         .filter((r) => r.url);
       if (clean.length) out[slot] = clean;
@@ -275,6 +288,15 @@ export function MissionBriefingChat({
   }
 
   async function confirmPlan() {
+    // 分支是任务级必填：任一已选仓库为空就不允许确认
+    const missing = Object.values(repos)
+      .flat()
+      .filter((r) => r.url.trim() && !r.branch.trim());
+    if (missing.length) {
+      onError(lang === "zh" ? "请填写仓库分支" : "Please fill in a branch for every repo");
+      playSfx("warn");
+      return;
+    }
     const payload = repoPayload();
     if (session && Object.keys(payload).length) {
       try {
@@ -504,48 +526,77 @@ export function MissionBriefingChat({
                       <select
                         value=""
                         onChange={(e) => {
-                          const url = e.target.value;
-                          if (!url) return;
-                          const ws = workspaceRepos.find((r) => r.url === url);
-                          if (ws) {
+                          const [source, id] = (e.target.value || "").split(":");
+                          if (!source || !id) return;
+                          if (source === "workspace") {
+                            const ws = workspaceRepos.find((r) => r.id === id);
+                            if (!ws) return;
+                            // 同一角色内同一仓库只允许一行，避免重复 clone
+                            if ((repos[slot] || []).some((r, j) => j !== i && r.repo_id === ws.id))
+                              return;
                             updateRepoRow(slot, i, {
                               url: ws.url,
                               name: ws.name,
                               branch: row.branch || ws.default_branch,
                               source: "workspace",
+                              repo_id: ws.id,
                               credential_id: ws.credential_id,
                             });
                             return;
                           }
-                          const mine = myRepos.find((r) => r.url === url);
-                          if (mine) {
-                            updateRepoRow(slot, i, {
-                              url: mine.url,
-                              name: mine.name,
-                              branch: row.branch || mine.default_branch,
-                              source: "custom",
-                              credential_id: null,
-                            });
-                          }
+                          const mine = myRepos.find((r) => r.id === id);
+                          if (!mine) return;
+                          if ((repos[slot] || []).some((r, j) => j !== i && r.repo_id === mine.id))
+                            return;
+                          updateRepoRow(slot, i, {
+                            url: mine.url,
+                            name: mine.name,
+                            branch: row.branch || mine.default_branch,
+                            source: "custom",
+                            repo_id: mine.id,
+                            credential_id: mine.credential_id,
+                          });
                         }}
                       >
                         <option value="">{lang === "zh" ? "选择仓库…" : "pick a repo…"}</option>
                         {workspaceRepos.length > 0 && (
                           <optgroup label={lang === "zh" ? "工作区仓库" : "Workspace repos"}>
-                            {workspaceRepos.map((r) => (
-                              <option key={r.id} value={r.url}>
-                                {r.name}
-                              </option>
-                            ))}
+                            {workspaceRepos.map((r) => {
+                              const cred = wsCreds.find((c) => c.id === r.credential_id);
+                              return (
+                                <option
+                                  key={r.id}
+                                  value={`workspace:${r.id}`}
+                                  disabled={!cred}
+                                >
+                                  {r.name}
+                                  {cred
+                                    ? ` · ${cred.label}`
+                                    : lang === "zh"
+                                      ? " · 未绑定凭据"
+                                      : " · unbound"}
+                                </option>
+                              );
+                            })}
                           </optgroup>
                         )}
                         {myRepos.length > 0 && (
                           <optgroup label={lang === "zh" ? "我的私有仓库" : "My private repos"}>
-                            {myRepos.map((r) => (
-                              <option key={r.id} value={r.url}>
-                                {r.name}
-                              </option>
-                            ))}
+                            {myRepos.map((r) => {
+                              const cred = [...wsCreds, ...myCreds].find(
+                                (c) => c.id === r.credential_id,
+                              );
+                              return (
+                                <option key={r.id} value={`custom:${r.id}`} disabled={!cred}>
+                                  {r.name}
+                                  {cred
+                                    ? ` · ${cred.label}`
+                                    : lang === "zh"
+                                      ? " · 未绑定凭据"
+                                      : " · unbound"}
+                                </option>
+                              );
+                            })}
                           </optgroup>
                         )}
                       </select>
@@ -563,7 +614,7 @@ export function MissionBriefingChat({
                       <input
                         className="briefing-repo-branch"
                         value={row.branch}
-                        placeholder={lang === "zh" ? "分支（可选）" : "branch (optional)"}
+                        placeholder={lang === "zh" ? "分支（必填）" : "branch (required)"}
                         onChange={(e) => updateRepoRow(slot, i, { branch: e.target.value })}
                       />
                       <button
