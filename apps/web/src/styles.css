@@ -4690,6 +4690,15 @@ textarea {
   flex: 0 0 9rem;
 }
 
+.briefing-repo-cred {
+  flex: 0 0 auto;
+  max-width: 10rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
 @media (max-width: 900px) {
   .briefing-layout {
     grid-template-columns: 1fr;

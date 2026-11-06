@@ -129,32 +129,38 @@ export function MissionBriefingChat({
   const abortRef = useRef<AbortController | null>(null);
   const locked = busy || sending;
 
-  // 仓库选择器数据：工作区仓库全员可读，私有仓库仅本人可读；失败不阻断会话
+  // 仓库清单加载失败的原因（含失败接口名），为空表示清单可用
+  const [repoSourceError, setRepoSourceError] = useState("");
+  const [repoLoadTick, setRepoLoadTick] = useState(0);
+  // 工作区仓库全员可读、私有仓库仅本人可读；四个数据源彼此独立降级，不阻断会话
   useEffect(() => {
     if (!token) return;
     let cancelled = false;
     void (async () => {
-      try {
-        const [ws, mine, wc, mc] = await Promise.all([
-          api<WorkspaceRepoInfo[]>("/api/git/workspace-repos", { token }),
-          api<UserRepoInfo[]>("/api/me/git/repos", { token }),
-          api<GitCredentialInfo[]>("/api/git/workspace-credentials", { token }),
-          api<GitCredentialInfo[]>("/api/me/git-credentials", { token }),
-        ]);
-        if (!cancelled) {
-          setWorkspaceRepos(ws);
-          setMyRepos(mine);
-          setWsCreds(wc);
-          setMyCreds(mc);
-        }
-      } catch {
-        /* 选择器退化为手填 URL */
-      }
+      // 原先用 Promise.all + 静默 catch：任一接口失败会让整个下拉框没有选项
+      const [ws, mine, wc, mc] = await Promise.allSettled([
+        api<WorkspaceRepoInfo[]>("/api/git/workspace-repos", { token }),
+        api<UserRepoInfo[]>("/api/me/git/repos", { token }),
+        api<GitCredentialInfo[]>("/api/git/workspace-credentials", { token }),
+        api<GitCredentialInfo[]>("/api/me/git-credentials", { token }),
+      ]);
+      if (cancelled) return;
+      setWorkspaceRepos(ws.status === "fulfilled" ? ws.value : []);
+      setMyRepos(mine.status === "fulfilled" ? mine.value : []);
+      setWsCreds(wc.status === "fulfilled" ? wc.value : []);
+      setMyCreds(mc.status === "fulfilled" ? mc.value : []);
+      // 只展示 message，避免把响应体里的敏感上下文带进界面
+      const reasonOf = (err: unknown) => (err instanceof Error ? err.message : String(err));
+      const reasons: string[] = [];
+      if (ws.status === "rejected") reasons.push(`/api/git/workspace-repos: ${reasonOf(ws.reason)}`);
+      if (mine.status === "rejected") reasons.push(`/api/me/git/repos: ${reasonOf(mine.reason)}`);
+      // 凭据元信息只影响下拉标签，缺失时不再禁用选项，因此不记入错误提示
+      setRepoSourceError(reasons.join("；"));
     })();
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [token, repoLoadTick]);
 
   useEffect(() => {
     let cancelled = false;
@@ -236,6 +242,20 @@ export function MissionBriefingChat({
     } finally {
       setBusy(false);
     }
+  }
+
+  /** 凭据元信息仅用于下拉项的补充说明；查不到时返回空串，不阻止用户选择该仓库。 */
+  function credentialLabel(id?: string | null): string {
+    if (!id) return "";
+    return [...wsCreds, ...myCreds].find((c) => c.id === id)?.label || "";
+  }
+
+  /** 取当前行绑定的仓库条目，用于在卡片上展示来源与凭据状态。 */
+  function selectedRepoInfo(row: RepoRow): { credential_id?: string | null } | null {
+    if (!row.repo_id) return null;
+    const list: { id: string; credential_id?: string | null }[] =
+      row.source === "workspace" ? workspaceRepos : myRepos;
+    return list.find((r) => r.id === row.repo_id) || null;
   }
 
   function repoSlots(): string[] {
@@ -518,6 +538,19 @@ export function MissionBriefingChat({
                   ? "为对应开发 Agent 绑定 git 仓库与分支；确认后其工作区会先 clone 这些仓库，读代码再迭代。"
                   : "Bind git repos & branches per dev agent; on confirm the agent clones and reads them before iterating."}
               </p>
+              {repoSourceError && (
+                <p className="tiny" role="status">
+                  {lang === "zh" ? "仓库清单加载失败：" : "Repo list failed: "}
+                  {repoSourceError}
+                  <button
+                    type="button"
+                    className="btn linkish"
+                    onClick={() => setRepoLoadTick((v) => v + 1)}
+                  >
+                    {lang === "zh" ? "重试" : "Retry"}
+                  </button>
+                </p>
+              )}
               {repoSlots().map((slot) => (
                 <div key={slot} className="briefing-repo-slot">
                   <span className="loadout-label">{slot}</span>
@@ -617,6 +650,11 @@ export function MissionBriefingChat({
                         placeholder={lang === "zh" ? "分支（必填）" : "branch (required)"}
                         onChange={(e) => updateRepoRow(slot, i, { branch: e.target.value })}
                       />
+                      {row.repo_id && credentialLabel(selectedRepoInfo(row)?.credential_id) && (
+                        <span className="tiny briefing-repo-cred">
+                          {credentialLabel(selectedRepoInfo(row)?.credential_id)}
+                        </span>
+                      )}
                       <button
                         type="button"
                         className="btn linkish"
