@@ -107,6 +107,7 @@ const ZH = {
   repoCred: "绑定凭据",
   repoCredRequired: "请选择绑定凭据",
   repoNoCred: "该主机还没有可用凭据，请先添加",
+  credHostMismatch: "主机不一致",
   repoEdit: "编辑",
   repoUpdated: "仓库已更新",
   repoUnbound: "未绑定",
@@ -215,6 +216,7 @@ const EN: typeof ZH = {
   repoCred: "Credential",
   repoCredRequired: "Pick a credential",
   repoNoCred: "No credential for this host yet — add one first",
+  credHostMismatch: "host mismatch",
   repoEdit: "Edit",
   repoUpdated: "Repo updated",
   repoUnbound: "Unbound",
@@ -580,23 +582,30 @@ export function GitSettingsPanel({ token, lang, isAdmin, onCountChange }: Props)
     [wsRepos],
   );
 
-  /** 私有仓库可选凭据：只列 host+scheme 与仓库 URL 一致的（后端还会再校验一次） */
-  /** 工作区仓库只能绑工作区凭据，同样按 host+scheme 过滤 */
-  const wsRepoCredOptions = useMemo(() => {
-    const host = hostOf(wsRepoForm.url);
-    const scheme = schemeOf(wsRepoForm.url);
-    if (!host) return wsCreds;
-    return wsCreds.filter((c) => c.host === host && c.scheme === scheme && isActive(c));
-  }, [wsRepoForm.url, wsCreds]);
+  /** 列出全部凭据并标注是否匹配；不匹配的置灰，避免「凭空消失」 */
+  const withMatch = useCallback(
+    (list: GitCredentialInfo[], url: string) => {
+      const host = hostOf(url);
+      const scheme = schemeOf(url);
+      return list
+        .filter(isActive)
+        .map((cred) => ({
+          cred,
+          match: Boolean(host) && cred.host === host && cred.scheme === scheme,
+        }));
+    },
+    [],
+  );
 
-  const repoCredOptions = useMemo(() => {
-    const host = hostOf(repoForm.url);
-    const scheme = schemeOf(repoForm.url);
-    if (!host) return [] as GitCredentialInfo[];
-    return [...wsCreds, ...myCreds].filter(
-      (c) => c.host === host && c.scheme === scheme && isActive(c),
-    );
-  }, [repoForm.url, wsCreds, myCreds]);
+  const wsRepoCredOptions = useMemo(
+    () => withMatch(wsCreds, wsRepoForm.url),
+    [withMatch, wsCreds, wsRepoForm.url],
+  );
+
+  const repoCredOptions = useMemo(
+    () => withMatch([...wsCreds, ...myCreds], repoForm.url),
+    [withMatch, wsCreds, myCreds, repoForm.url],
+  );
 
   /** 仓库 → 凭据匹配结果；工作区与自定义分开解析，不做优先级回退 */
   const matchRows = useMemo(() => {
@@ -833,13 +842,28 @@ export function GitSettingsPanel({ token, lang, isAdmin, onCountChange }: Props)
                     }
                   >
                     <option value="">—</option>
-                    {repoCredOptions.map((cred) => (
-                      <option key={cred.id} value={cred.id}>
-                        {cred.label} · {cred.scope === "workspace" ? "工作区" : "个人"}
-                      </option>
-                    ))}
+                    <optgroup label={lang === "zh" ? "工作区凭据" : "Workspace credentials"}>
+                      {repoCredOptions
+                        .filter((o) => o.cred.scope === "workspace")
+                        .map(({ cred, match }) => (
+                          <option key={cred.id} value={cred.id} disabled={!match}>
+                            {cred.label} · {cred.host}
+                            {match ? "" : ` · ${C.credHostMismatch}`}
+                          </option>
+                        ))}
+                    </optgroup>
+                    <optgroup label={lang === "zh" ? "我的凭据" : "My credentials"}>
+                      {repoCredOptions
+                        .filter((o) => o.cred.scope === "user")
+                        .map(({ cred, match }) => (
+                          <option key={cred.id} value={cred.id} disabled={!match}>
+                            {cred.label} · {cred.host}
+                            {match ? "" : ` · ${C.credHostMismatch}`}
+                          </option>
+                        ))}
+                    </optgroup>
                   </select>
-                  {repoForm.url.trim() && !repoCredOptions.length && (
+                  {repoForm.url.trim() && !repoCredOptions.some((o) => o.match) && (
                     <em>{C.repoNoCred}</em>
                   )}
                 </label>
@@ -930,9 +954,10 @@ export function GitSettingsPanel({ token, lang, isAdmin, onCountChange }: Props)
                       }
                     >
                       <option value="">—</option>
-                      {wsRepoCredOptions.map((cred) => (
-                        <option key={cred.id} value={cred.id}>
-                          {cred.label}
+                      {wsRepoCredOptions.map(({ cred, match }) => (
+                        <option key={cred.id} value={cred.id} disabled={!match}>
+                          {cred.label} · {cred.host}
+                          {match ? "" : ` · ${C.credHostMismatch}`}
                         </option>
                       ))}
                     </select>
