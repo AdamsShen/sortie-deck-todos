@@ -114,6 +114,17 @@ def test_resolver_uses_repo_registry_and_current_credential(stores):
     assert got2.credential_id == second.id
 
 
+def test_repos_for_role_aggregates_dev_slots():
+    from sortie_deck.graph import repos_for_role
+
+    a = {"repo_id": "urp_a", "branch": "main"}
+    b = {"repo_id": "urp_b", "branch": "dev"}
+    mapping = {"eng_web": [a], "eng_backend": [b]}
+    assert repos_for_role(mapping, "eng", "eng_implement") == [a, b]
+    assert repos_for_role(mapping, "eng_web", "eng_implement") == [a]
+    assert repos_for_role({"eng": [a]}, "eng", "eng_implement") == [a]
+
+
 def test_validate_by_repo_id_uses_registry_binding(stores, monkeypatch):
     from sortie_deck import git_cred as gc
     from sortie_deck.service import _validate_repo_credentials

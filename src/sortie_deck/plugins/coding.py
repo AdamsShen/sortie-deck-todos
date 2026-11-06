@@ -490,6 +490,16 @@ async def clone_repos(
     磁盘水位防护：可用空间低于 ``TDT_MIN_DISK_FREE_MB`` 时跳过 clone 并在
     prompt/log 中说明，防止极端并发打爆服务器磁盘。
     """
+    # 真实编码阶段只传 actor_user_id，不传 resolver；这里按 repo_id 回查注册表，
+    # 与 publish_repos 保持一致，避免 clone 依赖容器内残留的 ssh/凭据环境。
+    if resolver is None and actor_user_id:
+        try:
+            from sortie_deck.git_cred import resolver_from_settings
+
+            resolver = resolver_from_settings()
+        except Exception:  # noqa: BLE001 — 凭据库不可用时按无凭据方式 clone（公开仓库）
+            logger.warning("git 凭据库不可用，clone 将以无凭据方式执行", exc_info=True)
+
     if not repos:
         # 未绑定仓库：repos/ 约定为统一产出目录（任务终态打包归档到
         # artifacts/code-archive/，见 workspace.archive_repos_snapshot）。

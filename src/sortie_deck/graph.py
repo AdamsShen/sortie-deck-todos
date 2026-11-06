@@ -1002,6 +1002,27 @@ _BUILTIN_ROLE_EXECUTORS: dict[str, str] = {
 }
 
 
+def repos_for_role(
+    role_repos: dict[str, list[dict[str, Any]]], role: str, stage: str = ""
+) -> list[dict[str, Any]]:
+    """取本阶段应 clone 的仓库：精确角色 → 阶段名 → 该角色下所有细分槽位。
+
+    规划官会按 ``eng_web`` / ``eng_backend`` 这类细分槽位绑定仓库，但精简航线
+    只有单个 ``eng`` 阶段；若只按 ``role.value`` 精确匹配，绑定会被静默丢掉。
+    """
+    rows = list(role_repos.get(role) or [])
+    if rows:
+        return rows
+    if stage and role_repos.get(stage):
+        return list(role_repos[stage])
+    return [
+        repo
+        for key, items in role_repos.items()
+        if key.startswith(f"{role}_")
+        for repo in items
+    ]
+
+
 def _role_id(role: str) -> RoleId:
     """Role key → :class:`RoleId`.
 
@@ -1764,6 +1785,7 @@ def build_graph_from_template(
         role_personas = state.get("role_personas") or {}
         role_toolkits = state.get("role_toolkits") or {}
         role_repos_state = state.get("role_repos") or {}
+        stage_repos = repos_for_role(role_repos_state, role.value, stage)
         stage_toolkits = state.get("stage_toolkits") or {}
         toolkit_briefs = state.get("toolkit_briefs") or {}
         persona = role_personas.get(role.value) or load_persona(role.value)
@@ -1958,10 +1980,7 @@ def build_graph_from_template(
             toolkit_ids=toolkit_ids,
             toolkit_brief=toolkit_brief,
             inputs=_mission_inputs(app_cfg, state["initiative_id"]),
-            repos=[
-                RepoConfig.model_validate(r)
-                for r in (role_repos_state.get(role.value) or [])
-            ],
+            repos=[RepoConfig.model_validate(r) for r in stage_repos],
             memory_brief=memory_brief,
             harness=str(state.get("harness") or ""),
             harness_locked=bool(state.get("harness_locked")),

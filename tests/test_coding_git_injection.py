@@ -74,6 +74,36 @@ async def test_clone_uses_env_not_url(tmp_path: Path, monkeypatch):
     assert any("clone exit=0" in line for line in log)
 
 
+async def test_clone_defaults_to_settings_resolver(tmp_path: Path, monkeypatch):
+    """真实编码阶段不传 resolver，clone_repos 必须自己按 actor_user_id 取解析器。"""
+    from sortie_deck import git_cred
+
+    calls: list[tuple[list[str], dict[str, str]]] = []
+
+    async def fake_run(args, cwd, timeout=None, *, extra_env=None):
+        calls.append((list(args), dict(extra_env or {})))
+        if args[:2] == ["git", "clone"]:
+            target = Path(args[-1])
+            (target / ".git").mkdir(parents=True, exist_ok=True)
+            return 0, "", ""
+        if args[:2] == ["git", "rev-parse"]:
+            return 1, "", ""
+        return 0, "", ""
+
+    monkeypatch.setattr(coding, "_run_cmd", fake_run)
+    resolver = FakeResolver()
+    monkeypatch.setattr(git_cred, "resolver_from_settings", lambda cfg=None: resolver)
+    repo = RepoConfig(
+        url=REPO_URL, branch="main", source="workspace", credential_id="crd_1"
+    )
+
+    await coding.clone_repos([repo], tmp_path, "ini_1", actor_user_id="usr_1")
+
+    assert resolver.calls == [(REPO_URL, "usr_1")]
+    _, clone_env = next(c for c in calls if c[0][:2] == ["git", "clone"])
+    assert clone_env.get("SORTIE_GIT_PASSWORD") == SECRET
+
+
 async def test_clone_skips_repo_when_credential_missing(tmp_path: Path, monkeypatch):
     calls: list[list[str]] = []
 
