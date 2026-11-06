@@ -47,6 +47,12 @@ login
 
 ## 5. Key UX contracts
 
+### Settings · read-only visibility of Git credentials
+
+- The "Git credentials" page is open to every authenticated user; workspace credentials and workspace repos (name / URL / default branch / bound credential) are visible to all.
+- Only `admin` sees the add/disable controls for workspace credentials and repos; `member` is read-only. Personal credentials and private repos remain owner-only.
+- `GET /api/git/workspace-repos` and `GET /api/git/workspace-credentials` are `require_user` endpoints returning redacted metadata; write endpoints under `/api/admin/git/*` are gated by `require_admin`.
+
 ### Pipeline confirm (squad draft)
 
 1. Show planner rationale + stage list from `meta.pipeline_specs`

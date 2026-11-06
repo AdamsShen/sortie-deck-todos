@@ -47,6 +47,12 @@ login
 
 ## 5. 关键 UX 契约
 
+### 设置中心 · Git 凭据的只读可见性
+
+- 「Git 凭据」页对所有已登录用户开放；工作区凭据与工作区仓库（名称 / 地址 / 默认分支 / 绑定凭据）全员可查看。
+- 仅 `admin` 能看到工作区凭据与工作区仓库的新增、停用入口；`member` 只读。个人凭据与个人私有仓库仍只有本人可见。
+- 后端 `GET /api/git/workspace-repos`、`GET /api/git/workspace-credentials` 是 `require_user` 的脱敏只读接口；`/api/admin/git/*` 写端点由 `require_admin` 把关。
+
 ### 航线确认（小队草稿）
 
 1. 展示规划官 rationale + `meta.pipeline_specs`

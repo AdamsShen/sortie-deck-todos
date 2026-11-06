@@ -8661,7 +8661,7 @@ tr:hover td {
 .stg-cols{display:grid;grid-template-columns:20rem minmax(0,1fr);gap:1.1rem;margin-top:1.1rem;align-items:start}
 .stg-col-head{display:flex;align-items:baseline;gap:.45rem;padding-bottom:.5rem;border-bottom:1px solid var(--line-hot)}
 .stg-col-head h3{font-size:.8rem;margin:0}
-.stg-col-head .meta,.stg-col-head .ro{font-family:var(--mono);font-size:.58rem;color:var(--muted)}
+.stg-col-head .meta,.stg-col-head .ro,.stg-sec-head .ro{font-family:var(--mono);font-size:.58rem;color:var(--muted)}
 .stg-col-head .sp{flex:1}
 .stg-sealed{position:relative;margin-top:.6rem;border:1px solid var(--line);border-radius:6px;padding:.8rem;overflow:hidden;background:repeating-linear-gradient(-45deg,transparent 0 7px,color-mix(in srgb,var(--line) 45%,transparent) 7px 8px),var(--panel)}
 .stg-stamp{position:absolute;right:.5rem;top:.45rem;font-family:var(--mono);font-size:.48rem;letter-spacing:.12em;color:var(--muted);border:1px solid var(--line-hot);border-radius:3px;padding:.1rem .3rem;background:var(--panel)}
@@ -8711,15 +8711,6 @@ tr:hover td {
 .stg-repo-row .cred{font-size:.62rem;color:var(--signal)}
 .stg-repo-row .cred.miss{color:#b7791f}
 .stg-repo-row .danger{font-size:.62rem;color:var(--muted)}
-.stg-table{width:100%;border-collapse:collapse;margin-top:.6rem;font-size:.68rem}
-.stg-table th{text-align:left;font-family:var(--mono);font-size:.52rem;letter-spacing:.1em;color:var(--muted);font-weight:500;padding:.4rem .5rem;border-bottom:1px solid var(--line-hot)}
-.stg-table td{padding:.55rem .5rem;border-bottom:1px solid var(--line);vertical-align:middle}
-.stg-table .repo{font-weight:600}
-.stg-table .src{font-family:var(--mono);font-size:.48rem;border:1px solid var(--line);border-radius:3px;padding:.05rem .22rem;color:var(--muted);margin-left:.35rem}
-.stg-table td.mono{font-family:var(--mono);font-size:.6rem;color:var(--muted)}
-.stg-table .state{display:inline-flex;align-items:center;gap:.3rem;font-family:var(--mono);font-size:.56rem}
-.stg-table .state.ok{color:var(--signal)}
-.stg-table .state.miss{color:#b7791f}
 .stg-modal{position:fixed;inset:0;z-index:95;display:flex;align-items:center;justify-content:center;padding:1.5rem;background:rgba(12,20,30,.45)}
 .stg-sheet{width:min(34rem,100%);background:var(--panel);border:1px solid var(--line-hot);border-radius:9px;box-shadow:0 28px 70px -30px rgba(10,20,35,.55);overflow:hidden}
 .stg-sheet-head{display:flex;align-items:flex-start;gap:.7rem;padding:1rem 1.2rem 0}

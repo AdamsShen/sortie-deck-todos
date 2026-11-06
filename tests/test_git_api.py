@@ -69,6 +69,41 @@ def test_member_cannot_pass_admin_gate():
     assert exc.value.status_code == 403
 
 
+def _route_gated_by_admin(path: str, method: str) -> bool:
+    """检查路由一级依赖是否挂了 require_admin，防止工作区仓库写入口对成员敞开。"""
+    from fastapi.routing import APIRoute
+
+    for route in app_mod.app.routes:
+        if isinstance(route, APIRoute) and route.path == path and method in route.methods:
+            return any(d.call is app_mod.require_admin for d in route.dependant.dependencies)
+    return False
+
+
+async def test_member_readonly_workspace_repos(git_env):
+    """普通成员能查看工作区仓库与凭据元信息，写入口仍由 admin 门禁守住。"""
+    created = await app_mod.admin_create_workspace_repo(
+        _workspace_body(), admin=_user("usr_admin", "admin")
+    )
+    member = _user("usr_member")
+
+    repos = await app_mod.list_workspace_repos(member)
+    assert [r["id"] for r in repos] == [created["id"]]
+    assert repos[0]["url"].endswith("platform-server.git")
+    assert repos[0]["default_branch"] == "main"
+    assert SECRET not in json.dumps(repos, ensure_ascii=False)
+
+    creds = await app_mod.list_workspace_credentials(member)
+    assert len(creds) == 1
+    assert SECRET not in json.dumps(creds, ensure_ascii=False)
+
+    for path, method in (
+        ("/api/admin/git/workspace-repos", "POST"),
+        ("/api/admin/git/workspace-repos/{repo_id}", "PATCH"),
+        ("/api/admin/git/workspace-repos/{repo_id}", "DELETE"),
+    ):
+        assert _route_gated_by_admin(path, method)
+
+
 async def test_workspace_credential_overwrite(git_env):
     created = await app_mod.admin_create_workspace_repo(
         _workspace_body(), admin=_user("usr_admin", "admin")

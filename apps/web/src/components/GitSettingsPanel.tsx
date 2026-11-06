@@ -34,8 +34,6 @@ const ZH = {
   wsRepoRemoved: "工作区仓库已停用",
   wsRepoDeleteConfirm: (name: string) =>
     `停用「${name}」？\n\n任务下拉里不再出现，历史任务引用仍可解析。`,
-  matchingEmpty:
-    "还没有仓库。登记工作区仓库或个人私有仓库后，这里会显示执行时实际使用的凭据；缺凭据会被标记出来。",
   wsTitle: "工作区凭据",
   wsMeta: "ADMIN MANAGED",
   wsReadonly: "只读",
@@ -51,17 +49,6 @@ const ZH = {
   myRepos: "我的私有仓库",
   myReposNote: "登记后会出现在任务仓库选择器的下拉里；执行时使用每条仓库绑定的凭据。",
   addRepo: "登记仓库",
-  matching: "仓库匹配预览",
-  matchingNote: "执行前按这张表解析凭据；匹配不到会在绑定阶段直接拒绝。",
-  colRepo: "仓库",
-  colSource: "来源",
-  colHost: "主机",
-  colCred: "将使用的凭据",
-  colState: "状态",
-  sourceWs: "工作区",
-  sourceCustom: "自定义",
-  stateOk: "已匹配",
-  stateMiss: "缺少凭据",
   emptyMine: "还没有个人凭据。自定义私有仓库会因匹配不到凭据而无法拉取。",
   emptyRepos: "还没有登记私有仓库。",
   addTitle: "添加我的凭据",
@@ -143,8 +130,6 @@ const EN: typeof ZH = {
   wsRepoRemoved: "Workspace repo disabled",
   wsRepoDeleteConfirm: (name: string) =>
     `Disable "${name}"?\n\nIt disappears from the mission picker; existing missions still resolve.`,
-  matchingEmpty:
-    "No repos yet. Once a workspace or personal repo is registered, this table shows which credential a run will use; missing credentials are flagged.",
   wsTitle: "Workspace credentials",
   wsMeta: "ADMIN MANAGED",
   wsReadonly: "Read only",
@@ -160,17 +145,6 @@ const EN: typeof ZH = {
   myRepos: "My private repos",
   myReposNote: "Registered repos appear in the mission picker and use the credential bound to each repo at run time.",
   addRepo: "Register repo",
-  matching: "Repo → credential preview",
-  matchingNote: "Credentials are resolved from this table before a run; a miss is rejected at bind time.",
-  colRepo: "Repo",
-  colSource: "Source",
-  colHost: "Host",
-  colCred: "Credential",
-  colState: "State",
-  sourceWs: "workspace",
-  sourceCustom: "custom",
-  stateOk: "Matched",
-  stateMiss: "Missing credential",
   emptyMine: "No personal credentials yet. Custom private repos will fail to clone.",
   emptyRepos: "No private repos registered yet.",
   addTitle: "Add my credential",
@@ -607,28 +581,17 @@ export function GitSettingsPanel({ token, lang, isAdmin, onCountChange }: Props)
     [withMatch, wsCreds, myCreds, repoForm.url],
   );
 
-  /** 仓库 → 凭据匹配结果；工作区与自定义分开解析，不做优先级回退 */
+  /** 登记仓库时已强校验凭据与主机；这里只在凭据停用/过期后兜底统计失配数，供顶部读数使用 */
   const matchRows = useMemo(() => {
     const allCreds = [...wsCreds, ...myCreds];
-    /** 按仓库绑定的 credential_id 计算，且必须 host/scheme 一致（与执行期同规则） */
-    const build = (repo: WorkspaceRepoInfo | UserRepoInfo, source: "workspace" | "custom") => {
+    /** 与执行期同规则：按绑定的 credential_id 解析，且 host/scheme 必须一致 */
+    const build = (repo: WorkspaceRepoInfo | UserRepoInfo) => {
       const host = hostOf(repo.url);
       const scheme = schemeOf(repo.url);
       const cred = allCreds.find((c) => c.id === repo.credential_id && isActive(c));
-      const ok = Boolean(cred && cred.host === host && cred.scheme === scheme);
-      return {
-        key: `${source}-${repo.id}`,
-        name: repo.name,
-        source,
-        host,
-        credential: cred?.label || "",
-        ok,
-      };
+      return { ok: Boolean(cred && cred.host === host && cred.scheme === scheme) };
     };
-    return [
-      ...wsRepos.map((repo) => build(repo, "workspace" as const)),
-      ...myRepos.map((repo) => build(repo, "custom" as const)),
-    ];
+    return [...wsRepos, ...myRepos].map(build);
   }, [wsRepos, myRepos, wsCreds, myCreds]);
 
   const attention =
@@ -900,14 +863,16 @@ export function GitSettingsPanel({ token, lang, isAdmin, onCountChange }: Props)
             </div>
           </section>
 
-          {isAdmin && (
-            <section className="stg-sec">
-              <div className="stg-sec-head">
-                <div>
-                  <h3>{C.wsReposTitle}</h3>
-                  <p>{C.wsReposNote}</p>
-                </div>
-                <span className="sp" />
+          {/* 工作区仓库全员可查看；成员只读，写入口仅管理员可见（后端另有 require_admin 兜底） */}
+          <section className="stg-sec">
+            <div className="stg-sec-head">
+              <div>
+                <h3>{C.wsReposTitle}</h3>
+                <p>{C.wsReposNote}</p>
+              </div>
+              <span className="sp" />
+              <span className="ro">{isAdmin ? C.wsAdminWritable : C.wsReadonly}</span>
+              {isAdmin && (
                 <button
                   type="button"
                   className="stg-quiet"
@@ -915,71 +880,73 @@ export function GitSettingsPanel({ token, lang, isAdmin, onCountChange }: Props)
                 >
                   {wsRepoOpen ? C.cancel : `＋ ${C.addWsRepo}`}
                 </button>
-              </div>
-
-              {wsRepoOpen && (
-                <form className="stg-repo-form ws-repo-form" onSubmit={addWsRepo}>
-                  <label>
-                    <span>{C.repoName}</span>
-                    <input
-                      value={wsRepoForm.name}
-                      placeholder={C.repoNamePh}
-                      onChange={(e) => setWsRepoForm({ ...wsRepoForm, name: e.target.value })}
-                    />
-                  </label>
-                  <label className="wide">
-                    <span>{C.repoUrl}</span>
-                    <input
-                      value={wsRepoForm.url}
-                      placeholder={C.repoUrlPh}
-                      onChange={(e) => setWsRepoForm({ ...wsRepoForm, url: e.target.value })}
-                    />
-                  </label>
-                  <label>
-                    <span>{C.repoBranch}</span>
-                    <input
-                      value={wsRepoForm.default_branch}
-                      placeholder={C.repoBranchPh}
-                      onChange={(e) =>
-                        setWsRepoForm({ ...wsRepoForm, default_branch: e.target.value })
-                      }
-                    />
-                  </label>
-                  <label>
-                    <span>{C.wsRepoCred}</span>
-                    <select
-                      value={wsRepoForm.credential_id}
-                      onChange={(e) =>
-                        setWsRepoForm({ ...wsRepoForm, credential_id: e.target.value })
-                      }
-                    >
-                      <option value="">—</option>
-                      {wsRepoCredOptions.map(({ cred, match }) => (
-                        <option key={cred.id} value={cred.id} disabled={!match}>
-                          {cred.label} · {cred.host}
-                          {match ? "" : ` · ${C.credHostMismatch}`}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <button type="submit" className="stg-primary">
-                    {C.addWsRepo}
-                  </button>
-                  {wsRepoError && <p className="stg-error inline">{wsRepoError}</p>}
-                </form>
               )}
+            </div>
 
-              <div className="stg-repo-list">
-                {wsRepos.map((repo) => {
-                  const cred = wsCreds.find((c) => c.id === repo.credential_id);
-                  return (
-                    <div key={repo.id} className="stg-repo-row">
-                      <div className="nm">{repo.name}</div>
-                      <div className="url">{repo.url}</div>
-                      <div className="branch">{repo.default_branch || "—"}</div>
-                      <div className={`cred${cred ? "" : " miss"}`}>
-                        {cred?.label || "—"}
-                      </div>
+            {isAdmin && wsRepoOpen && (
+              <form className="stg-repo-form ws-repo-form" onSubmit={addWsRepo}>
+                <label>
+                  <span>{C.repoName}</span>
+                  <input
+                    value={wsRepoForm.name}
+                    placeholder={C.repoNamePh}
+                    onChange={(e) => setWsRepoForm({ ...wsRepoForm, name: e.target.value })}
+                  />
+                </label>
+                <label className="wide">
+                  <span>{C.repoUrl}</span>
+                  <input
+                    value={wsRepoForm.url}
+                    placeholder={C.repoUrlPh}
+                    onChange={(e) => setWsRepoForm({ ...wsRepoForm, url: e.target.value })}
+                  />
+                </label>
+                <label>
+                  <span>{C.repoBranch}</span>
+                  <input
+                    value={wsRepoForm.default_branch}
+                    placeholder={C.repoBranchPh}
+                    onChange={(e) =>
+                      setWsRepoForm({ ...wsRepoForm, default_branch: e.target.value })
+                    }
+                  />
+                </label>
+                <label>
+                  <span>{C.wsRepoCred}</span>
+                  <select
+                    value={wsRepoForm.credential_id}
+                    onChange={(e) =>
+                      setWsRepoForm({ ...wsRepoForm, credential_id: e.target.value })
+                    }
+                  >
+                    <option value="">—</option>
+                    {wsRepoCredOptions.map(({ cred, match }) => (
+                      <option key={cred.id} value={cred.id} disabled={!match}>
+                        {cred.label} · {cred.host}
+                        {match ? "" : ` · ${C.credHostMismatch}`}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button type="submit" className="stg-primary">
+                  {C.addWsRepo}
+                </button>
+                {wsRepoError && <p className="stg-error inline">{wsRepoError}</p>}
+              </form>
+            )}
+
+            <div className="stg-repo-list">
+              {wsRepos.map((repo) => {
+                const cred = wsCreds.find((c) => c.id === repo.credential_id);
+                return (
+                  <div key={repo.id} className="stg-repo-row">
+                    <div className="nm">{repo.name}</div>
+                    <div className="url">{repo.url}</div>
+                    <div className="branch">{repo.default_branch || "—"}</div>
+                    <div className={`cred${cred ? "" : " miss"}`}>
+                      {cred?.label || "—"}
+                    </div>
+                    {isAdmin && (
                       <button
                         type="button"
                         className="danger"
@@ -987,62 +954,14 @@ export function GitSettingsPanel({ token, lang, isAdmin, onCountChange }: Props)
                       >
                         {C.wsCredDelete}
                       </button>
-                    </div>
-                  );
-                })}
-                {!wsRepos.length && <div className="stg-empty">{C.wsReposNote}</div>}
-              </div>
-            </section>
-          )}
-
-          <section className="stg-sec">
-            <div className="stg-sec-head">
-              <div>
-                <h3>{C.matching}</h3>
-                <p>{C.matchingNote}</p>
-              </div>
+                    )}
+                  </div>
+                );
+              })}
+              {!wsRepos.length && <div className="stg-empty">{C.wsReposNote}</div>}
             </div>
-            <table className="stg-table">
-              <thead>
-                <tr>
-                  <th>{C.colRepo}</th>
-                  <th>{C.colSource}</th>
-                  <th>{C.colHost}</th>
-                  <th>{C.colCred}</th>
-                  <th>{C.colState}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {matchRows.map((row) => (
-                  <tr key={row.key}>
-                    <td>
-                      <span className="repo">{row.name}</span>
-                      <span className="src">{row.source}</span>
-                    </td>
-                    <td className="mono">{row.source === "workspace" ? C.sourceWs : C.sourceCustom}</td>
-                    <td className="mono">{row.host || "—"}</td>
-                    <td className="mono">{row.credential || "—"}</td>
-                    <td>
-                      <span className={`state ${row.ok ? "ok" : "miss"}`}>
-                        <span className={`dot${row.ok ? "" : " stale"}`} />
-                        {row.ok ? C.stateOk : C.stateMiss}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-                {!matchRows.length && (
-                  <tr>
-                    <td
-                      colSpan={5}
-                      style={{ padding: "18px 12px", color: "var(--muted)", fontSize: 12 }}
-                    >
-                      {C.matchingEmpty}
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
           </section>
+
         </>
       )}
 

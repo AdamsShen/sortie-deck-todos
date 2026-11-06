@@ -65,7 +65,7 @@ const ZH = {
   deleteAccount: "删除账号",
   deleteHint: "历史消息署名会保留为「已注销用户」，不可恢复",
   remove: "删除",
-  footer: "凭据密钥只写不读；管理员可直接在「Git 凭据」页维护工作区凭据与仓库。",
+  footer: "凭据密钥只写不读；管理员在「Git 凭据」页维护工作区凭据与仓库，成员可只读查看配置。",
 };
 
 const EN: typeof ZH = {
@@ -119,7 +119,7 @@ const EN: typeof ZH = {
   deleteAccount: "Delete account",
   deleteHint: "Message authorship becomes “deleted user”; this cannot be undone",
   remove: "Delete",
-  footer: "Secrets are write-only; admins manage workspace credentials and repos on this page.",
+  footer: "Secrets are write-only; admins manage workspace credentials and repos here, while members have read-only access.",
 };
 
 type Tab = "git" | "keys" | "account" | "appearance" | "data" | "insights";
