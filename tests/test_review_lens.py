@@ -18,6 +18,7 @@ from sortie_deck.review_lens import (
     build_scope,
     build_skipped_log,
     build_static_review_section,
+    clip_diff,
     compute_verdict,
     parse_diff_stats,
     parse_review_reply,
@@ -515,3 +516,95 @@ def test_executor_skips_review_for_mock_harness(tmp_path, monkeypatch):
     assert result.meta["review"]["statuses"]["correctness"] == "skipped"
     # 没真跑的阶段不产出 review.md：日志可以说明「没审」，产物不能假装有报告
     assert "review.md" not in result.artifacts
+
+
+# --- 5. diff 裁剪 ---------------------------------------------------------------
+
+
+def _diff_block(path: str, lines: list[str]) -> str:
+    body = "\n".join(lines)
+    return (
+        f"diff --git a/{path} b/{path}\n"
+        f"--- a/{path}\n"
+        f"+++ b/{path}\n"
+        f"@@ -1,1 +1,1 @@\n{body}\n"
+    )
+
+
+def test_clip_diff_keeps_small_blocks():
+    """预算内的块原样保留，不能改写 diff 正文。"""
+    diff = _diff_block("src/a.py", ["+def foo():", "+    return 1"])
+    out = clip_diff(diff, max_chars=10_000, max_file_lines=100)
+
+    assert "+def foo():" in out
+    assert "+    return 1" in out
+    assert "已裁剪" not in out
+
+
+def test_clip_diff_summarizes_oversized_file():
+    """单文件超行数上限：保留文件头 + 增删行数 + 符号清单，正文省略。"""
+    lines = [f"+line{i} = {i}" for i in range(80)] + ["+def big_entry():"]
+    diff = _diff_block("src/big.py", lines)
+
+    out = clip_diff(diff, max_chars=100_000, max_file_lines=10)
+
+    assert "diff --git a/src/big.py" in out
+    assert "已省略正文" in out
+    assert "line40" not in out
+    assert "big_entry" in out
+    assert "已裁剪" in out
+
+
+def test_clip_diff_drops_late_blocks_over_budget():
+    """总量超预算后，后续块降级为文件头，保证前面的正文不被挤掉。"""
+    first = _diff_block("src/a.py", ["+a = 1"])
+    second = _diff_block("src/b.py", ["+b = 2"])
+
+    out = clip_diff(first + second, max_chars=len(first) + 10, max_file_lines=100)
+
+    assert "src/a.py" in out
+    assert "b = 2" not in out
+    assert "# [diff 已裁剪" in out
+
+
+def test_clip_diff_summarizes_oversized_chars():
+    """单文件字符超限同样降级（对应 TDT_SHADOW_GIT_MAX_FILE_BYTES）。"""
+    diff = _diff_block("src/huge.py", ["+x = '" + "a" * 200 + "'"])
+
+    out = clip_diff(diff, max_chars=100_000, max_file_lines=1_000, max_file_chars=50)
+
+    assert "单文件超过 50 字符" in out
+    assert "aaaa" not in out
+
+
+def test_clip_diff_empty_input():
+    assert clip_diff("") == ""
+    assert clip_diff("   \n") == ""
+
+
+# --- 6. 自审禁用工具 ------------------------------------------------------------
+
+
+def test_review_disallowed_tools_parsed(monkeypatch):
+    """配置按逗号切分并去空白；空串是回滚开关（不禁用）。"""
+    from sortie_deck.harness_providers.executor import _review_disallowed_tools
+    from sortie_deck.settings import settings
+
+    monkeypatch.setattr(settings, "review_disallowed_tools", "Read, Bash ,,")
+    assert _review_disallowed_tools() == ["Read", "Bash"]
+
+    monkeypatch.setattr(settings, "review_disallowed_tools", "")
+    assert _review_disallowed_tools() == []
+
+
+def test_merge_disallowed_keeps_stage_pack_intact():
+    """并入自审禁用项时去重，且不能改主体回合的 pack。"""
+    from sortie_deck.harness_providers.executor import _merge_disallowed
+
+    pack = {"disallowed_tools": ["Bash"], "mcp_servers": {}}
+    merged = _merge_disallowed(pack, ["Bash", "Read"])
+
+    assert merged["disallowed_tools"] == ["Bash", "Read"]
+    assert merged["mcp_servers"] == {}
+    assert pack["disallowed_tools"] == ["Bash"]
+    assert _merge_disallowed(pack, []) is pack

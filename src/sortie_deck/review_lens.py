@@ -270,6 +270,9 @@ class ReviewScope(BaseModel):
     checklist_items: list[str] = Field(default_factory=list)
     # 改动面来源：diff = 真实 git 差异；workspace = 无差异时按现存文件推断
     source: str = "diff"
+    # 供 prompt 直接消费的 diff 节选（已按预算裁剪）；统计仍用完整 diff。
+    # 为空表示本次没有可给的正文（无改动 / 影子仓不可用 / 旧路径），prompt 会退回「自行 Read」。
+    diff_excerpt: str = ""
 
     def render(self) -> str:
         lines = [f"- 阶段：`{self.stage}`（角色 `{self.role}`）"]
@@ -294,6 +297,12 @@ class ReviewScope(BaseModel):
         if self.checklist_items:
             lines.append("- 实现清单：")
             lines.extend(f"  {item}" for item in self.checklist_items[:20])
+        if self.diff_excerpt:
+            # 正文直接给到 prompt：没有这段，模型只能靠逐个 Read 了解改动
+            lines.append("- 本阶段改动（unified diff，已按预算裁剪）：")
+            lines.append("```diff")
+            lines.append(self.diff_excerpt)
+            lines.append("```")
         return "\n".join(lines)
 
 
@@ -403,6 +412,105 @@ def parse_diff_stats(text: str) -> tuple[list[str], int, int]:
     return list(dict.fromkeys(files))[:200], added, removed
 
 
+# 从新增行里抽符号名，用于「大文件被裁剪」时给模型一个索引
+_DIFF_SYMBOL_RE = re.compile(
+    r"^\+\s*(?:async\s+def|def|class|function|"
+    r"export\s+(?:default\s+)?(?:async\s+)?(?:function|class|const)|const)\s+([A-Za-z_$][\w$]*)"
+)
+
+
+def _split_diff_blocks(diff: str) -> tuple[str, list[list[str]]]:
+    """按 ``diff --git`` 切块，返回 (preamble, blocks)。"""
+    preamble: list[str] = []
+    blocks: list[list[str]] = []
+    for line in (diff or "").splitlines():
+        if line.startswith("diff --git "):
+            blocks.append([line])
+        elif blocks:
+            blocks[-1].append(line)
+        else:
+            preamble.append(line)
+    return "\n".join(preamble), blocks
+
+
+def _block_symbols(block: list[str], limit: int = 12) -> list[str]:
+    names: list[str] = []
+    for line in block:
+        matched = _DIFF_SYMBOL_RE.match(line)
+        if matched and matched.group(1) not in names:
+            names.append(matched.group(1))
+        if len(names) >= limit:
+            break
+    return names
+
+
+def _summarize_block(block: list[str], *, reason: str) -> str:
+    """把超预算的单文件块压成「文件头 + 增删行数 + 符号清单」。"""
+    added = sum(1 for line in block if line.startswith("+") and not line.startswith("+++"))
+    removed = sum(1 for line in block if line.startswith("-") and not line.startswith("---"))
+    out = [block[0], f"# {reason}：+{added}/-{removed} 行"]
+    symbols = _block_symbols(block)
+    if symbols:
+        out.append("# 符号：" + ", ".join(symbols))
+    return "\n".join(out)
+
+
+def clip_diff(
+    diff: str,
+    *,
+    max_chars: int = 60_000,
+    max_file_lines: int = 2_000,
+    max_file_chars: int = 1_048_576,
+) -> str:
+    """把 unified diff 裁到 prompt 预算内（``diff.patch`` 产物不走这里）。
+
+    为什么需要：24 个文件从 0 开发的 diff 就是全部文件内容，直接塞 prompt 会
+    挤掉审查指令；而完全不塞又退回「模型逐个 Read」。按块裁剪能在保留文件面
+    的同时给出可读的正文。
+
+    规则：
+    1. 单块超过 ``max_file_lines`` 行或 ``max_file_chars`` 字符 → 降级为
+       文件头 + 增删行数 + 符号清单；
+    2. 累计字符超过 ``max_chars`` → 后续块同样降级；
+    3. 降级后仍超预算 → 只保留文件头。
+    """
+    body = diff or ""
+    if not body.strip():
+        return ""
+    preamble, blocks = _split_diff_blocks(body)
+    if not blocks:
+        return body[:max_chars]
+
+    out: list[str] = [preamble] if preamble.strip() else []
+    used = len(preamble)
+    clipped = False
+    for block in blocks:
+        text = "\n".join(block)
+        over_file_chars = len(text) > max_file_chars
+        too_long = len(block) > max_file_lines or over_file_chars
+        over_budget = used + len(text) > max_chars
+        if not too_long and not over_budget:
+            out.append(text)
+            used += len(text)
+            continue
+        clipped = True
+        if over_file_chars and len(block) <= max_file_lines:
+            reason = f"单文件超过 {max_file_chars} 字符，已省略正文"
+        elif len(block) > max_file_lines:
+            reason = f"单文件超过 {max_file_lines} 行，已省略正文"
+        else:
+            reason = "超出 diff 总量预算，已省略正文"
+        summary = _summarize_block(block, reason=reason)
+        if used + len(summary) > max_chars:
+            summary = block[0]
+        out.append(summary)
+        used += len(summary)
+    result = "\n".join(part for part in out if part)
+    if clipped:
+        result += f"\n# [diff 已裁剪：原始 {len(body)} 字符]"
+    return result
+
+
 def _checklist_items(text: str) -> list[str]:
     """抽取 `checklist.md` 里的实现项（`- [ ]` / `- [x]`）。"""
     items = []
@@ -460,6 +568,7 @@ def build_scope(
     checklist_text: str = "",
     *,
     workspace: Path | None = None,
+    diff_excerpt: str = "",
 ) -> ReviewScope:
     """组装审查范围：git 改动 + 本阶段契约文件 + 上游产物 + 实现清单。
 
@@ -486,6 +595,7 @@ def build_scope(
         upstream_files=sorted(ctx.upstream_artifacts),
         checklist_items=_checklist_items(checklist_text),
         source=source,
+        diff_excerpt=diff_excerpt,
     )
 
 
@@ -570,6 +680,7 @@ def build_lens_prompt(
     total: int,
     scope: ReviewScope,
     previous: list[LensRun],
+    disallowed: list[str] | None = None,
 ) -> str:
     """单轮审查提示词：范围 + 视角 + 输出协议。
 
@@ -580,6 +691,19 @@ def build_lens_prompt(
         "发现问题就地在代码里修复，修复后继续检查；确实无法修复的标 blocking。"
         if lens.fix_allowed
         else "本轮只记录缺口，禁止修改任何文件（包括测试文件）。"
+    )
+    # 有 diff 正文时明令禁止逐个 Read：这是 24 文件场景下 16 分钟空转的直接原因
+    read_rule = (
+        "- 改动已在上面给出，默认不要逐个 Read 文件；仅在需要调用链上下文时读取，最多 3 次。\n"
+        if scope.diff_excerpt
+        else "- 需要看细节时用 Read 打开上面的文件路径，不要凭文件名猜内容。\n"
+    )
+    # 禁用说明必须写进规则区：追加到 prompt 末尾会盖掉后面的 ```review 输出协议
+    banned_rule = (
+        f"- 本轮不可用工具：{', '.join(disallowed)}（已禁用，不要尝试调用）；"
+        "需要行号时以 diff 的 hunk 头为准。\n"
+        if disallowed
+        else ""
     )
     done = "、".join(f"{run.title}={run.status.value}" for run in previous)
     history = f"\n前面几轮结论（不要重复审这些角度）：{done}\n" if done else ""
@@ -592,8 +716,9 @@ def build_lens_prompt(
         f"### 本轮视角\n{lens.instruction}\n\n"
         "### 规则\n"
         f"- {rule}\n"
+        f"{banned_rule}"
         "- 只审本轮视角，不要罗列其他视角的结论。\n"
-        "- 需要看细节时用 Read 打开上面的文件路径，不要凭文件名猜内容。\n"
+        f"{read_rule}"
         "- 不要输出整份 diff，不要复述需求。\n"
         "- 回复结尾必须输出**一个** ```review 围栏块（JSON，不加注释）：\n"
         "```review\n"
@@ -700,6 +825,7 @@ async def run_review_lenses(
     on_progress: ProgressFn | None = None,
     circuit_breaker: bool = True,
     complexity: dict[str, Any] | None = None,
+    disallowed_tools: list[str] | None = None,
 ) -> ReviewLog:
     """在同一会话上依次跑 N 轮审查，返回汇总日志。
 
@@ -756,7 +882,7 @@ async def run_review_lenses(
             )
             continue
 
-        prompt = build_lens_prompt(lens, index, len(lenses), scope, runs)
+        prompt = build_lens_prompt(lens, index, len(lenses), scope, runs, disallowed_tools or [])
         run = LensRun(
             lens=lens.name,
             title=lens.title,

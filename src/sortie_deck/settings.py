@@ -219,6 +219,21 @@ class Settings(BaseSettings):
     review_rounds_simple: int = 0
     review_rounds_standard: int = 3
     review_rounds_complex: int = 5
+    # --- 影子仓库：无 git 任务的阶段改动采集 -------------------------------------
+    # 未绑定仓库的任务把代码写在 workspace/repos/ 下，项目本身没有 git，
+    # 自审只能拿到文件清单 -> 模型逐个 Read。开启后由 shadow_git 在 mission 根
+    # 维护 .shadow.git（独立 GIT_DIR，不污染项目），阶段基线 + 末端采集真实 diff。
+    shadow_git_enabled: bool = True
+    # 超过该字节数的文件不整体进 prompt（降级为符号清单），避免大文件撑爆预算
+    shadow_git_max_file_bytes: int = 1_048_576
+    # 自审 prompt 内 diff 的总字符上限与单文件行数上限；diff.patch 产物不受影响
+    review_diff_max_chars: int = 60_000
+    review_diff_max_file_lines: int = 2_000
+    # 自审轮禁用的工具（逗号分隔）。diff 已随 prompt 给出，模型仍逐文件 Read 是
+    # 主要耗时源（2026-11-06 实测同一镜头：允许 Read 100.4s，禁用后 22.9s）。
+    # 默认只禁只读检索类，保留 Edit/Write 以便 correctness / boundaries 就地修。
+    # 留空 = 不禁用（回滚开关）。
+    review_disallowed_tools: str = "Read,Bash,Grep,Glob"
     # Stage timeout for coding CLI (seconds)
     coding_timeout_seconds: float = 900.0
     # When true, coding executors list/call MCP tools from toolkit bindings

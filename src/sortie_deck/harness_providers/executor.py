@@ -771,6 +771,22 @@ async def _send_turn(
     return await provider.send(session, prompt, **kwargs)
 
 
+def _review_disallowed_tools() -> list[str]:
+    """自审轮要禁用的工具（逗号分隔）；空串表示不禁用。"""
+    from sortie_deck.settings import settings
+
+    raw = str(getattr(settings, "review_disallowed_tools", "") or "")
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+def _merge_disallowed(pack: dict[str, Any], extra: list[str]) -> dict[str, Any]:
+    """把自审禁用工具并进阶段 pack：去重、不改原 dict（主体回合的 pack 要复用）。"""
+    if not extra:
+        return pack
+    merged = list(dict.fromkeys([*list(pack.get("disallowed_tools") or []), *extra]))
+    return {**pack, "disallowed_tools": merged}
+
+
 def _read_contract_text(path: Path) -> str | None:
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -1425,8 +1441,10 @@ class HarnessStageExecutor:
         from sortie_deck.review_lens import (
             build_scope,
             build_skipped_log,
+            clip_diff,
             run_review_lenses,
         )
+        from sortie_deck.settings import settings
 
         checklist = ""
         local_checklist = workspace / "checklist.md"
@@ -1437,8 +1455,21 @@ class HarnessStageExecutor:
                 logger.warning("实现清单读取失败: %s", local_checklist)
         elif ctx.upstream_artifacts.get("checklist.md"):
             checklist = ctx.upstream_artifacts["checklist.md"]
-        # workspace 用于「无 git 差异」时的改动面兜底（没绑仓库的任务很常见）
-        scope = build_scope(ctx, diff, checklist, workspace=workspace)
+        # workspace 用于「无 git 差异」时的改动面兜底（没绑仓库的任务很常见）。
+        # 统计用完整 diff，prompt 只带裁剪后的正文：否则 24 文件从 0 开发的 diff
+        # 会挤掉审查指令，或被完全省略导致模型退回逐个 Read。
+        scope = build_scope(
+            ctx,
+            diff,
+            checklist,
+            workspace=workspace,
+            diff_excerpt=clip_diff(
+                diff,
+                max_chars=int(getattr(settings, "review_diff_max_chars", 60_000)),
+                max_file_lines=int(getattr(settings, "review_diff_max_file_lines", 2_000)),
+                max_file_chars=int(getattr(settings, "shadow_git_max_file_bytes", 1_048_576)),
+            ),
+        )
         # 编排层规则打分：不额外调模型，判定依据写进 review.json，事后可复盘调阈值
         from sortie_deck.complexity import estimate_from_scope
 
@@ -1552,6 +1583,17 @@ class HarnessStageExecutor:
             {"phase": "review_begin", "total": cfg.rounds, "timeout": cfg.timeout},
         )
 
+        # 自审轮禁掉逐文件 Read/Bash：diff 已在 prompt 里，读文件只会把单轮拖到 100s+
+        review_banned = _review_disallowed_tools()
+        review_pack = _merge_disallowed(pack, review_banned)
+        if review_banned:
+            logger.info(
+                "自审禁用工具: initiative=%s stage=%s tools=%s",
+                ctx.initiative_id,
+                ctx.stage,
+                ",".join(review_banned),
+            )
+
         async def send(prompt: str) -> Any:
             # 续接同一 provider 会话：第 2..N 轮必须看到首轮实现上下文
             return await _send_turn(
@@ -1559,7 +1601,7 @@ class HarnessStageExecutor:
                 session,
                 prompt,
                 cwd=cwd,
-                pack=pack,
+                pack=review_pack,
                 extra_dirs=extra_dirs,
                 on_activity=_activity_callback(ctx),
             )
@@ -1576,6 +1618,7 @@ class HarnessStageExecutor:
             on_progress=lambda payload: _emit_progress(ctx, payload),
             circuit_breaker=bool(getattr(cfg, "circuit_breaker", True)),
             complexity=complexity_meta,
+            disallowed_tools=review_banned,
         )
 
     async def _maybe_consult_subroom(

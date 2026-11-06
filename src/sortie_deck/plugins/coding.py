@@ -392,7 +392,8 @@ async def _git_diff(
 
     三路来源依次拼接：
     1. 沙盒自身是 git 仓库根 → ``git diff``（有增删行）；
-    2. 否则输出文件清单（agent 写了哪些文件，无增删行）；
+    2. 否则走影子仓 ``.shadow.git`` 的 diff（见 ``shadow_git``；覆盖 ``repos/`` 下
+       从 0 写的代码，但跳过已存在 ``.git`` 的 clone），影子仓不可用时回退文件清单；
     3. 绑定了 mission repos → 每个 clone 再单独 ``git diff``，业务代码落在这里。
 
     ``repo_root`` 仅为兼容旧签名保留，不参与任何判定。历史实现用
@@ -414,7 +415,17 @@ async def _git_diff(
         )
         parts.append(out or err or "# (empty diff)\n")
     else:
-        parts.append(_workspace_file_listing(workspace))
+        # 无项目 git：优先用影子仓的真实 diff
+        from sortie_deck.shadow_git import ShadowRepo
+
+        shadow_diff = await ShadowRepo(workspace).capture()
+        if shadow_diff:
+            parts.append(shadow_diff)
+        else:
+            # 影子仓不可用（None）或本阶段确实无改动（"")：保持旧行为退化成文件清单。
+            # 不能用「空 diff」冒充结论：改动可能全部落在被排除的 clone 里（如 agent 已 git add），
+            # 此时清单至少能让下游看到产出面。
+            parts.append(_workspace_file_listing(workspace))
 
     # Mission repos cloned under workspace/repos: collect per-repo diffs too。
     # 与上面分支独立：绑定仓库的任务，沙盒本身通常不是 git 仓库，
@@ -492,6 +503,8 @@ async def clone_repos(
             "archived to the mission artifacts when the mission finishes; files written\n"
             "outside it may be lost.\n"
         )
+        # 无绑仓任务同样需要基线：agent 会把代码写进 repos/，自审靠影子仓拿 diff
+        await _shadow_baseline(workspace)
         return section, ["mission_repos=0 (no repos; output dir repos/ prepared)"]
     repos_root = workspace / "repos"
     repos_root.mkdir(parents=True, exist_ok=True)
@@ -549,7 +562,7 @@ async def clone_repos(
                 git_ctx = None
                 extra_env: dict[str, str] = {}
                 if resolver is not None:
-                    from sortie_deck.git_cred import build_askpass_env
+                    from sortie_deck.git_cred import build_askpass_env, build_ssh_env
 
                     try:
                         resolved = resolver.resolve(repo, actor_user_id=actor_user_id)
@@ -567,8 +580,10 @@ async def clone_repos(
                         )
                         extra_env = git_ctx.env
                     else:
-                        # SSH 凭据二期支持；当前依赖 worker 容器内已挂载的密钥
-                        log.append(f"repo {target.name}: ssh scheme (依赖容器内密钥)")
+                        # SSH：私钥写任务沙盒临时文件，随 git_ctx 退出删除
+                        git_ctx = build_ssh_env(secret=resolved.secret, workdir=workspace)
+                        extra_env = git_ctx.env
+                        log.append(f"repo {target.name}: ssh key injected")
                 try:
                     code, out, err = await _run_cmd(args, cwd=workspace, extra_env=extra_env)
                 finally:
@@ -640,7 +655,19 @@ async def clone_repos(
             + "\n".join(f"- {note}" for note in branch_notes)
             + "\n"
         )
+    # clone 完成后再打基线：agent 首轮编辑之前的工作区状态才是本阶段 diff 的起点
+    await _shadow_baseline(workspace)
     return section, log
+
+
+async def _shadow_baseline(workspace: Path) -> None:
+    """给无 git 的工作区打影子仓基线；失败只告警，不影响 clone 结果。"""
+    try:
+        from sortie_deck.shadow_git import ensure_shadow_baseline
+
+        await ensure_shadow_baseline(workspace)
+    except Exception:  # noqa: BLE001 — 影子仓是旁路能力，不阻断阶段
+        logger.warning("影子仓 baseline 失败 workspace=%s", workspace, exc_info=True)
 
 
 
