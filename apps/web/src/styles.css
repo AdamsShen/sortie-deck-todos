@@ -8778,8 +8778,15 @@ tr:hover td {
 .insights-head-row{cursor:default;color:var(--muted);font-family:var(--mono);font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;background:var(--panel-2)}
 .insights-title{display:block;width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);border:0;padding:0;background:none;font:inherit;text-align:left;cursor:pointer}
 .insights-title:hover{color:var(--copper);text-decoration:underline}
-.insights-id{font-family:var(--mono);font-size:.62rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.insight-id{font-family:var(--mono);font-size:.64rem;color:var(--muted);min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.insights-id,.insight-id{display:flex;align-items:center;gap:.35rem;min-width:0;border:0;padding:0;background:none;color:var(--muted);font-family:var(--mono);cursor:pointer}
+.insights-id{width:100%;font-size:.62rem}
+.insight-id{max-width:14rem;font-size:.64rem}
+.insights-id>span,.insight-id>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.insights-id:hover,.insight-id:hover{color:var(--copper)}
+.insights-id:hover>span,.insight-id:hover>span{text-decoration:underline}
+.insights-id::after,.insight-id::after{flex:0 0 auto;content:"⧉";font-size:.6rem;opacity:.45}
+.insights-id.copy-ok::after,.insight-id.copy-ok::after{content:"✓";color:var(--signal);opacity:1}
+.insights-id.copy-fail::after,.insight-id.copy-fail::after{content:"✗";color:var(--danger);opacity:1}
 .insights-time{font-family:var(--mono);font-size:.64rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .insights-status{font-family:var(--mono);font-size:.65rem;letter-spacing:.06em;color:var(--muted)}
 .insights-status.s-done{color:var(--signal)}

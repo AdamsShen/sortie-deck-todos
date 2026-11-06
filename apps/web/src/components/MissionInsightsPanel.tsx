@@ -30,6 +30,94 @@ function settingsScrollBody(): HTMLElement | null {
 }
 
 /**
+ * 复制文本。以 http://<公网 IP> 访问时不是安全上下文，navigator.clipboard 不可用，
+ * 沿用 App.tsx 的既有做法降级到临时 textarea + execCommand；两者都失败返回 false。
+ */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    if (window.isSecureContext && navigator.clipboard) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (err) {
+    console.error("剪贴板写入失败，尝试降级", err);
+  }
+  try {
+    const el = document.createElement("textarea");
+    el.value = text;
+    el.setAttribute("readonly", "");
+    el.style.position = "fixed";
+    el.style.opacity = "0";
+    document.body.appendChild(el);
+    el.select();
+    const ok = document.execCommand("copy");
+    el.remove();
+    return ok;
+  } catch (err) {
+    console.error("任务 ID 复制降级失败", err);
+    return false;
+  }
+}
+
+/**
+ * 可点击复制的任务 ID，自带成功/失败反馈（按钮尾部图标切换）。
+ * 列表整行可下钻，按钮必须阻止冒泡，否则复制会误打开详情。
+ */
+function CopyableId({
+  id,
+  zh,
+  className,
+}: {
+  id: string;
+  zh: boolean;
+  className: string;
+}) {
+  const [status, setStatus] = useState<"" | "ok" | "fail">("");
+  const timer = useRef<number | null>(null);
+
+  useEffect(
+    () => () => {
+      if (timer.current !== null) window.clearTimeout(timer.current);
+    },
+    [],
+  );
+
+  async function copyId() {
+    const ok = await copyText(id);
+    if (!ok) console.error("任务 ID 复制失败", id);
+    setStatus(ok ? "ok" : "fail");
+    if (timer.current !== null) window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setStatus(""), 1500);
+  }
+
+  const title = status
+    ? status === "ok"
+      ? zh
+        ? "已复制"
+        : "Copied"
+      : zh
+        ? "复制失败，请手动选中"
+        : "Copy failed — select manually"
+    : zh
+      ? `点击复制 ${id}`
+      : `Click to copy ${id}`;
+
+  return (
+    <button
+      type="button"
+      className={`${className}${status ? ` copy-${status}` : ""}`}
+      title={title}
+      onClick={(e) => {
+        e.stopPropagation();
+        void copyId();
+      }}
+    >
+      <span>{id}</span>
+    </button>
+  );
+}
+
+/**
  * 单任务耗时详情：元信息 + 阶段明细表 + 甘特图。
  *
  * 执行跨度（span）与阶段耗时合计口径不同，差值即阶段间隙与人工 HITL 等待；
@@ -80,9 +168,7 @@ function DetailBody({ detail, lang }: { detail: InsightMissionDetail; lang: Lang
       <header className="insight-detail-head">
         <div>
           <h3>{detail.mission.title}</h3>
-          <span className="insight-id" title={detail.mission.id}>
-            {detail.mission.id}
-          </span>
+          <CopyableId id={detail.mission.id} zh={zh} className="insight-id" />
           <span className={`insights-status s-${detail.mission.status}`}>
             {detail.mission.status}
           </span>
@@ -392,9 +478,7 @@ export function MissionInsightsPanel({ token, lang }: Props) {
                   <button type="button" className="insights-title" title={m.title}>
                     {m.title}
                   </button>
-                  <span className="insights-id" title={m.id}>
-                    {m.id}
-                  </span>
+                  <CopyableId id={m.id} zh={zh} className="insights-id" />
                   <span className={`insights-status s-${m.status}`}>{m.status}</span>
                   <span>{m.has_metrics ? m.stage_count : "—"}</span>
                   <span>{m.has_metrics ? formatDuration(m.total_duration_ms) : "—"}</span>
