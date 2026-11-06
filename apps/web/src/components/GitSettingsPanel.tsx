@@ -239,26 +239,28 @@ function fmtWhen(ts: number | null | undefined, neverText: string): string {
   return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-/** 从 clone URL 解析 host，兼容 https 与 git@host:group/repo.git */
+/** 从 clone URL 解析 host，兼容 https 与任意 user@host:group/repo.git（scp 形式） */
 function hostOf(url: string): string {
   const raw = (url || "").trim();
   if (!raw) return "";
-  if (raw.startsWith("git@")) {
-    const rest = raw.slice(4);
-    const idx = rest.indexOf(":");
-    return (idx >= 0 ? rest.slice(0, idx) : rest).toLowerCase();
+  if (raw.includes("://")) {
+    try {
+      return new URL(raw).hostname.toLowerCase();
+    } catch {
+      return "";
+    }
   }
-  try {
-    return new URL(raw).hostname.toLowerCase();
-  } catch {
-    return "";
-  }
+  // scp 形式：git@host:path / yulidev@host:path，用户名不一定是 git
+  const match = raw.match(/^(?:[^@/]+@)?([^:/]+):/);
+  return match ? match[1].toLowerCase() : "";
 }
 
-/** 个人仓库的协议：git@ / ssh:// 视为 ssh，其余按 https 匹配 */
+/** 协议：http(s) 为 https，ssh:// 与任意 scp 形式（user@host:path）为 ssh */
 function schemeOf(url: string): "https" | "ssh" {
   const raw = (url || "").trim().toLowerCase();
-  return raw.startsWith("git@") || raw.startsWith("ssh://") ? "ssh" : "https";
+  if (raw.startsWith("https://") || raw.startsWith("http://")) return "https";
+  if (raw.startsWith("ssh://")) return "ssh";
+  return raw.includes(":") ? "ssh" : "https";
 }
 
 function isActive(cred: GitCredentialInfo): boolean {
