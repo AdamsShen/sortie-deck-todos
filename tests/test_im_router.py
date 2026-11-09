@@ -17,8 +17,8 @@ from sortie_deck.git_cred import new_secret_key
 from sortie_deck.im import ImConnectionStore
 from sortie_deck.im.base import CardAction, InboundEvent
 from sortie_deck.im.commands import ImCommands
-from sortie_deck.im.intent import IntentParser
 from sortie_deck.im.identity import ImIdentityStore, LinkCodeService
+from sortie_deck.im.intent import IntentParser
 from sortie_deck.im.router import ImDedupe, ImRouter
 from sortie_deck.models import InitiativeStatus
 from sortie_deck.service import Principal, ServiceError

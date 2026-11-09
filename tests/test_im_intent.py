@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
-
 from sortie_deck.im.intent import (
     Intent,
     IntentParser,
