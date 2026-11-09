@@ -301,6 +301,17 @@ class Settings(BaseSettings):
     dingtalk_webhook_url: str = ""
     dingtalk_secret: str = ""
     feishu_webhook_url: str = ""
+    # --- IM 集成（工作台「设置 → IM 集成」）---------------------------------
+    # 接入凭据的加密主密钥。优先 TDT_SECRET_KEY；未配置时回落 git_secret_key，
+    # 使既有部署不改 .env 就能用（且不会让旧仓库凭据解不开）。
+    secret_key: str | None = None
+    # 接入记录 sqlite；空则用 <data_dir>/im.sqlite
+    im_db_path: Path | None = None
+    # 只允许一个进程建立长连接：飞书/钉钉集群推送不广播、企微新连接会踢旧连接，
+    # 多副本多活会丢消息甚至互相踢掉。API 多副本时只给一个实例开。
+    im_consumer: bool = True
+    # 钉钉按钮「签名链接」的有效期（秒）。链接可被转发，必须限时。
+    im_action_ttl_seconds: float = 86400.0
     # --- mission guardrails -------------------------------------------------
     # Runaway protection for long multi-agent missions (see guardrails.py).
     guardrail_max_tokens: int = 2_000_000
@@ -347,6 +358,8 @@ class Settings(BaseSettings):
     # Chat bridges
     slack_signing_secret: str | None = None
     feishu_verification_token: str | None = None
+    # 飞书「URL 回调」模式的 Encrypt Key（长连接模式不需要；配置后回调体加密）
+    feishu_encrypt_key: str | None = None
     # Production polish
     log_level: str = "INFO"
     # 单阶段执行上限（秒）。harness 跑完整技术方案实测 15 分钟量级
@@ -412,6 +425,17 @@ class Settings(BaseSettings):
     intake_ttl_days: float = 7.0
     # 磁盘水位防护：clone 前检查可用空间，低于该值（MB）拒绝新 clone
     min_disk_free_mb: int = 2048
+
+    def resolved_secret_key(self) -> str | None:
+        """凭据加密主密钥：``TDT_SECRET_KEY`` 优先，回落 ``git_secret_key``。
+
+        回落是为了兼容已上线环境：它们只配了 ``TDT_GIT_SECRET_KEY``，
+        新增 IM 凭据不该要求用户再去生成一把新密钥（换了还会导致旧凭据解不开）。
+        """
+        return (self.secret_key or "").strip() or (self.git_secret_key or "").strip() or None
+
+    def im_db(self) -> Path:
+        return self.im_db_path or (self.data_dir / "im.sqlite")
 
     def resolved_token_secret(self) -> str:
         secret = (self.token_secret or "").strip()

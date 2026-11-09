@@ -60,6 +60,15 @@ def new_secret_key() -> str:
     return base64.urlsafe_b64encode(os.urandom(32)).decode()
 
 
+def build_fernet(secret_key: str) -> Fernet:
+    """公开入口：其它模块（如 IM 接入凭据）复用同一套主密钥与轮换规则。
+
+    不直接暴露 ``_build_fernet`` 是为了让「未配置主密钥必须拒绝写入」这条
+    约定只有一个实现，避免两处各写一份后行为漂移。
+    """
+    return _build_fernet(secret_key)
+
+
 def _build_fernet(secret_key: str) -> Fernet:
     """构造 Fernet；支持逗号分隔多密钥（新钥在前）用于轮换。"""
     keys = [k.strip() for k in (secret_key or "").split(",") if k.strip()]
