@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **IM integration layer (`src/sortie_deck/im/`)**: mission lifecycles can now be driven from enterprise IM. A provider-agnostic core (`base.py`) normalises inbound events and approval cards; `connection.py` stores one **workspace-scoped** connection per channel with Fernet-encrypted secrets (reusing the git-credential master key, never plaintext, never echoed back); `cards.py` renders one `ApprovalCard` into Feishu interactive cards, WeCom `template_card`, Slack Block Kit and DingTalk ActionCard; `router.py` dedupes by `(provider, raw_id)` and ACKs inside the platform window (Feishu 3s / DingTalk 1.5s / WeCom 5s) before running orchestration in a background task
+- **Adapters**: `feishu.py` (tenant token + `card.action.trigger` + AES callback decryption), `dingtalk.py` (Stream frame parsing, `sampleActionCard{1..4}`), `wecom.py` (AI-bot WebSocket `aibot_subscribe` / `aibot_send_msg`, 30s heartbeat, single-connection constraint), `wechat.py` (iLink Bot: `get_bot_qrcode` / `get_qrcode_status` / `getupdates` / `sendmessage`, DM only, degrades cards to slash-command text)
+- **QR login (`qr_login.py`)**: WeChat scan-to-connect with a short-lived session, status polling (`wait` / `scaned` / `confirmed` / `expired` / `need_verifycode`) and token write-back that flips the connection to `connected`
+- **Settings → IM integrations page**: channel cards with status badges, credential form with a mandatory "long connection vs URL callback" choice (the two are mutually exclusive **on the platform side**, so switching resets local state), probe/health readouts, WeChat QR panel with countdown, and chat→mission binding
+- **Gate approvals as cards**: `Orchestrator._notify_gate()` now registers a pending decision (`notify=False`, so no duplicate notice) and sends an approval card carrying `decision_id` plus approve / rewrite / reject / stop buttons; failures degrade to the legacy text fan-out. Card actions map to real graph actions (`approve` is no longer treated as "edit instruction and rerun")
+- **DingTalk signed action links**: DingTalk ActionCard buttons can only open a URL, so buttons point at `GET /api/im/action` with an HMAC-signature over `decision_id + action + timestamp` (TTL `TDT_IM_ACTION_TTL_SECONDS`, default 24h)
+- **Tests**: `tests/test_im_{connection,cards,router,adapters,wechat,gate,api}.py` — 107 cases covering encryption/redaction, state machine, dedupe, ACK semantics, card rendering per platform, QR login, gate degradation and the full management API
+
+### Fixed
+
+- **DingTalk inbound had no signature verification**: `/api/bridges/dingtalk` accepted any JSON on a public URL, so anyone could inject room messages. The unified `/api/im/webhook/{provider}` now verifies Feishu signatures/decryption and treats unverifiable payloads as 401
+- **`/api/bridges/map` rejected DingTalk**: the allow-list only contained `slack`/`feishu`, so a DingTalk conversation could never be mapped — configuring it silently produced "conversation not mapped" forever
+- **Inbound handlers ran orchestration inline**: resuming a pipeline inside the callback blew every platform's ACK window. Handlers now parse, enqueue and return, with processing on a background task
+- **IM routes were registered after the MCP catch-all mount**: `/api/im/*` was appended below `app.mount("/", build_mcp_app(...))`, so the mount matched first and every IM request returned a `text/plain` `Not Found` instead of JSON — including with a valid token. The block now sits before the mount, and `CLAUDE.md` records the constraint (a mount on `/` swallows everything registered after it)
+
 ### Changed
 
 - **Commit policy is now stage-specific**: build stages (`eng_implement` / `eng_ios` / `eng_android` / `eng_web` / `eng_backend` / `eng_agent`, including QA rework rounds) must keep their changes in the working tree — `git commit` / `git push` are forbidden, because `diff.patch` and the self-review scope are captured with `git diff` and a commit silently empties both. Selftest and QA stages may commit once per fix (still never pushing; `git_publish` owns push + MR). The prompt section is injected by `clone_repos(allow_commit=...)` and the previous unconditional "commit freely" instruction is gone
