@@ -51,6 +51,12 @@ dependencies = [
   # 全链路追踪：只装 API（纯接口，无传递依赖）。SDK/exporter 在 [otel] extra，
   # 未安装时 observability 模块自动退化为 no-op（见 sortie_deck/observability.py）。
   "opentelemetry-api>=1.29.0",
+  # 凭据加密（git 凭据与 IM 接入共用同一套主密钥）。此前仅靠传递依赖，
+  # 干净环境里 git_cred / im.connection 会 ImportError，必须显式声明。
+  "cryptography>=43.0.0",
+  # 微信扫码登录的二维码渲染（纯 Python、无传递依赖）。
+  # 微信返回的是网页链接而不是图片，必须本地生成二维码。
+  "segno>=1.6.1",
 ]
 
 [project.urls]
@@ -71,6 +77,8 @@ otel = [
 dev = ["pytest>=8.3.0", "pytest-asyncio>=0.24.0", "ruff>=0.7.0"]
 # Agent harness providers (cloud runtime = the env this app runs in)
 harness-claude = ["claude-agent-sdk>=0.1.0"]
+# IM 长连接 SDK。不装也能用 URL 回调模式；装了才支持「WebSocket 长连接」。
+im = ["lark-oapi>=1.4.0", "dingtalk-stream>=0.20.0"]
 docs = [
   "mkdocs-material>=9.5.0",
   "mkdocs-static-i18n>=1.2.0",
