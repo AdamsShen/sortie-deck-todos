@@ -356,6 +356,143 @@ class Orchestrator:
             )
         )
 
+    async def _notify_gate(
+        self,
+        ini: Initiative,
+        stage: str,
+        text: str,
+        kind: str,
+        payload: dict[str, Any],
+    ) -> None:
+        """门禁触达真人：优先发审批卡片，失败或未绑定会话时退回全局文本。
+
+        卡片按钮必须携带 ``decision_id`` 才能幂等（按钮会连点、平台会重推），
+        所以先在决策中心登记一条 pending 记录（``notify=False`` 避免与卡片
+        重复触达），再拿它的 id 渲染卡片。
+        """
+        from sortie_deck.decisions import get_decision_service
+
+        decision = None
+        service = get_decision_service()
+        if service is not None and bool(getattr(self.cfg, "im_escalation", True)):
+            try:
+                decision = await service.raise_decision(
+                    initiative_id=ini.id,
+                    stage=stage,
+                    question=str(payload.get("prompt") or f"阶段 {stage} 等待确认"),
+                    context=text,
+                    options=["approve", "reject", "rewrite", "stop"],
+                    sla_seconds=float(getattr(self.cfg, "decision_sla_seconds", 1800) or 1800),
+                    fallback_action=str(
+                        getattr(self.cfg, "decision_fallback_action", "pause") or "pause"
+                    ),
+                    dedupe_key=f"gate:{ini.id}:{stage}:{kind}",
+                    notify=False,
+                )
+                # resolve_decision 靠这个标记判断"答复是否对得上当前等待"
+                ini.meta = {**(ini.meta or {}), "pending_decision_id": decision.decision_id}
+                self.store.upsert(ini)
+            except Exception as exc:  # noqa: BLE001 — 决策登记失败不能挡住门禁
+                logger.warning("门禁登记决策失败 ini=%s stage=%s: %s", ini.id, stage, exc)
+                decision = None
+
+        if decision is not None and await self._send_gate_card(
+            ini, stage, text, decision.decision_id
+        ):
+            return
+
+        notifier = getattr(self, "notifier", None)
+        if notifier is not None:
+            await notifier.send(
+                title=f"【门禁】{ini.title} · {stage}",
+                body=text,
+                meta={"initiative_id": ini.id, "stage": stage, "kind": kind},
+                level="hitl",
+            )
+
+    async def _send_gate_card(
+        self, ini: Initiative, stage: str, text: str, decision_id: str
+    ) -> bool:
+        """发审批卡片到该任务绑定的 IM 会话。返回是否真的发出去了。"""
+        from sortie_deck.im.cards import ApprovalCard, default_buttons
+        from sortie_deck.im.service import get_stack
+
+        stack = get_stack()
+        # 非 consumer 实例不建连（飞书/钉钉推送不广播、企微会互相踢），也不主动发
+        if stack is None or not stack.manager.consumer:
+            return False
+
+        targets = self._im_targets(ini)
+        if not targets:
+            return False
+
+        card = ApprovalCard(
+            title=f"【门禁】{ini.title} · {stage}",
+            stage=stage,
+            mission_id=ini.id,
+            decision_id=decision_id,
+            summary=text,
+            buttons=default_buttons(),
+            fallback_url=self._mission_url(ini.id),
+        )
+        sent = False
+        for conn, chat_id in targets:
+            provider = stack.manager.providers.get(conn.provider)
+            if provider is None:
+                continue
+            try:
+                result = await provider.send_card(conn, chat_id, card)
+            except Exception as exc:  # noqa: BLE001 — 单个渠道失败不影响其它渠道
+                logger.warning(
+                    "门禁卡片发送异常 ini=%s provider=%s: %s", ini.id, conn.provider, exc
+                )
+                continue
+            if getattr(result, "ok", False):
+                sent = True
+            else:
+                logger.warning(
+                    "门禁卡片发送失败 ini=%s provider=%s: %s",
+                    ini.id,
+                    conn.provider,
+                    getattr(result, "error", ""),
+                )
+        return sent
+
+    def _im_targets(self, ini: Initiative) -> list[tuple[Any, str]]:
+        """门禁要触达的是**人**，不是某个会话。
+
+        工作区级不再有"会话绑定任务"：用任务的 ``created_by`` 去
+        ``ImIdentityStore`` 反查这个人在哪些 IM 里绑过、各自绑到哪个账号，
+        每个渠道各发一份（同一个人可能飞书、微信都绑了）。
+
+        返回 ``[(conn, chat_or_user_id)]``；空列表表示创建者没绑任何 IM，
+        调用方退回到全局 webhook 文本通知。
+        """
+        try:
+            from sortie_deck.im.service import get_stack
+
+            stack = get_stack()
+            if stack is None:
+                return []
+            creator = (ini.created_by or "").strip()
+            if not creator:
+                return []
+            targets: list[tuple[Any, str]] = []
+            for ident in stack.identity.list():
+                if ident.user_id != creator:
+                    continue
+                conn = stack.store.get_by_provider(ident.provider)
+                if conn is not None and conn.enabled:
+                    targets.append((conn, ident.sender_id))
+            return targets
+        except Exception as exc:  # noqa: BLE001 — 反查失败按"未绑定"处理
+            logger.warning("反查创建者 IM 身份失败 ini=%s: %s", ini.id, exc)
+            return []
+
+    def _mission_url(self, initiative_id: str) -> str:
+        base = (getattr(self.cfg, "public_base_url", "") or "").rstrip("/")
+        return f"{base}/missions/{initiative_id}" if base else ""
+
     def _wire_subrooms(self) -> None:
         """Expose the sub-room service to stage executors (via the graph host)."""
         from sortie_deck.subroom import build_subroom_service, set_subroom_service
@@ -2144,16 +2281,10 @@ class Orchestrator:
                 {"initiative_id": ini.id, "stage": stage},
                 timeout=self.cfg.webhook_timeout,
             )
-            # 全局 IM 通道（钉钉/飞书）：门禁必须真正触达真人，而不是只在工作台里等待。
-            # 通道失败由 Notifier 内部降级（返回 ok=False），绝不阻塞门禁本身。
-            notifier = getattr(self, "notifier", None)
-            if notifier is not None:
-                await notifier.send(
-                    title=f"【门禁】{ini.title} · {stage}",
-                    body=hitl_text,
-                    meta={"initiative_id": ini.id, "stage": stage, "kind": kind},
-                    level="hitl",
-                )
+            # 门禁触达：优先发审批卡片到已绑定的 IM 会话，否则退回全局文本。
+            # 两条通道都失败也不能阻塞门禁本身（任务照常停在 waiting_hitl，
+            # 工作台仍可操作）。
+            await self._notify_gate(ini, stage, hitl_text, kind, payload)
             await self._index_mission_artifacts(ini)
             return ini
 
@@ -2530,8 +2661,14 @@ class Orchestrator:
         by: str,
         channel: str = "",
         is_admin: bool = False,
+        action: str = "",
     ) -> Any:
-        """Record a human answer and hand it back to the paused mission."""
+        """Record a human answer and hand it back to the paused mission.
+
+        ``action`` 来自 IM 卡片按钮（approve/reject/edit_instruction/stop）。
+        留空时保持旧语义（按 free-form 指令重跑），保证 web / CLI / MCP 三端
+        既有调用不受影响。
+        """
         from sortie_deck.decisions import get_decision_service
 
         service = get_decision_service()
@@ -2558,13 +2695,23 @@ class Orchestrator:
         ini.meta = {**(ini.meta or {}), "pending_decision_id": None}
         self.store.upsert(ini)
         if ini.status == InitiativeStatus.WAITING_HITL:
+            # 卡片动作要映射成真正的图动作：approve 不该被当成"改指令重跑"，
+            # 否则点"通过"会让阶段以编辑语义重入，产出被无谓重算。
+            hitl_action = HitlAction.EDIT_INSTRUCTION
+            if action == HitlAction.APPROVE.value:
+                hitl_action = HitlAction.APPROVE
+            elif action == HitlAction.REJECT.value:
+                hitl_action = HitlAction.REJECT
+            elif action == HitlAction.STOP.value:
+                hitl_action = HitlAction.STOP
             try:
                 await self.submit_hitl(
                     ini.id,
                     HitlDecision(
-                        action=HitlAction.EDIT_INSTRUCTION,
+                        action=hitl_action,
                         instruction=f"[human-decision {decision_id}] {answer}",
                         note=f"answered by {by}",
+                        source="im" if channel.startswith("im:") else "web",
                     ),
                     author_name=by,
                 )

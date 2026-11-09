@@ -34,7 +34,7 @@ from sortie_deck.settings import settings
 
 logger = logging.getLogger(__name__)
 
-PrincipalSource = Literal["web", "cli", "mcp"]
+PrincipalSource = Literal["web", "cli", "mcp", "im"]
 
 
 # ---------------------------------------------------------------------------
@@ -389,6 +389,16 @@ def _public(user: Any) -> PublicUser:
 # 权限（与 api/app.py 的 _ensure_* 语义保持一致）
 # ---------------------------------------------------------------------------
 
+
+
+def principal_for_user(user: Any, *, source: PrincipalSource = "im") -> Principal:
+    """按已鉴权的用户记录构造 Principal。
+
+    供 IM 这类非 HTTP 入口使用：它们先通过绑定码确认"这个 IM 账号是谁"，
+    再从这里换到统一的 Principal —— 之后的权限校验（ensure_access /
+    ensure_control）与 CLI、MCP 完全一致，不存在第二套规则。
+    """
+    return Principal(user=_public(user), source=source)
 
 def is_admin(principal: Principal) -> bool:
     return principal.user.role == "admin"

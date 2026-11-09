@@ -338,7 +338,21 @@ async def lifespan(app: FastAPI):
     toolkit = get_toolkit()
     bind_catalogs(agents=agents, memory=mem, toolkit=toolkit)
     app.state.orch = orch
+    # IM 后台循环：进程重启后要恢复已配置的渠道，否则会出现
+    # 「显示已连接但收不到消息」——循环只在扫码成功时被 spawn 过。
+    im_stack = None
+    try:
+        from sortie_deck.im.service import get_stack
+
+        im_stack = get_stack()
+        if im_stack is not None and im_stack.manager.consumer:
+            await im_stack.runner.start()
+    except Exception as exc:  # noqa: BLE001 — IM 是增强能力，不能拖垮启动
+        logger.warning("IM 后台循环启动失败（API 其余功能正常）: %s", exc)
     yield
+    if im_stack is not None:
+        with suppress(Exception):
+            await im_stack.runner.stop()
     await orch.shutdown()
     # flush 最后一批 span，否则进程退出时 BatchSpanProcessor 队列里的会丢
     obs.shutdown_tracing()
@@ -3542,18 +3556,29 @@ async def list_bridges(_user: PublicUser = Depends(require_admin)) -> dict[str, 
 
 @app.post("/api/bridges/map")
 async def map_bridge(
-    body: dict[str, Any], _user: PublicUser = Depends(require_admin)
+    body: dict[str, Any], user: PublicUser = Depends(require_admin)
 ) -> dict[str, Any]:
-    from sortie_deck.bridges import BridgeMapping
+    from sortie_deck.bridges import PROVIDERS, BridgeMapping
 
     mapping = BridgeMapping(
         provider=str(body.get("provider") or ""),
         channel_id=str(body.get("channel_id") or ""),
         initiative_id=str(body.get("initiative_id") or ""),
         label=str(body.get("label") or ""),
+        chat_type=str(body.get("chat_type") or "group"),
+        created_by=user.username,
     )
-    if mapping.provider not in {"slack", "feishu"} or not mapping.channel_id or not mapping.initiative_id:
-        raise HTTPException(400, "provider, channel_id, initiative_id required")
+    # 早先这里只放行 slack/feishu，导致 /api/bridges/dingtalk 的入站消息
+    # 永远 resolve 不到映射（配不上也就永远回 "conversation not mapped"）。
+    if (
+        mapping.provider not in PROVIDERS
+        or mapping.chat_type not in {"single", "group"}
+        or not mapping.channel_id
+        or not mapping.initiative_id
+    ):
+        raise HTTPException(
+            400, f"provider must be one of {', '.join(PROVIDERS)}; channel_id and initiative_id required"
+        )
     if not orch().get(mapping.initiative_id):
         raise HTTPException(404, "Initiative not found")
     return _bridges().upsert(mapping).model_dump()
@@ -3792,6 +3817,317 @@ if WEB_DIST.exists():
         _file = WEB_DIST / _name
         if _file.is_file():
             app.get(f"/{_name}", name=f"public-{_name}")(_root_file_handler(_file))
+
+
+# --- IM 集成（工作台「设置 → IM 集成」+ 平台入站）--------------------------
+
+
+def _im() -> Any:
+    """取 IM 栈。未配置主密钥时仍可浏览，但写入会由 store 抛 SecretKeyMissing。"""
+    from sortie_deck.im.service import get_stack
+
+    stack = get_stack()
+    if stack is None:
+        raise HTTPException(503, "IM 栈不可用：请检查 TDT_SECRET_KEY 与启动日志")
+    return stack
+
+
+class ImConnectionBody(BaseModel):
+    provider: str
+    mode: str = "stream"
+    app_id: str = ""
+    secret: str = ""
+    label: str = ""
+
+
+class ImConnectionPatch(BaseModel):
+    label: str | None = None
+    mode: str | None = None
+    app_id: str | None = None
+    secret: str | None = None
+    enabled: bool | None = None
+
+
+@app.get("/api/im/providers")
+async def im_providers(_user: PublicUser = Depends(require_user)) -> dict[str, Any]:
+    """渠道能力表：前端据此渲染卡片与表单，不必硬编码"飞书要 App ID"。"""
+    from sortie_deck.im import provider_catalog
+
+    return {"providers": provider_catalog()}
+
+
+@app.get("/api/im/connections")
+async def im_list(user: PublicUser = Depends(require_user)) -> dict[str, Any]:
+    # 列表本身不含任何明文，成员只读即可（便于值班同学确认"到底接没接上"）
+    _ = user
+    return {"connections": _im().manager.list_public()}
+
+
+@app.post("/api/im/connections")
+async def im_create(
+    body: ImConnectionBody, user: PublicUser = Depends(require_admin)
+) -> dict[str, Any]:
+    from sortie_deck.im.connection import ImConnectionError
+
+    stack = _im()
+    try:
+        conn = stack.store.create(
+            provider=body.provider,
+            mode=body.mode,
+            app_id=body.app_id,
+            secret=(body.secret or "").strip() or None,
+            label=body.label,
+            created_by=user.username,
+        )
+    except Exception as exc:  # noqa: BLE001 — 冲突/校验错误直接回给用户
+        raise HTTPException(400, str(exc)) from exc
+
+    # 二维码渠道此时还没有凭据，等扫码成功再探活
+    if conn.mode == "qr":
+        return {"connection": conn.to_public()}
+
+    try:
+        updated = await stack.manager.probe(conn.id)
+    except ImConnectionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    # 主动拉取型渠道（微信长轮询 / 企微 WS）在探活成功后立即起循环，
+    # 否则会出现"显示已连接但收不到消息"。
+    if updated.status == "connected" and updated.provider in {"wechat", "wecom"}:
+        stack.runner.spawn(updated.id, updated.provider)
+    return {"connection": updated.to_public()}
+
+
+@app.patch("/api/im/connections/{conn_id}")
+async def im_update(
+    conn_id: str, body: ImConnectionPatch, _user: PublicUser = Depends(require_admin)
+) -> dict[str, Any]:
+    import sortie_deck.im.connection
+
+    stack = _im()
+    # 换 mode 前先把状态打回 unconfigured：平台侧「长连接 / 回调」互斥，
+    # 不先断开会让旧连接继续占着，表现为"改了设置没生效"。
+    if body.mode is not None:
+        current = stack.store.get(conn_id)
+        if body.mode != current.mode:
+            stack.store.set_status(conn_id, "unconfigured", allow_force=True)
+    try:
+        conn = stack.store.update(
+            conn_id,
+            label=body.label,
+            mode=body.mode,
+            app_id=body.app_id,
+            secret=body.secret,
+            enabled=body.enabled,
+        )
+    except sortie_deck.im.connection.ImConnectionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"connection": conn.to_public()}
+
+
+@app.delete("/api/im/connections/{conn_id}")
+async def im_delete(conn_id: str, _user: PublicUser = Depends(require_admin)) -> dict[str, Any]:
+    import sortie_deck.im.connection
+
+    stack = _im()
+    provider = stack.manager.providers.get(stack.store.get(conn_id).provider)
+    if provider is not None and hasattr(provider, "detach"):
+        provider.detach(conn_id)
+    # 先停后台循环再删记录，避免循环拿着已删除的 id 反复取记录报错
+    await stack.runner.cancel(conn_id)
+    try:
+        stack.store.delete(conn_id)
+    except sortie_deck.im.connection.ImConnectionError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return {"ok": True}
+
+
+@app.post("/api/im/connections/{conn_id}/probe")
+async def im_probe(conn_id: str, _user: PublicUser = Depends(require_admin)) -> dict[str, Any]:
+    import sortie_deck.im.connection
+
+    stack = _im()
+    try:
+        conn = await stack.manager.probe(conn_id)
+    except sortie_deck.im.connection.ImConnectionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"connection": conn.to_public()}
+
+
+@app.post("/api/im/connections/wechat/qr")
+async def im_wechat_qr_start(user: PublicUser = Depends(require_admin)) -> dict[str, Any]:
+    """申请微信登录二维码。
+
+    工作区级绑定：已有 wechat 记录就复用它重新扫码（换号/续期），
+    没有则自动建一条 ``mode=qr`` 的待配置记录。
+    """
+    stack = _im()
+    conn = stack.store.get_by_provider("wechat")
+    if conn is None:
+        conn = stack.store.create(provider="wechat", mode="qr", created_by=user.username)
+    try:
+        session = await stack.qr.start(conn.id)
+    except Exception as exc:  # noqa: BLE001 — 平台错误原样回给管理页
+        raise HTTPException(400, str(exc)) from exc
+    return {"conn_id": conn.id, **session.to_public()}
+
+
+@app.get("/api/im/connections/wechat/qr/{ticket}")
+async def im_wechat_qr_poll(ticket: str, _user: PublicUser = Depends(require_user)) -> dict[str, Any]:
+    """轮询扫码状态；``confirmed`` 时立即起长轮询，避免"扫码成功但收不到消息"。"""
+    import sortie_deck.im.connection
+
+    stack = _im()
+    try:
+        session = await stack.qr.poll(ticket)
+    except sortie_deck.im.connection.ImConnectionError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    if session.status == "confirmed":
+        stack.runner.spawn(session.conn_id, "wechat")
+    return session.to_public()
+
+
+@app.get("/api/im/connections/{conn_id}/health")
+async def im_health(conn_id: str, _user: PublicUser = Depends(require_user)) -> dict[str, Any]:
+    import sortie_deck.im.connection
+
+    stack = _im()
+    try:
+        return stack.manager.health(conn_id)
+    except sortie_deck.im.connection.ImConnectionError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.get("/api/im/connections/{conn_id}/chats")
+async def im_chats(conn_id: str, _user: PublicUser = Depends(require_user)) -> dict[str, Any]:
+    """该渠道已绑定的会话（数据源是 bridges 映射表，P2 再补"平台侧会话列表"）。"""
+    stack = _im()
+    conn = stack.store.get(conn_id)
+    rows = [m.model_dump() for m in _bridges().list() if m.provider == conn.provider]
+    return {"chats": rows}
+
+
+@app.post("/api/im/webhook/{provider}")
+async def im_webhook(provider: str, request: Request) -> Any:
+    """统一入站入口。
+
+    平台侧窗口：飞书 3s / 钉钉 1.5s / 企微 5s。因此这里只做「解析 + 入队」，
+    业务处理全部交给后台任务，立刻 ACK。
+    """
+    from sortie_deck.im import feishu as feishu_mod
+
+    stack = _im()
+    raw = await request.body()
+    try:
+        payload = json.loads(raw.decode("utf-8") or "{}")
+    except json.JSONDecodeError:
+        raise HTTPException(400, "invalid json") from None
+
+    if provider == "feishu":
+        # URL 校验握手（首次配置回调地址时飞书会发一次）
+        if payload.get("type") == "url_verification":
+            return {"challenge": payload.get("challenge")}
+        if payload.get("encrypt"):
+            encrypt_key = settings.feishu_encrypt_key or ""
+            try:
+                payload = feishu_mod.decrypt_payload(encrypt_key, payload["encrypt"])
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(401, f"飞书回调解密失败: {exc}") from exc
+        if settings.feishu_encrypt_key:
+            ok = feishu_mod.verify_signature(
+                settings.feishu_encrypt_key,
+                request.headers.get("x-lark-request-timestamp", ""),
+                request.headers.get("x-lark-request-nonce", ""),
+                raw,
+                request.headers.get("x-lark-signature", ""),
+            )
+            if not ok:
+                raise HTTPException(401, "invalid feishu signature")
+
+    adapter = stack.manager.providers.get(provider)
+    if adapter is None:
+        raise HTTPException(404, f"渠道未启用: {provider}")
+    event = adapter.parse_inbound(payload)
+    if event is None:
+        # 非消息类事件（成员变更、URL 校验残留）：ACK 掉即可
+        return {"ok": True, "ignored": True}
+    stack.router.schedule(event)
+    return {"ok": True}
+
+
+@app.post("/api/im/link-code")
+async def im_link_code(user: PublicUser = Depends(require_user)) -> dict[str, Any]:
+    """生成一次性 IM 绑定码。
+
+    用户在工作台生成（此时身份可信），再在 IM 里发 ``/bind <码>`` 完成绑定。
+    反过来不可行：如果允许在 IM 里点一下就把自己绑成某人，等于任何人点一下
+    就能冒充审批人。
+    """
+    from sortie_deck.im.identity import LINK_CODE_TTL
+
+    stack = _im()
+    code, expires_at = stack.link_codes.issue(user_id=user.id, username=user.username)
+    return {
+        "code": code,
+        "expires_at": expires_at,
+        "ttl": int(LINK_CODE_TTL),
+        "instruction": f"在 IM 里发送 /bind {code}",
+    }
+
+
+@app.get("/api/im/identities")
+async def im_identities(
+    provider: str | None = Query(default=None),
+    _user: PublicUser = Depends(require_admin),
+) -> dict[str, Any]:
+    stack = _im()
+    return {"identities": [i.model_dump() for i in stack.identity.list(provider)]}
+
+
+@app.delete("/api/im/identities/{provider}/{sender_id}")
+async def im_unbind_identity(
+    provider: str, sender_id: str, _user: PublicUser = Depends(require_admin)
+) -> dict[str, Any]:
+    stack = _im()
+    if not stack.identity.unbind(provider, sender_id):
+        raise HTTPException(404, "绑定不存在")
+    return {"ok": True}
+
+
+@app.get("/api/im/action")
+async def im_action(
+    d: str = Query(default=""),
+    a: str = Query(default=""),
+    sig: str = Query(default=""),
+) -> Any:
+    """钉钉卡片按钮的落点（钉钉只支持 actionURL，没有按钮回调）。
+
+    这里必须验签：链接可被转发，不签名等于把审批权限变成公开 URL。
+    """
+    from fastapi.responses import HTMLResponse
+
+    from sortie_deck.im.cards import verify_action_signature
+
+    if not d or not a:
+        raise HTTPException(400, "missing decision_id or action")
+    ttl = int(settings.im_action_ttl_seconds or 86400)
+    if not verify_action_signature(settings.resolved_token_secret(), d, a, sig, max_age=ttl):
+        return HTMLResponse(
+            "<h3>链接无效或已过期</h3><p>请到工作台重新处理该审批。</p>", status_code=401
+        )
+    try:
+        outcome = await orch().resolve_decision(
+            d,
+            answer=a,
+            by="dingtalk",
+            channel="im:dingtalk",
+            action=a,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return HTMLResponse(f"<h3>处理失败</h3><p>{exc}</p>", status_code=500)
+    if not getattr(outcome, "accepted", False) and not getattr(outcome, "duplicate", False):
+        reason = getattr(outcome, "reason", "") or "该审批已被处理或你没有权限"
+        return HTMLResponse(f"<h3>未执行</h3><p>{reason}</p>", status_code=403)
+    return HTMLResponse("<h3>已处理</h3><p>可以关闭此页面，回到任务里查看结果。</p>")
 
 
 # ---------------------------------------------------------------------------

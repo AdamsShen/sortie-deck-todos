@@ -162,7 +162,7 @@ Orchestrator (orchestrator.py) ──► LangGraph 图 (graph.py)
 - 改模型/契约：优先改 `models.py`，再检查 `contracts.py`、`graph.py`、`pipeline.py`、`api/app.py` 与前端 `apps/web/src/types.ts` 是否同步。
 - 改航线模板或阶段：同步检查 `pipeline.py` 的 `normalize_specs()` 三明治约束、`packages/templates/*.yaml`、`docs/*/modules/pipeline.md`，并补/改 `tests/test_pipeline*.py`。
 - 改执行器：在 `plugins/` 实现并在 `plugins/factory.py::build_default_registry` 注册；社区插件走入口组 `sortie_deck.executors`（`plugins/entrypoints.py`）。
-- 改 API 路由：全部集中在 `api/app.py`，遵循既有 `/api` 前缀与 `require_user` / `require_admin` 依赖。
+- 改 API 路由：全部集中在 `api/app.py`，遵循既有 `/api` 前缀与 `require_user` / `require_admin` 依赖。**新路由必须注册在 `app.mount("/", build_mcp_app(...))` 之前**——`Mount("/")` 会吞掉其后注册的所有路由，表现为 `text/plain` 的 `Not Found`（不是 FastAPI 的 JSON 404），且带 token 也不生效。
 - 前端：API 调用统一走 `apps/web/src/api.ts`；类型放 `types.ts`；提交前跑 `npm run typecheck`。
 - 测试：`pytest` 使用 `asyncio_mode = "auto"`（`pyproject.toml`），异步测试无需手动加 `@pytest.mark.asyncio`；测试集中在 `tests/`，按模块一一对应。
 - 文档：本仓库文档是产物的一部分，行为变更请同步更新 `docs/en/` 与 `docs/zh/`（含 `CHANGELOG.md`）。

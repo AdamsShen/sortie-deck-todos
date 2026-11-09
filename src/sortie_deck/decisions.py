@@ -110,7 +110,9 @@ class DecisionStore:
                 return row
         raise KeyError(decision_id)
 
-    def find_pending(self, *, initiative_id: str, stage: str, dedupe_key: str) -> HumanDecision | None:
+    def find_pending(
+        self, *, initiative_id: str, stage: str, dedupe_key: str
+    ) -> HumanDecision | None:
         for row in self._read():
             if (
                 row.status == "pending"
@@ -175,12 +177,15 @@ class DecisionService:
         fallback_action: FallbackAction | None = None,
         channel: str = "",
         dedupe_key: str = "",
+        notify: bool = True,
     ) -> HumanDecision:
-        """Create (or reuse) the pending decision for this stage and notify."""
+        """Create (or reuse) the pending decision for this stage and notify.
+
+        ``notify=False`` 供「门禁自己发卡片」的路径使用：此时由调用方负责触达，
+        避免同一次门禁既发全局文本又发卡片，用户收到两条重复消息。
+        """
         key = dedupe_key or f"{initiative_id}:{stage}:{question[:80]}"
-        existing = self.store.find_pending(
-            initiative_id=initiative_id, stage=stage, dedupe_key=key
-        )
+        existing = self.store.find_pending(initiative_id=initiative_id, stage=stage, dedupe_key=key)
         if existing is not None:
             return existing
 
@@ -199,7 +204,7 @@ class DecisionService:
             dedupe_key=key,
         )
         self.store.save(decision)
-        if self.notifier is not None and self.enabled:
+        if notify and self.notifier is not None and self.enabled:
             results = await self.notifier.send(
                 title=f"[需要决策] {initiative_id} · {stage or 'mission'}",
                 body=self._body(decision),
@@ -250,7 +255,9 @@ class DecisionService:
                 reason=f"`{by}` is not the bound decider for this decision",
             )
         if decision.status == "answered":
-            return AnswerOutcome(decision=decision, accepted=False, duplicate=True, reason="already answered")
+            return AnswerOutcome(
+                decision=decision, accepted=False, duplicate=True, reason="already answered"
+            )
         if decision.status != "pending":
             return AnswerOutcome(
                 decision=decision, accepted=False, reason=f"decision is {decision.status}"
@@ -273,9 +280,7 @@ class DecisionService:
             if not decision.is_overdue(moment):
                 continue
             decision.status = "expired"
-            decision.fallback_reason = (
-                f"no answer within {decision.sla_seconds:.0f}s — applying `{decision.fallback_action}`"
-            )
+            decision.fallback_reason = f"no answer within {decision.sla_seconds:.0f}s — applying `{decision.fallback_action}`"
             self.store.save(decision)
             expired.append(decision)
         return expired

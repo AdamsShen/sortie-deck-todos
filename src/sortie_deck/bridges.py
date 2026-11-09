@@ -9,15 +9,22 @@ from typing import Any
 
 from pydantic import BaseModel
 
-# Providers that can carry an inbound human decision back into a mission
-PROVIDERS: tuple[str, ...] = ("slack", "feishu", "dingtalk")
+# Providers that can carry an inbound human decision back into a mission.
+# wecom 同时覆盖「企业微信智能机器人」与「微信客服」，二者会话 id 语义不同，
+# 故映射表用 chat_type 区分 single / group，避免私聊和群聊 id 撞车。
+PROVIDERS: tuple[str, ...] = ("slack", "feishu", "dingtalk", "wecom")
 
 
 class BridgeMapping(BaseModel):
     channel_id: str
     initiative_id: str
-    provider: str  # slack | feishu | dingtalk
+    provider: str  # slack | feishu | dingtalk | wecom
     label: str = ""
+    # single（单聊）| group（群聊）；旧记录无此字段时按 group 处理，
+    # 因为历史接入的都是群机器人回调。
+    chat_type: str = "group"
+    # 绑定操作人（工作区级绑定：谁把这个会话接到任务上的，便于审计）
+    created_by: str = ""
 
 
 class BridgeStore:
@@ -38,7 +45,9 @@ class BridgeStore:
         rows = [
             r
             for r in rows
-            if not (r.get("provider") == mapping.provider and r.get("channel_id") == mapping.channel_id)
+            if not (
+                r.get("provider") == mapping.provider and r.get("channel_id") == mapping.channel_id
+            )
         ]
         rows.append(mapping.model_dump())
         self._save(rows)
@@ -106,9 +115,7 @@ def feishu_text_from_payload(payload: dict[str, Any]) -> tuple[str | None, str, 
     chat_id = str(message.get("chat_id") or event.get("chat_id") or "")
     sender = event.get("sender") or {}
     author = str(
-        (sender.get("sender_id") or {}).get("open_id")
-        or sender.get("open_id")
-        or "feishu"
+        (sender.get("sender_id") or {}).get("open_id") or sender.get("open_id") or "feishu"
     )
     content_raw = message.get("content") or "{}"
     try:
@@ -143,6 +150,37 @@ def dingtalk_text_from_payload(payload: dict[str, Any]) -> tuple[str | None, str
     )
     author = str(payload.get("senderNick") or payload.get("senderId") or "dingtalk")
     return (channel or None), author, text.strip()
+
+
+def wecom_text_from_payload(payload: dict[str, Any]) -> tuple[str | None, str, str]:
+    """Return (chat_id, author_name, text) for WeCom AI-bot callbacks.
+
+    长连接帧形如 ``{"cmd": "aibot_msg_callback", "body": {...}}``：``body`` 内
+    ``chatid`` 是会话标识、``chattype`` 为 single/group、``from.userid`` 是发送人。
+    为兼容「URL 回调解密后直接拿到 body」的场景，也接受不带 ``cmd`` 外壳的扁平结构。
+    """
+    body = payload.get("body") if isinstance(payload.get("body"), dict) else payload
+    text_block = body.get("text")
+    if isinstance(text_block, dict):
+        text = str(text_block.get("content") or "")
+    else:
+        text = str(body.get("content") or text_block or "")
+    channel = str(body.get("chatid") or body.get("chat_id") or body.get("conversation_id") or "")
+    sender = body.get("from") or {}
+    author = str(
+        (sender.get("userid") if isinstance(sender, dict) else "") or body.get("sender") or "wecom"
+    )
+    return (channel or None), author, text.strip()
+
+
+def wecom_chat_type(payload: dict[str, Any]) -> str:
+    """返回 ``single`` 或 ``group``，写入 BridgeMapping.chat_type。
+
+    企微私聊 chatid 与群聊 chatid 位于不同命名空间，混存会让同一 id 的
+    映射互相覆盖，因此绑定与解析两侧都必须带上这个维度。
+    """
+    body = payload.get("body") if isinstance(payload.get("body"), dict) else payload
+    return "single" if str(body.get("chattype") or "").lower() == "single" else "group"
 
 
 class MapBridgeRequest(BaseModel):
