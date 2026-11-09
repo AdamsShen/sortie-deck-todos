@@ -3,6 +3,8 @@
 #                --build-arg PYTHON_IMAGE=<mirror>/library/python:3.12-slim -t sortie-deck .
 ARG NODE_IMAGE=node:22-bookworm-slim
 ARG PYTHON_IMAGE=python:3.12-slim-bookworm
+# pip 源：受限网络/国内构建可传镜像源（dsh 运行时 wheel 约 95MB，直连 pypi 常超时）
+ARG PIP_INDEX_URL="https://pypi.org/simple"
 
 # ---------- 前端构建 ----------
 FROM ${NODE_IMAGE} AS web
@@ -37,9 +39,10 @@ RUN if [ -n "$APT_MIRROR" ]; then \
     && rm -rf /var/lib/apt/lists/*
 
 # 先装依赖再拷源码，最大化利用构建缓存
+ARG PIP_INDEX_URL
 COPY pyproject.toml README.md ./
 COPY src/ ./src/
-RUN pip install -e .
+RUN pip install --index-url "${PIP_INDEX_URL}" -e .
 
 # 前端产物：直接在仓库布局下（TDT_WEB_DIST 指向这里，不依赖 __file__ 推导）
 COPY --from=web /web/dist ./apps/web/dist
@@ -79,9 +82,11 @@ RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && node -v && npm -v
 
-# claude-agent-sdk 在 optional-dependencies 里（pyproject: harness-claude），
-# 基础镜像的 `pip install -e .` 不会装它，probe 会直接 missing。
-RUN pip install -e ".[harness-claude]"
+# harness 依赖都在 optional-dependencies 里（pyproject: harness-claude / harness-dsh），
+# 基础镜像的 `pip install -e .` 不会装它们，probe 会直接 missing。
+# PIP_INDEX_URL 在文件顶部声明，这里复用（dsh 运行时 wheel 约 95MB）。
+ARG PIP_INDEX_URL
+RUN pip install --index-url "${PIP_INDEX_URL}" -e ".[harness-claude,harness-dsh]"
 
 # claude-agent-sdk 的 wheel 自带原生 CLI（_bundled/claude，实测 314MB），
 # 而 SDK 的 _find_cli() 优先用它。所以不再 npm 安装 @anthropic-ai/claude-code
