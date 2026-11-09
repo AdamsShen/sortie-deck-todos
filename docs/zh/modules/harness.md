@@ -55,10 +55,20 @@ HarnessProvider(Protocol)
 | 名称 | 接入方式 | 说明 |
 |------|----------|------|
 | `claude_code` | `claude-agent-sdk`（`query()` + `resume`） | 权限模式取 `TDT_CODING_PERMISSION_MODE`；需 `ANTHROPIC_API_KEY` |
+| `dsh` | 官方 `deepseek-harness-sdk`（`DeepSeekHarness` + `resume_session`，stdio JSON-RPC + 随包运行时） | 凭据 `TDT_DSH_API_KEY` 或 `DEEPSEEK_API_KEY`；profile `sdk`；沙箱 `TDT_DSH_PERMISSION_MODE`（默认 `workspace-write`）；每轮新进程靠 resume 续跑，见「2.1 DSH 说明」 |
 | `opencode` | HTTP 调云端部署的 `opencode serve`（`TDT_OPENCODE_BASE_URL`） | 服务端接入，不起本地 CLI |
 | `codex` | 云端容器内 `codex exec --json` | 会话续用 `codex exec resume`；凭据认 `OPENAI_API_KEY` / `CODEX_API_KEY` 或 `$CODEX_HOME/auth.json`（`codex login`）；沙箱取 `TDT_CODEX_SANDBOX`（默认 `workspace-write`）；兼容 `item.completed` 新版事件与旧版 `agent_message` |
 | `cursor` | `cursor-agent -p --output-format json`（云端容器） | `CURSOR_API_KEY` / `cursor-agent login` |
 | `mock` | 内置回声 | 永远可用的回退 |
+
+### 2.1 DSH（DeepSeek Harness）说明
+
+- **依赖**：`pip install -e ".[harness-dsh]"`（精确 pin `deepseek-harness-sdk==0.2.1rc2`，随包附带同版本运行时，约 95MB/平台，**不需要系统 Node**）。
+- **隔离**：每个任务独立 `DSH_HOME`（`<data_dir>/dsh_home/<initiative_id>`），不读 `~/.dsh`；默认 patch 关闭会话日志上传（`session-log-deepseek`，否则每轮都会把会话事件发给 DeepSeek），并切断宿主机技能根（`skill-filesystem.includeDefaultRoots: false`），避免 `~/.agents/skills` 被注入任务提示。
+- **生命周期**：执行器不调用 `provider.close()`，且 `Session.run()` 阻塞、无 cancel → provider 每轮新建子进程、跑完即关，多轮靠 `resume_session(native_id)` 续跑（实测跨进程恢复可用，冷启动约 0.7s）；单轮带看门狗，超时直接关进程逼它退出。
+- **阶段能力**：`disallowed_tools` 转成 DSH 的「禁用整行」patch（Bash→`tool-bash`、Grep/Glob→`tool-fs-search`、Task→`tool-subagent`、WebFetch/WebSearch→`tool-web`、TodoWrite→`tool-todo`）；**`Read` 无法单独禁用**（`tool-fs` 同时注册 read/write/edit），会在日志记 warn。阶段 MCP 通过动态 insert `@deepseek-ai/dsh-mcp-client` 挂载，只支持 `stdio` 与 `streamable-http`，`sse` 会跳过并记 warn。
+- **已知差距**：一个会话只有一个可写根，`extra_dirs` 拿不到写权限（读不受限，产物走既有归档兜底）；没有回合上限配置，只能靠请求/阶段超时；事件里没有 token 用量与成本，成本统计不纳入本期。
+- **安全提示**：DSH 沙箱只限制**写**，读不受限（能读 `~/.ssh`、`.env` 等），云端必须靠容器隔离，不要把密钥放在 agent 可读路径。
 
 选择与锁定：
 

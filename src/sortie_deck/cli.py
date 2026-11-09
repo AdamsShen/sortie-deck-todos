@@ -266,7 +266,9 @@ def main(argv: list[str] | None = None) -> None:
     m_start.add_argument(
         "--track", default=None, choices=["express", "standard", "default", "research"]
     )
-    m_start.add_argument("--harness", default=None, help="claude_code / codex / cursor / mock")
+    m_start.add_argument(
+        "--harness", default=None, help="claude_code / dsh / opencode / codex / cursor / mock"
+    )
     m_start.add_argument("--wait", action="store_true", help="等到第一个门禁或终态")
     m_start.add_argument("--json", action="store_true")
     m_start.add_argument("--dry-run", action="store_true")
@@ -278,7 +280,9 @@ def main(argv: list[str] | None = None) -> None:
     m_create.add_argument(
         "--track", default=None, choices=["express", "standard", "default", "research"]
     )
-    m_create.add_argument("--harness", default=None, help="claude_code / codex / cursor / mock")
+    m_create.add_argument(
+        "--harness", default=None, help="claude_code / dsh / opencode / codex / cursor / mock"
+    )
     m_create.add_argument("--json", action="store_true")
     m_create.add_argument("--owner", default=None)
     _repo_opts(m_create)

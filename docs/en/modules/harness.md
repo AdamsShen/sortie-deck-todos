@@ -58,10 +58,20 @@ HarnessProvider(Protocol)
 | Name | Transport | Notes |
 |------|-----------|-------|
 | `claude_code` | `claude-agent-sdk` (`query()` + `resume`) | Permission mode from `TDT_CODING_PERMISSION_MODE`; needs `ANTHROPIC_API_KEY` |
+| `dsh` | official `deepseek-harness-sdk` (`DeepSeekHarness` + `resume_session`, stdio JSON-RPC with a bundled runtime) | credentials from `TDT_DSH_API_KEY` or `DEEPSEEK_API_KEY`; profile `sdk`; sandbox from `TDT_DSH_PERMISSION_MODE` (default `workspace-write`); a fresh runtime per turn, resumed by session id — see "2.1 DSH notes" |
 | `opencode` | HTTP to a deployed `opencode serve` (`TDT_OPENCODE_BASE_URL`) | server-side, no local CLI |
 | `codex` | `codex exec --json` inside the cloud container | session resume via `codex exec resume`; credentials from `OPENAI_API_KEY` / `CODEX_API_KEY` or `$CODEX_HOME/auth.json` (`codex login`); sandbox from `TDT_CODEX_SANDBOX` (default `workspace-write`); parses both `item.completed` and legacy `agent_message` events |
 | `cursor` | `cursor-agent -p --output-format json` (cloud container) | `CURSOR_API_KEY` / `cursor-agent login` |
 | `mock` | builtin echo | always-available fallback |
+
+### 2.1 DSH (DeepSeek Harness) notes
+
+- **Dependency**: `pip install -e ".[harness-dsh]"` (pinned to `deepseek-harness-sdk==0.2.1rc2`; the wheel bundles the matching runtime, ~95MB per platform — **no system Node required**).
+- **Isolation**: each mission gets its own `DSH_HOME` (`<data_dir>/dsh_home/<initiative_id>`); `~/.dsh` is never read. The default patch disables session-log upload (`session-log-deepseek` — otherwise every turn ships session events to DeepSeek) and cuts host skill roots (`skill-filesystem.includeDefaultRoots: false`) so `~/.agents/skills` cannot leak into the task prompt.
+- **Lifecycle**: the executor never calls `provider.close()` and `Session.run()` blocks without a cancel handle, so the provider spawns a fresh runtime per turn, closes it in `finally`, and resumes via `resume_session(native_id)` (verified cross-process; ~0.7s cold start). A per-turn watchdog closes the runtime on timeout.
+- **Stage capabilities**: `disallowed_tools` become "disable the whole plugin row" patches (Bash→`tool-bash`, Grep/Glob→`tool-fs-search`, Task→`tool-subagent`, WebFetch/WebSearch→`tool-web`, TodoWrite→`tool-todo`); **`Read` cannot be disabled alone** (`tool-fs` owns read/write/edit) and is logged as a warning. Stage MCP servers are mounted by inserting `@deepseek-ai/dsh-mcp-client` patches — `stdio` and `streamable-http` only; `sse` is skipped with a warning.
+- **Known gaps**: one writable root per session, so `extra_dirs` get no write access (reads are unrestricted; artifacts rely on the existing archive fallback); no max-turn knob (only request/stage timeouts); no token usage or cost in events.
+- **Security**: the DSH sandbox limits **writes only** — reads are unrestricted (`~/.ssh`, `.env` are reachable), so cloud deployments must rely on container isolation and must not leave secrets on any path the agent can read.
 
 Selection & locking:
 

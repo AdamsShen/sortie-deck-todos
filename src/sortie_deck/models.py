@@ -355,7 +355,7 @@ class Initiative(BaseModel):
     stage_started_stage: str = ""
     thread_id: str = Field(default_factory=lambda: new_id("thr_"))
     room_id: str = Field(default_factory=lambda: new_id("squad_"))
-    # Agent harness this mission runs on (claude_code | opencode | codex | cursor | mock).
+    # Agent harness this mission runs on (claude_code | dsh | opencode | codex | cursor | mock).
     # Selected at creation; locked (harness_locked) once the pipeline starts —
     # a mid-run change requires the HITL `switch_harness` action.
     harness: str = "claude_code"
@@ -407,7 +407,7 @@ class StageContext(BaseModel):
     # Layered memory brief injected into the agent prompt. Sub-room conclusions
     # arrive here, scoped to the stage that requested them.
     memory_brief: str = ""
-    # Initiative-level agent harness (claude_code | opencode | codex | cursor | mock)
+    # Initiative-level agent harness (claude_code | dsh | opencode | codex | cursor | mock)
     harness: str = ""
     harness_locked: bool = False
     # 任务运行根目录：由编排器按自身配置注入（data_dir / 任务沙盒根）。

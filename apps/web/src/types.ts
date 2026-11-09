@@ -504,7 +504,7 @@ export interface Initiative {
   stage_started_stage?: string;
   thread_id?: string;
   room_id?: string;
-  // Initiative-locked agent harness (claude_code | opencode | codex | cursor | mock)
+  // Initiative-locked agent harness (claude_code | dsh | opencode | codex | cursor | mock)
   harness?: string;
   harness_locked?: boolean;
   roles: RoleAgent[];

@@ -1,7 +1,7 @@
 """多镜头自审（multi-lens self-review）——把 autopilot-harness 的「审查视角轮换」
 内化到编排层，不依赖任何宿主 hook。
 
-为什么放在编排层：宿主 hook 循环在 claude_code / codex / cursor / opencode 上语义
+为什么放在编排层：宿主 hook 循环在 claude_code / dsh / codex / cursor / opencode 上语义
 不一致（有的宿主还有 Stop 次数上限），而编排层可以直接复用 provider 会话续跑，
 对所有 harness 行为一致。设计取舍见
 ``docs/plans/2026-11-02-多镜头自审方案与改动说明.md``。
