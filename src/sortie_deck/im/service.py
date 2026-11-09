@@ -21,6 +21,7 @@ from sortie_deck.im.intent import IntentParser
 from sortie_deck.im.qr_login import QrLoginService
 from sortie_deck.im.router import ImDedupe, ImRouter
 from sortie_deck.im.runner import ImRunner
+from sortie_deck.im.slack import SlackProvider
 from sortie_deck.im.wechat import WeChatProvider
 from sortie_deck.im.wecom import WeComProvider
 
@@ -70,6 +71,7 @@ def build_stack(
         "feishu": FeishuProvider(resolve_secret),
         "dingtalk": DingTalkProvider(resolve_secret, action_url_builder=dingtalk_url),
         "wecom": WeComProvider(resolve_secret),
+        "slack": SlackProvider(resolve_secret),
     }
     manager = ImConnectionManager(
         store=store,

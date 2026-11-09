@@ -3870,12 +3870,20 @@ async def im_create(
     from sortie_deck.im.connection import ImConnectionError
 
     stack = _im()
+    app_id = (body.app_id or "").strip()
+    secret = (body.secret or "").strip() or None
+    if body.provider == "slack" and secret:
+        # Slack 没有「App ID + Secret」：表单两栏是 Bot Token 与 Signing Secret，
+        # 而 Bot Token 本身就是凭据，不能明文落在可回显的 app_id 列。
+        from sortie_deck.im.slack import fold_credentials
+
+        app_id, secret = fold_credentials(app_id, secret)
     try:
         conn = stack.store.create(
             provider=body.provider,
             mode=body.mode,
-            app_id=body.app_id,
-            secret=(body.secret or "").strip() or None,
+            app_id=app_id,
+            secret=secret,
             label=body.label,
             created_by=user.username,
         )
@@ -3904,6 +3912,17 @@ async def im_update(
     import sortie_deck.im.connection
 
     stack = _im()
+    # Slack 改 Signing Secret 时，前端 app_id 栏是空的（Bot Token 不在明文里），
+    # 直接覆盖会把 token 写丢。这里从旧密文补回 token 再合并。
+    if body.secret:
+        current = stack.store.get(conn_id)
+        if current.provider == "slack":
+            from sortie_deck.im.slack import fold_credentials, split_credentials
+
+            old_token, _ = split_credentials(stack.store.decrypt_secret(conn_id))
+            token = (body.app_id or "").strip() or old_token
+            body.app_id, body.secret = fold_credentials(token, body.secret)
+
     # 换 mode 前先把状态打回 unconfigured：平台侧「长连接 / 回调」互斥，
     # 不先断开会让旧连接继续占着，表现为"改了设置没生效"。
     if body.mode is not None:
@@ -4006,6 +4025,55 @@ async def im_chats(conn_id: str, _user: PublicUser = Depends(require_user)) -> d
     return {"chats": rows}
 
 
+async def _slack_webhook(stack: Any, request: Request, raw: bytes) -> Any:
+    """Slack 入站：Events API（JSON）与 Interactivity（form）两套 Content-Type。"""
+    from sortie_deck.im import slack as slack_mod
+
+    conn = stack.store.get_by_provider("slack")
+    if conn is None:
+        raise HTTPException(404, "Slack 尚未配置：请先在「设置 → IM 集成」注册")
+
+    content_type = request.headers.get("content-type", "")
+    if "application/x-www-form-urlencoded" in content_type:
+        form = await request.form()
+        raw_payload = str(form.get("payload") or "")
+        if not raw_payload:
+            raise HTTPException(400, "missing payload")
+        try:
+            payload = json.loads(raw_payload)
+        except json.JSONDecodeError:
+            raise HTTPException(400, "invalid payload json") from None
+    else:
+        try:
+            payload = json.loads(raw.decode("utf-8") or "{}")
+        except json.JSONDecodeError:
+            raise HTTPException(400, "invalid json") from None
+
+    # 签名必须对原始 body 算：form 解析会重编码，拿解析后的值验签永远不匹配
+    secret = stack.store.decrypt_secret(conn.id)
+    ok = slack_mod.verify_slack_signature(
+        signing_secret=slack_mod.signing_secret_of(secret),
+        timestamp=request.headers.get("x-slack-request-timestamp", ""),
+        body=raw,
+        signature=request.headers.get("x-slack-signature", ""),
+    )
+    if not ok:
+        raise HTTPException(401, "invalid slack signature")
+
+    if payload.get("type") == "url_verification":
+        # 地址校验也要过验签：否则任何人都能确认本实例是否为该应用的回调
+        return {"challenge": payload.get("challenge")}
+
+    adapter = stack.manager.providers.get("slack")
+    if adapter is None:
+        raise HTTPException(404, "Slack 渠道未启用")
+    event = adapter.parse_inbound(payload)
+    if event is None:
+        return {"ok": True, "ignored": True}
+    stack.router.schedule(event)
+    return {"ok": True}
+
+
 @app.post("/api/im/webhook/{provider}")
 async def im_webhook(provider: str, request: Request) -> Any:
     """统一入站入口。
@@ -4017,6 +4085,12 @@ async def im_webhook(provider: str, request: Request) -> Any:
 
     stack = _im()
     raw = await request.body()
+
+    # Slack 的按钮回调是 form-encoded（真正的 JSON 在 payload 字段里），
+    # 跟其它平台的纯 JSON body 不是一回事，必须先分流再解析。
+    if provider == "slack":
+        return await _slack_webhook(stack, request, raw)
+
     try:
         payload = json.loads(raw.decode("utf-8") or "{}")
     except json.JSONDecodeError:

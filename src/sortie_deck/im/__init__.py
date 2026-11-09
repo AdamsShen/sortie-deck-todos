@@ -106,9 +106,13 @@ def provider_catalog() -> list[dict[str, Any]]:
             "name": "Slack",
             "beta": False,
             "recommended": False,
-            "modes": ["stream", "webhook"],
+            "modes": ["webhook"],
             "fields": ["bot_token", "signing_secret"],
-            "hint": "生产建议用 Events API URL；Socket Mode 适合内网与本地调试。",
+            "hint": (
+                "在 Slack 应用里开启 Event Subscriptions 与 Interactivity，"
+                "两者都指向 /api/im/webhook/slack。"
+                "Socket Mode 需要 app-level token（xapp-），当前表单放不下，暂不支持。"
+            ),
             "lede": "填写 Bot Token 与 Signing Secret，把工作区绑定到 Slack 应用。",
             "guide_url": "https://api.slack.com/apis/events-api",
         },
