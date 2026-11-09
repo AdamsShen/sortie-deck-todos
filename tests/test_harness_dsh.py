@@ -57,16 +57,19 @@ class _FakeHarness:
         self.kwargs = kwargs
         self.closed = False
         self.prompts: list[str] = []
+        self.calls: list[tuple[str, str]] = []
         self.result = _FakeResult()
         type(self).instances.append(self)
 
     def start_session(self, session_id=None):
+        self.calls.append(("start", session_id))
         if session_id in type(self).existing:
             raise RuntimeError(f'session "{session_id}" already exists')
         type(self).existing.add(session_id)
         return _FakeSession(self, session_id)
 
     def resume_session(self, session_id):
+        self.calls.append(("resume", session_id))
         if type(self).resume_fails:
             raise RuntimeError("session not found")
         return _FakeSession(self, session_id)
@@ -336,6 +339,56 @@ async def test_activity_callback_failure_does_not_break_turn(monkeypatch, dsh_se
     await asyncio.sleep(0.05)
 
     assert reply.status == "ok"
+
+
+async def test_send_resumes_first_then_starts_when_missing(monkeypatch, dsh_settings):
+    """首次运行必然恢复失败：必须先 resume 探测，再按同一 id 新建。"""
+    _install_fake(monkeypatch)
+    _FakeHarness.resume_fails = True
+    provider = DshProvider()
+    session = await provider.start_session(initiative_id="ini_test", stage="build")
+
+    reply = await provider.send(session, "go", cwd="/tmp/worktree")
+
+    assert reply.status == "ok"
+    calls = _FakeHarness.instances[-1].calls
+    assert [c[0] for c in calls] == ["resume", "start"]
+    # 两条路径用的是同一个 id，不会凭空换会话
+    assert calls[0][1] == calls[1][1]
+
+
+async def test_send_retries_with_fresh_session_on_conflict(monkeypatch, dsh_settings):
+    """同一 id 已存在（多轮/并发自审）时不能静默失败，要换独立会话重试一次。"""
+
+    class _ConflictSession(_FakeSession):
+        def run(self, prompt, on_notification=None):
+            if not self.harness.raised:
+                self.harness.raised = True
+                raise RuntimeError(f'session "{self.id}" already exists')
+            return super().run(prompt, on_notification)
+
+    class _ConflictHarness(_FakeHarness):
+        raised = False
+
+        def start_session(self, session_id=None):
+            self.calls.append(("start", session_id))
+            return _ConflictSession(self, session_id)
+
+        def resume_session(self, session_id):
+            self.calls.append(("resume", session_id))
+            return _ConflictSession(self, session_id)
+
+    _install_fake(monkeypatch, _ConflictHarness)
+    provider = DshProvider()
+    session = await provider.start_session(initiative_id="ini_test", stage="build")
+
+    reply = await provider.send(session, "review round", cwd="/tmp/worktree")
+
+    assert reply.status == "ok"
+    calls = _FakeHarness.instances[-1].calls
+    assert [c[0] for c in calls] == ["resume", "start"]
+    # 重试会话必须带随机后缀，避免再次撞上同一个 id
+    assert calls[1][1].startswith(calls[0][1]) and calls[1][1] != calls[0][1]
 
 
 def test_provider_cannot_widen_writable_dirs():

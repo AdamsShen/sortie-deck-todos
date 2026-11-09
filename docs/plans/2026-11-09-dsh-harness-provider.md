@@ -141,6 +141,19 @@ Agent harness 抽象已经支持 `claude_code` / `opencode` / `codex` / `cursor`
 | 无会话日志上传、无宿主机技能泄漏 | ✅ PoC 实测 |
 | 镜像内安装与 probe | ✅ `runtime-harness` 构建成功，镜像内 `probe dsh=ok` |
 
+## 8.1 首次真机任务暴露的问题（已修复）
+
+2026-11-09 首次用 dsh 跑真实任务（`ini_db3b6603109d`）时发现：eng_implement 的 5 轮自审全部
+报 `JsonRpcError: session "hs_dsh_..." already exists`，但阶段仍记为 `ok`，属静默降级。
+
+根因：执行器只在「小群讨论」路径把 `reply.native_id` 回写到 session，主回合与自审轮不写；
+provider 在 `native_id` 为空时直接 `start_session(同一 id)`，而 DSH 的创建发生在 `run()`，
+同一 id 已落盘就报「已存在」。
+
+修复：`_open_session()` 改为「先 resume、失败再按同一 id 新建」，并在 `run()` 抛冲突类错误
+（already exists / occupied / locked）时换独立后缀会话重试一次。真实运行时验证：不回写
+`native_id` 的连续两轮、以及两轮并发都能成功。
+
 ## 9. 风险与回滚
 
 | 风险 | 处理 |

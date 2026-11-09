@@ -303,6 +303,34 @@ def _native_session_id(session: HarnessSession) -> str:
     return _SERVER_NAME_RE.sub("-", raw)[:64]
 
 
+def _open_session(harness: Any, session_id: str, session: HarnessSession) -> Any:
+    """优先恢复已有会话，其次按同一 id 新建。
+
+    SDK 的 ``start_session`` 只是本地句柄，真正的创建发生在 ``run()``。先 resume
+    可以覆盖「同一阶段第二轮」：执行器并不把 ``reply.native_id`` 回写到 session，
+    只有小群讨论那条路径会写。恢复失败（新任务首次运行）再新建。
+    """
+    try:
+        return harness.resume_session(session_id)
+    except Exception as exc:  # noqa: BLE001 — 首次运行必然恢复失败，属正常分支
+        logger.debug(
+            "DSH 无可恢复会话，按新会话启动: session=%s native=%s error=%s",
+            session.id,
+            session_id,
+            type(exc).__name__,
+        )
+        return harness.start_session(session_id)
+
+
+# 运行时把并发/重复创建同一会话报成这些文案，据此降级到独立会话
+_CONFLICT_HINTS = ("already exists", "occupied", "locked")
+
+
+def _is_session_conflict(exc: BaseException) -> bool:
+    blob = str(exc).lower()
+    return any(hint in blob for hint in _CONFLICT_HINTS)
+
+
 def _error_of(events: list[dict[str, Any]]) -> dict[str, Any] | None:
     """取最后一个 turn/end 的 error 描述（凭据/配额等结构化信息在这里）。"""
     for event in reversed(events or []):
@@ -495,26 +523,27 @@ class DshProvider:
         timer.daemon = True
         _notify = _make_notifier(on_activity, loop)
 
-        native_id = session.native_id
+        native_id = session.native_id or _native_session_id(session)
         try:
             timer.start()
+            dsh_session = _open_session(harness, native_id, session)
             try:
-                if native_id:
-                    dsh_session = harness.resume_session(native_id)
-                else:
-                    dsh_session = harness.start_session(_native_session_id(session))
-            except Exception as exc:  # noqa: BLE001 — 会话丢失/被占用时回退新会话
+                result = dsh_session.run(prompt, on_notification=_notify)
+            except Exception as exc:  # noqa: BLE001 — 并发/续跑共用会话 id 时会「已存在」
+                if not _is_session_conflict(exc):
+                    raise
+                # 执行器不回写 native_id 时，同阶段第二轮会复用同一 id 直接 run，
+                # 运行时判定「already exists」；并发自审轮也会撞锁。改用独立会话
+                # 重试一次，否则自审会静默全失败（2026-11-09 实测 5 轮全挂）。
+                fresh = f"{native_id}-{uuid.uuid4().hex[:6]}"
                 logger.warning(
-                    "DSH 恢复会话失败，回退新会话: session=%s native=%s error=%s",
+                    "DSH 会话冲突，改用独立会话重试: session=%s native=%s error=%s",
                     session.id,
                     native_id,
-                    type(exc).__name__,
+                    str(exc)[:160],
                 )
-                dsh_session = harness.start_session(
-                    f"{_native_session_id(session)}-{uuid.uuid4().hex[:6]}"
-                )
-                native_id = ""
-            result = dsh_session.run(prompt, on_notification=_notify)
+                dsh_session = harness.start_session(fresh)
+                result = dsh_session.run(prompt, on_notification=_notify)
         except Exception as exc:  # noqa: BLE001 — 进程被杀/协议断开都在这里收敛
             if fired["timeout"]:
                 return HarnessReply(
