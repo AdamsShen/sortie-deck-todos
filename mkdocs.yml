@@ -126,6 +126,7 @@ nav:
       - Remote MCP: modules/mcp.md
       - Collaboration: modules/collaboration.md
       - Mission Memory: modules/mission-memory.md
+      - IM Integration: modules/im.md
   - Principles:
       - Mission Memory Principles: principles/mission-memory.md
   - Notes:
