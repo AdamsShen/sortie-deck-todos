@@ -716,6 +716,15 @@ def _supports_extra_dirs(provider: Any) -> bool:
     return any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
 
 
+def _supports_extra_write_dirs(provider: Any) -> bool:
+    """provider 是否能把 ``extra_dirs`` 变成真实可写目录。
+
+    DSH 的沙箱策略只允许一个 workspace 根（extra writable roots 不在策略内），
+    传了也只是误导；能力位默认为 True，旧 provider 行为不变。
+    """
+    return bool(getattr(provider, "supports_extra_write_dirs", True))
+
+
 def _supports_on_activity(provider: Any) -> bool:
     """provider 是否接受 ``on_activity``（工具级进度回调，旧签名 provider 不支持）。"""
     import inspect
@@ -771,7 +780,7 @@ async def _send_turn(
 ) -> Any:
     """统一的 provider 调用：按能力决定是否传额外参数（旧签名 provider 不传）。"""
     kwargs: dict[str, Any] = {"cwd": str(cwd), "context_pack": pack}
-    if extra_dirs and _supports_extra_dirs(provider):
+    if extra_dirs and _supports_extra_dirs(provider) and _supports_extra_write_dirs(provider):
         kwargs["extra_dirs"] = list(extra_dirs)
     if on_activity is not None and _supports_on_activity(provider):
         kwargs["on_activity"] = on_activity

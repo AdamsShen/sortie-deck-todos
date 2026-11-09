@@ -1069,7 +1069,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--harness",
         default=SCRIPTED,
-        choices=[SCRIPTED, "claude_code", "codex", "opencode", "cursor"],
+        choices=[SCRIPTED, "claude_code", "dsh", "codex", "opencode", "cursor"],
         help="harness 环境；mock=剧本化回归，其余为真实 agent 环境",
     )
     parser.add_argument(

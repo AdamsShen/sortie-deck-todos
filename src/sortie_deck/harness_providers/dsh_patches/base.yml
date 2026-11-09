@@ -1,0 +1,17 @@
+# DSH provider 的默认安全姿态（随包发布的静态 patch，进程级生效）。
+#
+# 1. 关闭会话事件上传：`session-log-deepseek` 默认开启，每轮都会把未被接受的
+#    会话日志事件随请求发给 DeepSeek（实测产生 delivery-accepted 事件）；
+#    企业数据面必须在 patch 层关掉。
+# 2. 切断宿主机用户级技能根：`skill-filesystem` 默认会扫描 $DSH_HOME/skills 与
+#    ~/.agents/skills，实测会把开发机上的技能注入任务提示词，必须隔离。
+#
+# 用户显式打开 TDT_DSH_SESSION_LOG_UPLOAD / 关闭 TDT_DSH_ISOLATE_SKILLS 时，
+# provider 会再追加一层覆盖 patch（见 dsh.py::_build_patches）。
+- id: session-log-deepseek
+  disabled: true
+- id: skill-filesystem
+  config:
+    includeDefaultRoots: false
+    customSkillDirs: []
+    watch: false

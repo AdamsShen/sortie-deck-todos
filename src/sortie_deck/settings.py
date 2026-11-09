@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     default_coding_executor: str = "auto"
     # --- agent harness (system-wide capability) ------------------------------
     # Initiative-level harness; locked once the mission starts.
-    # claude_code | opencode | codex | cursor | mock
+    # claude_code | dsh | opencode | codex | cursor | mock
     default_harness: str = "claude_code"
     # Probe cache TTL for harness availability checks (seconds)
     harness_probe_ttl: float = 60.0
@@ -131,6 +131,36 @@ class Settings(BaseSettings):
     # user/project/local；"none" 为 SDK 隔离模式（不加载本机 settings 与插件
     # hooks，避免开发机的 hook 打断云端 stage）；其余为逗号分隔的 source 列表。
     harness_setting_sources: str = ""
+    # --- DSH（DeepSeek Harness）provider --------------------------------------
+    # 官方 Python SDK 走 stdio NDJSON-RPC 驱动随包附带的 dsh 运行时（不需要系统
+    # Node）；会话落在任务级 dsh_home 下，每轮新进程靠 resume 续跑，见
+    # docs/plans/2026-11-09-dsh-harness-provider.md。
+    dsh_profile: str = "sdk"
+    # 模型路由（provider/model 是 DSH 侧的概念，与 llm_* 无关）
+    dsh_llm_provider: str = "deepseek-official"
+    dsh_model: str = "deepseek-v4-flash"
+    # 输出上限；0 = 用 profile 默认（实测 256000）
+    dsh_max_tokens: int = 0
+    # 推理强度 low|medium|high；空 = 用 profile 默认
+    dsh_reasoning_effort: str = ""
+    # read-only | workspace-write | danger-full-access。
+    # workspace-write 与 profile 的 ask 审批组合：越界写直接 fail closed。
+    dsh_permission_mode: str = "workspace-write"
+    # 任务级 DSH_HOME 根目录；空 = <data_dir>/dsh_home/<initiative_id>。
+    # 禁止指向 ~/.dsh：会把宿主机会话/技能带进任务。
+    dsh_home_root: str = ""
+    # 凭据：空则读环境变量 DEEPSEEK_API_KEY；base_url 可指向兼容代理
+    dsh_api_key: str | None = None
+    dsh_base_url: str | None = None
+    # 单轮请求超时（秒）；0 = 回落 coding_timeout_seconds。
+    # DSH 没有回合上限配置，长回合只能靠超时兜底。
+    dsh_request_timeout_seconds: float = 0.0
+    # 会话事件默认随请求上传到 DeepSeek（session-log-deepseek）；企业数据面必须关掉
+    dsh_session_log_upload: bool = False
+    # 不扫描宿主机用户级技能根（~/.agents/skills、$DSH_HOME/skills）
+    dsh_isolate_skills: bool = True
+    # 用任务级 HOME 隔离（默认关闭：git commit 等仍需要 ~/.gitconfig）
+    dsh_isolate_home: bool = False
     # --- 上下文成本控制（见 docs/plans/2026-10-27-harness-context-cost.md）----
     # 上游产物在 prompt 里只给「摘要 + 路径」，让 agent 需要时自行 Read。
     # 关闭后回落为旧行为（prd.md 全文注入），用于灰度对比与回退。
@@ -193,7 +223,7 @@ class Settings(BaseSettings):
     # 编码型 agent loop 单回合实测常在 5–10 分钟（2026-11-03 HK 实测 claude_code 单回合
     # 324s），统一 300s 会让每一轮都卡在超时线上，白等 3×5 分钟。
     review_lens_timeout_by_harness: str = (
-        "claude_code=900,codex=900,cursor=900,opencode=900,mock=30"
+        "claude_code=900,codex=900,cursor=900,opencode=900,dsh=900,mock=30"
     )
     # 自审熔断：任一轮超时后最多再补一轮，其余轮次标 skipped（不再各等一个超时窗口）
     review_lens_circuit_breaker: bool = True

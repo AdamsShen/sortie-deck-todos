@@ -26,10 +26,11 @@ from pydantic import BaseModel, Field
 from sortie_deck.models import utc_now
 
 #: All registered harness names, in display order.
-HARNESS_NAMES: tuple[str, ...] = ("claude_code", "opencode", "codex", "cursor", "mock")
+HARNESS_NAMES: tuple[str, ...] = ("claude_code", "dsh", "opencode", "codex", "cursor", "mock")
 
 HARNESS_LABELS: dict[str, str] = {
     "claude_code": "Claude Code",
+    "dsh": "DeepSeek Harness",
     "opencode": "OpenCode",
     "codex": "Codex",
     "cursor": "Cursor",
@@ -154,6 +155,7 @@ def build_harness_registry() -> HarnessRegistry:
     from sortie_deck.harness_providers.claude_code import ClaudeCodeProvider
     from sortie_deck.harness_providers.codex import CodexProvider
     from sortie_deck.harness_providers.cursor import CursorProvider
+    from sortie_deck.harness_providers.dsh import DshProvider
     from sortie_deck.harness_providers.mock import MockHarnessProvider
     from sortie_deck.harness_providers.opencode import OpenCodeProvider
     from sortie_deck.settings import settings
@@ -161,6 +163,7 @@ def build_harness_registry() -> HarnessRegistry:
     registry = HarnessRegistry(probe_ttl=settings.harness_probe_ttl)
     for provider in (
         ClaudeCodeProvider(),
+        DshProvider(),
         OpenCodeProvider(),
         CodexProvider(),
         CursorProvider(),

@@ -77,6 +77,9 @@ otel = [
 dev = ["pytest>=8.3.0", "pytest-asyncio>=0.24.0", "ruff>=0.7.0"]
 # Agent harness providers (cloud runtime = the env this app runs in)
 harness-claude = ["claude-agent-sdk>=0.1.0"]
+# DeepSeek Harness：精确 pin 到 rc（官方声明会有 breaking change），运行时二进制
+# 由 deepseek-harness-runtime-bin 同版本随包附带（约 95MB/平台，不需要系统 Node）。
+harness-dsh = ["deepseek-harness-sdk==0.2.1rc2"]
 # IM 长连接 SDK。不装也能用 URL 回调模式；装了才支持「WebSocket 长连接」。
 im = ["lark-oapi>=1.4.0", "dingtalk-stream>=0.20.0"]
 docs = [
