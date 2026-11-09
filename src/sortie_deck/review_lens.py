@@ -187,7 +187,7 @@ def load_review_config(harness: str | None = None) -> ReviewConfig:
         rounds = int(getattr(settings, "review_lens_rounds", 3) or 3)
     except (TypeError, ValueError):
         rounds = 3
-    raw_stages = str(getattr(settings, "review_lens_stages", "build,selftest") or "")
+    raw_stages = str(getattr(settings, "review_lens_stages", "build") or "")
     stages = frozenset(part.strip().lower() for part in raw_stages.split(",") if part.strip())
     try:
         configured = float(getattr(settings, "review_lens_timeout_seconds", 0.0) or 0.0)
@@ -223,10 +223,15 @@ def load_review_config(harness: str | None = None) -> ReviewConfig:
 
 
 def stage_in_review_scope(stage: str, cfg: ReviewConfig) -> bool:
-    """阶段是否在自审档位内（build / selftest / integrate 三类档位）。"""
+    """阶段是否在自审档位内（build / integrate 两类档位）。
+
+    自测阶段（``*_selftest``）不在范围内：它已改为「跑一次 runner → 读
+    selftest_result.json → 只修失败项」，本阶段 diff 里只有注入的
+    ``scripts/selftest_runner.sh`` 与几个结果文件，审这些等于重复审编码阶段的
+    产出。自测的质量兜底交给 selftest_result.json 与下游 QA，不再消耗 N 轮模型
+    往返。``TDT_REVIEW_LENS_STAGES`` 里写 ``selftest`` 也不再生效。
+    """
     if "build" in cfg.stages and stage in ENG_BUILD_STAGES:
-        return True
-    if "selftest" in cfg.stages and stage.endswith("_selftest"):
         return True
     return "integrate" in cfg.stages and stage == "eng_integrate"
 

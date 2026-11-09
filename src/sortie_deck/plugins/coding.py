@@ -443,6 +443,18 @@ async def _git_diff(
     return "".join(parts)
 
 
+def _stage_allows_commit(stage: str) -> bool:
+    """本阶段是否允许 agent 提交代码。
+
+    编码阶段（ENG_BUILD_STAGES）必须禁止：阶段收尾用 ``git diff`` 采 diff.patch
+    与自审范围，一旦 agent 提交，工作区变干净，diff 直接为空。自测 / QA 阶段允许
+    按修复粒度提交（一个修复一次提交），它们不依赖 diff 采集。
+    """
+    from sortie_deck.models import ENG_BUILD_STAGES
+
+    return str(stage or "") not in ENG_BUILD_STAGES
+
+
 def _repo_dirname(repo: RepoConfig) -> str:
     """Checkout dir name for a repo: explicit name → url basename minus .git."""
     if repo.name:
@@ -472,6 +484,7 @@ async def clone_repos(
     *,
     actor_user_id: str = "",
     resolver: Any | None = None,
+    allow_commit: bool = False,
 ) -> tuple[str, list[str]]:
     """Clone each mission repo into ``workspace/repos/<name>`` before coding.
 
@@ -481,7 +494,12 @@ async def clone_repos(
 
     任务分支策略：clone 成功后基于目标分支 HEAD 创建任务分支
     ``sortie/<initiative_id>-<repo>``（见 git_publish.mission_branch），
-    agent 在任务分支上迭代，push 后建 MR。分支幂等：已存在则复用（重试场景）。
+    所有阶段都在该分支上迭代，最后由 git_publish 推送并建 MR。分支幂等：
+    已存在则复用（重试场景）。
+
+    提交策略（``allow_commit``）：编码阶段必须为 ``False`` —— 改动留在工作区，
+    阶段收尾才能用 ``git diff`` 采到 diff.patch 与自审范围；自测 / QA 阶段为
+    ``True``，允许「修一个问题提交一次」，便于返工时定位。两个阶段都不 push。
 
     凭据：``resolver`` 按仓库来源解析凭据（工作区仓库→工作区凭据，
     custom→actor 的个人凭据），HTTPS 走 askpass env 注入，密钥不进命令行。
@@ -660,11 +678,25 @@ async def clone_repos(
         + "\nExplore the code, implement the PRD changes inside these checkouts.\n"
     )
     if branch_notes:
-        section += (
-            "\nIMPORTANT — you are working on the mission's task branch; commit freely:\n"
-            + "\n".join(f"- {note}" for note in branch_notes)
-            + "\n"
-        )
+        if allow_commit:
+            # 自测 / QA 阶段：允许按修复粒度提交，便于返工时看清「哪次提交修的哪个问题」
+            section += (
+                "\nIMPORTANT — you are working on the mission's task branch; commit each fix:\n"
+                + "\n".join(f"- {note}" for note in branch_notes)
+                + "\nCommit once per fixed problem with a message naming the case or symptom,"
+                " but never `git push` — the orchestrator pushes and opens the MR.\n"
+            )
+        else:
+            # 编码阶段：改动必须留在工作区，否则阶段收尾的 git diff 采不到任何代码，
+            # diff.patch 与多镜头自审范围会一起落空（2026-11-06 贪吃蛇任务实测）。
+            section += (
+                "\nIMPORTANT — you are working on the mission's task branch,"
+                " but do NOT run `git commit` / `git push` in this stage:\n"
+                + "\n".join(f"- {note}" for note in branch_notes)
+                + "\nKeep every change in the working tree; the orchestrator captures"
+                " `diff.patch` and commits after QA. Committing here makes the stage diff"
+                " empty, so the self-review and the diff artifact silently lose all code.\n"
+            )
     # clone 完成后再打基线：agent 首轮编辑之前的工作区状态才是本阶段 diff 的起点
     await _shadow_baseline(workspace)
     return section, log
@@ -777,7 +809,11 @@ class ClaudeCodeExecutor:
         artifact_section, brief_log = await _artifact_brief_section(ctx)
         mcp_extra, mcp_log = await _mcp_prompt_and_log(ctx)
         repo_section, repo_log = await clone_repos(
-            ctx.repos, workspace, ctx.initiative_id, actor_user_id=ctx.actor_user_id
+            ctx.repos,
+            workspace,
+            ctx.initiative_id,
+            actor_user_id=ctx.actor_user_id,
+            allow_commit=_stage_allows_commit(ctx.stage),
         )
         checklist_section, review_section = _review_sections(ctx, workspace)
         mode = _permission_mode(ctx)
@@ -946,7 +982,11 @@ class CursorCliExecutor:
         prd = ctx.upstream_artifacts.get("prd.md", ctx.brief)
         artifact_section, brief_log = await _artifact_brief_section(ctx)
         repo_section, repo_log = await clone_repos(
-            ctx.repos, workspace, ctx.initiative_id, actor_user_id=ctx.actor_user_id
+            ctx.repos,
+            workspace,
+            ctx.initiative_id,
+            actor_user_id=ctx.actor_user_id,
+            allow_commit=_stage_allows_commit(ctx.stage),
         )
         checklist_section, review_section = _review_sections(ctx, workspace)
         query = f"{ctx.brief}\n{prd}\n{ctx.human_instruction or ''}"

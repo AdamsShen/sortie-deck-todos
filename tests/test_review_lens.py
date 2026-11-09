@@ -14,6 +14,7 @@ from sortie_deck.models import RoleId, StageContext
 from sortie_deck.review_lens import (
     LENSES,
     LensStatus,
+    ReviewConfig,
     ReviewScope,
     build_scope,
     build_skipped_log,
@@ -26,6 +27,7 @@ from sortie_deck.review_lens import (
     render_review_markdown,
     run_review_lenses,
     select_lenses,
+    stage_in_review_scope,
 )
 
 
@@ -67,6 +69,23 @@ def _review_text(
 
 
 # --- 视角与解析 ---------------------------------------------------------------
+
+
+def test_review_scope_covers_build_only_not_selftest():
+    """自测阶段脚本化后不再自审：档位里就算写了 selftest 也不生效。"""
+    cfg = ReviewConfig(
+        enabled=True,
+        rounds=3,
+        stages=frozenset({"build", "selftest", "integrate"}),
+        timeout=600.0,
+        blocking_policy="hitl",
+    )
+    assert stage_in_review_scope("eng_implement", cfg) is True
+    assert stage_in_review_scope("eng_backend", cfg) is True
+    assert stage_in_review_scope("eng_backend_selftest", cfg) is False
+    assert stage_in_review_scope("eng_selftest", cfg) is False
+    assert stage_in_review_scope("eng_integrate", cfg) is True
+    assert stage_in_review_scope("qa_verify", cfg) is False
 
 
 def test_select_lenses_light_and_full():

@@ -170,7 +170,10 @@ provider 会话上的下一次 `send()`，由编排层驱动，因此 claude_cod
 
 ### 9.2 多镜头自审
 
-编码/自测阶段收尾时在同一会话续跑 N 轮，每轮只换视角：
+编码阶段（`eng_implement` / `eng_ios` / `eng_android` / `eng_web` / `eng_backend` / `eng_agent`）
+收尾时在同一会话续跑 N 轮，每轮只换视角。自测阶段（`*_selftest`）已脚本化（runner 一次跑完、
+结果落 `selftest_result.json`），**不在这套自审的范围里**——它的 diff 只有注入的 runner 与几个
+结果文件，再审一遍等于重复审编码阶段，质量兜底改由 `selftest_result.json` 与下游 QA 承担。
 
 | 轮次 | 视角 | 允许改代码 |
 |---|---|---|
@@ -202,6 +205,22 @@ provider 会话上的下一次 `send()`，由编排层驱动，因此 claude_cod
 |---|---|---|
 | `TDT_REVIEW_LENSES_ENABLED` | `true` | 关闭即回旧行为 |
 | `TDT_REVIEW_LENS_ROUNDS` | `3` | 3 轻量 / >=5 全量（4 按轻量） |
-| `TDT_REVIEW_LENS_STAGES` | `build,selftest` | 逗号分隔，可加 `integrate` |
-| `TDT_REVIEW_LENS_TIMEOUT_SECONDS` | `300` | 单轮超时，只降级该轮 |
+| `TDT_REVIEW_LENS_STAGES` | `build` | 逗号分隔，可加 `integrate`；`selftest` 已不再生效 |
+| `TDT_REVIEW_LENS_TIMEOUT_SECONDS` | `0` | 单轮超时；0 = 按 harness 自适应（claude_code / codex / cursor / opencode = 900s，mock = 30s），只降级该轮 |
 | `TDT_REVIEW_BLOCKING_POLICY` | `hitl` | `hitl` / `fail` / `ignore` |
+
+### 9.5 提交策略（按阶段区分）
+
+| 阶段 | 是否允许 `git commit` | 原因 |
+|---|---|---|
+| 编码（`eng_implement` / `eng_ios` / `eng_android` / `eng_web` / `eng_backend` / `eng_agent`） | **禁止** | 阶段收尾靠 `git diff` 采集 `diff.patch` 与自审范围；提交后工作区变干净，diff 直接为空 |
+| 自测（`*_selftest`） | 允许，**一个修复一次提交** | 结果靠 `selftest_result.json` 判定，不依赖 diff；提交便于返工定位 |
+| QA（`qa_verify`） | 允许，**一个修复一次提交** | 同上；QA 只回归 `test_cases.md` 里判失败的用例 |
+| 返工轮（QA fail 打回 `eng_implement`） | **禁止** | 返工仍是编码阶段，产物与自审都依赖工作区 diff |
+
+任何阶段都不允许 `git push`：推送与建 MR 统一由 `git_publish` 在任务收尾执行。
+提示词由 `clone_repos(allow_commit=...)` 注入，调用方按阶段传值。
+
+> 历史教训（2026-11-06 贪吃蛇任务 `ini_6dc2ef0cb8a9`）：编码 agent 被另一段提示词
+> 允许「commit freely」，提交了 3242 行代码后工作区变干净，`diff.patch` 只剩 2 个
+> 过程文件、32 行，复杂度被判 `simple`，3 轮自审全部跳过。禁止提交后该问题不再发生。

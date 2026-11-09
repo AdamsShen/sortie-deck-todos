@@ -182,6 +182,13 @@ for every track.
 
 ### 9.2 Lens rounds
 
+Rounds run at the end of build stages only (`eng_implement` / `eng_ios` / `eng_android` /
+`eng_web` / `eng_backend` / `eng_agent`). Selftest stages (`*_selftest`) are script-driven
+(the injected runner executes the whole suite once and writes `selftest_result.json`) and are
+**no longer reviewed**: their diff only contains the injected runner plus a few result files,
+so reviewing it again would just repeat the build-stage review. Quality there is backed by
+`selftest_result.json` and the downstream QA stage instead.
+
 | Round | Lens | May edit code |
 |---|---|---|
 | 1 | Correctness & invariants (vs acceptance.json) | yes |
@@ -210,6 +217,24 @@ stage into `needs_hitl`; `fail` fails it, `ignore` only records.
 |---|---|---|
 | `TDT_REVIEW_LENSES_ENABLED` | `true` | off = legacy behaviour, no extra turns |
 | `TDT_REVIEW_LENS_ROUNDS` | `3` | 3 = light, >=5 = full (4 is treated as light) |
-| `TDT_REVIEW_LENS_STAGES` | `build,selftest` | comma separated; `integrate` optional |
-| `TDT_REVIEW_LENS_TIMEOUT_SECONDS` | `300` | per round; timeout only degrades that round |
+| `TDT_REVIEW_LENS_STAGES` | `build` | comma separated; `integrate` optional, `selftest` is a no-op |
+| `TDT_REVIEW_LENS_TIMEOUT_SECONDS` | `0` | per round; 0 = adapt per harness (claude_code / codex / cursor / opencode = 900s, mock = 30s); timeout only degrades that round |
 | `TDT_REVIEW_BLOCKING_POLICY` | `hitl` | `hitl` / `fail` / `ignore` |
+
+### 9.5 Commit policy per stage
+
+| Stage | May run `git commit` | Why |
+|---|---|---|
+| Build (`eng_implement` / `eng_ios` / `eng_android` / `eng_web` / `eng_backend` / `eng_agent`) | **No** | The stage diff for `diff.patch` and the self-review scope is captured with `git diff`; committing leaves a clean worktree and an empty diff |
+| Selftest (`*_selftest`) | Yes — one commit per fix | Verdict comes from `selftest_result.json`, not from a diff; per-fix commits make rework traceable |
+| QA (`qa_verify`) | Yes — one commit per fix | Same; QA only re-runs the case ids that failed in `test_cases.md` |
+| Rework round (QA fail → `eng_implement`) | **No** | Rework is still a build stage; its artifacts and self-review depend on the worktree diff |
+
+No stage may `git push`: pushing and opening the MR stay with `git_publish` at mission end.
+The prompt text is injected by `clone_repos(allow_commit=...)`, and callers pass the value per stage.
+
+> Post-mortem (2026-11-06, snake mission `ini_6dc2ef0cb8a9`): the coding agent was told
+> "commit freely" by another prompt section, committed 3242 lines, left a clean worktree,
+> and `diff.patch` ended up with 2 process files / 32 lines — the mission was graded
+> `simple` and all three review rounds were skipped. Banning commits in build stages
+> removes the failure mode.

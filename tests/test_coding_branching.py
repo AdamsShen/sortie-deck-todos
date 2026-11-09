@@ -7,7 +7,12 @@ import pytest
 
 from sortie_deck.graph import _maybe_publish
 from sortie_deck.models import RepoConfig, RoleId, StageContext, StageResult
-from sortie_deck.plugins.coding import _count_impl_files, clone_repos, ensure_worktree
+from sortie_deck.plugins.coding import (
+    _count_impl_files,
+    _stage_allows_commit,
+    clone_repos,
+    ensure_worktree,
+)
 from sortie_deck.settings import settings
 
 
@@ -43,6 +48,29 @@ def test_ensure_worktree_sandbox_layout(tmp_path: Path):
     assert ensure_worktree(tmp_path, "ini_ws1", missions) == ws
     # 不是 git 仓库（无 worktree 语义）
     assert not (ws / ".git").exists()
+
+
+@pytest.mark.anyio
+async def test_clone_prompt_commit_policy_by_stage(tmp_path: Path, origin_repo: Path):
+    """提交策略：编码阶段禁止提交（否则 diff 采集为空），自测 / QA 允许按修复提交。"""
+    repos = [RepoConfig(url=str(origin_repo), branch="main", name="repo")]
+
+    build_ws = ensure_worktree(tmp_path, "ini_policy_build", tmp_path)
+    build_section, _ = await clone_repos(
+        repos, build_ws, "ini_policy_build", allow_commit=False
+    )
+    assert "do NOT run `git commit`" in build_section
+    assert "commit each fix" not in build_section
+
+    qa_ws = ensure_worktree(tmp_path, "ini_policy_qa", tmp_path)
+    qa_section, _ = await clone_repos(repos, qa_ws, "ini_policy_qa", allow_commit=True)
+    assert "commit each fix" in qa_section
+    assert "do NOT run `git commit`" not in qa_section
+
+    assert _stage_allows_commit("eng_implement") is False
+    assert _stage_allows_commit("eng_backend") is False
+    assert _stage_allows_commit("eng_backend_selftest") is True
+    assert _stage_allows_commit("qa_verify") is True
 
 
 @pytest.mark.anyio

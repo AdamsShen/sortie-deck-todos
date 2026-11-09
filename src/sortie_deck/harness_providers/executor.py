@@ -494,6 +494,8 @@ _SELFTEST_RUNNER_RULES = """Verification runner (mandatory — do NOT manage the
 - It starts the service, waits for the health URL, runs every case, writes
   `selftest_result.json`, then tears the service down.
 - Read `selftest_result.json`; fix ONLY the failing cases it lists, then re-run the same script.
+- Commit each fix separately on the task branch (`git add -A && git commit -m "<case id> <symptom>"`),
+  but never `git push` — the orchestrator pushes and opens the MR.
 - Never start/stop services by hand and never use pkill/kill/sleep/ps/lsof — the runner owns the
   lifecycle; extra manual attempts only burn turns and leave stale ports.
 - If `selftest.config.json` is missing, fill it from the project's own e2e entry
@@ -514,6 +516,9 @@ _QA_BROWSER_RUNNER = """Browser re-verification (mandatory — do NOT hand-write
   through every scenario, writes `qa_result.json` + `qa_screenshots/`, then tears everything down.
 - Read `qa_result.json`; fix ONLY the failing scenarios (usually the app, sometimes a selector),
   then re-run the same script.
+- Commit each fix separately on the task branch (`git add -A && git commit -m "<case id> <symptom>"`),
+  but never `git push` — the orchestrator pushes and opens the MR. This stage may commit; the build
+  stage must not.
 - Never start/stop services by hand, never use pkill/kill/sleep/ps/lsof, and never write your own
   CDP/Playwright script — add scenarios to `qa.config.json` instead.
 - Scenario steps: `{"path": "/"}`, `{"wait_ms": 500}`, `{"click": "<css>"}`,
@@ -554,6 +559,8 @@ _REWORK_BOUNDARY = """Rework scope (hard rule — this round fixes a QA failure)
   edge scenarios the report did not list. Anything else you notice goes into the reply as one line.
 - Verification budget: at most 5 runner runs (`.qa_runner_state.json`); exit code 5 means the budget
   is spent — stop and report the existing results.
+- Do NOT run `git commit` / `git push`: this rework round is a build stage, so the changes must stay in
+  the working tree for `diff.patch` and the self-review scope.
 - If the fix requires a design change beyond the failing cases, escalate instead of expanding scope.
 """
 
@@ -1036,7 +1043,12 @@ class HarnessStageExecutor:
         # QA 阶段注入浏览器复验 runner：场景写在 qa.config.json，模型只跑脚本 + 修失败项
         _ensure_qa_runner(workspace, ctx.stage)
         repo_section, repo_log = await clone_repos(
-            ctx.repos, workspace, ctx.initiative_id, actor_user_id=ctx.actor_user_id
+            ctx.repos,
+            workspace,
+            ctx.initiative_id,
+            actor_user_id=ctx.actor_user_id,
+            # 编码阶段禁止提交（否则 diff.patch / 自审范围采不到代码），自测与 QA 允许
+            allow_commit=ctx.stage not in ENG_BUILD_STAGES,
         )
 
         # 产物目录：文档型阶段 cwd 直接指向 artifacts/<stage>（运行期可实时看到真产物），
@@ -1226,7 +1238,7 @@ class HarnessStageExecutor:
                 update={"text": _strip_control_block(getattr(reply, "text", "") or "")}
             )
 
-        # 多镜头自审：编码/自测阶段收尾时在同一会话续跑 N 轮。
+        # 多镜头自审：编码阶段收尾时在同一会话续跑 N 轮（自测阶段不再自审）。
         # diff 同时供自审范围与 diff.patch 产物复用，只跑一次 git。
         from sortie_deck.contracts import REQUIRED as _REQUIRED
         from sortie_deck.plugins.coding import _git_diff
@@ -1432,7 +1444,7 @@ class HarnessStageExecutor:
         cfg: Any,
         started: float = 0.0,
     ) -> Any:
-        """编码/自测阶段的收尾自审：同一会话跑 N 轮，返回 ReviewLog。
+        """编码阶段的收尾自审：同一会话跑 N 轮，返回 ReviewLog。
 
         跳过条件是「审了也没意义」的场景（mock harness / 首轮就失败 / 阶段剩余
         预算不足），跳过也会留一条 ``skipped`` 记录，避免日志里出现

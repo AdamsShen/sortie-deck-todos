@@ -176,14 +176,16 @@ class Settings(BaseSettings):
     # intake.md 时包装件会掩盖「越界写 PRD」的事实，所以这里硬失败。
     strict_contract_stages: str = "intake"
     # --- 多镜头自审（见 docs/plans/2026-11-02-多镜头自审方案与改动说明.md）---
-    # 编码/自测阶段结束后，由编排层在同一 provider 会话里追加 N 轮不同视角的审查；
+    # 编码阶段结束后，由编排层在同一 provider 会话里追加 N 轮不同视角的审查；
     # 每轮追加 logs/<stage>/review.jsonl，收尾写 review.json 与 review.md 产物。
     # 关闭后完全退回旧行为（无额外轮次、无 review 产物）。
     review_lenses_enabled: bool = True
     # 轮次：3 = 正确性/边界/测试缺口（轻量）；>=5 = 再加并发/安全
     review_lens_rounds: int = 3
-    # 生效档位：build（编码）/ selftest（自测）/ integrate（联调），逗号分隔
-    review_lens_stages: str = "build,selftest"
+    # 生效档位：build（编码）/ integrate（联调），逗号分隔。
+    # 自测阶段（*_selftest）已脚本化（runner 一次跑完），不再触发自审；
+    # 配成 selftest 也不会生效，见 review_lens.stage_in_review_scope。
+    review_lens_stages: str = "build"
     # 单轮审查超时（秒）；0 = 按 harness 自适应（见 review_lens_timeout_by_harness）。
     # 超时只把该轮标 failed，不打断阶段。
     review_lens_timeout_seconds: float = 0.0
