@@ -56,6 +56,7 @@ idempotent (reconnect storms report repeatedly). Changes are broadcast through
 | DingTalk | Stream | ActionCard buttons **URL only** | 1500ms on HTTP callback; hence signed links via `/api/im/action` |
 | WeCom | AI-bot WS | `template_card` + `template_card_event` | update within 5s; **one connection per bot**; long-connection and callback are mutually exclusive |
 | WeChat DM | long-poll | **no cards** | DM only; protocol is not a stable contract; replies need `context_token` |
+| Slack | **public callback required** | Block Kit buttons (`block_actions`) | 3s ACK; button callbacks are **form-encoded**; must drop `bot_id` messages or the bot triggers itself |
 
 ### 4.1 Long connection vs callback is a platform-side switch
 
@@ -69,6 +70,24 @@ silent, `health` exposes `events_seen_at` and a hint pointing at the subscriptio
 Feishu/DingTalk cluster push is not broadcast and WeCom drops the previous socket,
 so only one process may connect: `TDT_IM_CONSUMER=true`. Multi-replica deployments
 must be active/standby.
+
+### 4.3 Three Slack-specific traps
+
+**Two inbound content types.** Events API sends JSON, but Interactivity
+(button clicks) posts `application/x-www-form-urlencoded` with the real JSON in a
+`payload` field. `/api/im/webhook/slack` branches on content type, and signatures
+are always verified against the **raw body** — re-encoding a parsed form never
+matches.
+
+**The Bot Token must never be stored in plaintext.** Slack has no "App ID + Secret";
+it needs a Bot Token (`xoxb-`) and a Signing Secret, and the token *is* the
+credential. Both fields are folded into an encrypted JSON blob (`fold_credentials`)
+before persisting, leaving `app_id` empty. When only the Signing Secret is updated,
+the token is carried over from the existing ciphertext.
+
+**Bot messages must be dropped.** Slack pushes the bot's own replies as `message`
+events; keeping them makes the bot trigger itself. Anything carrying `bot_id`, or
+subtypes like `message_changed`, is discarded.
 
 ## 5. Data contract
 
@@ -118,4 +137,7 @@ Without it, `probe` returns an actionable error; URL callback mode still works.
   **not a stable public contract**; changes are contained in `wechat.py`;
 - WeCom/WeChat outbound needs the in-process socket, so `TDT_IM_CONSUMER` should be
   enabled on the process that runs the orchestrator (usually the worker);
+- Slack supports Events API callbacks only: Socket Mode needs a third credential
+  (app-level token `xapp-`) that the two-field form cannot hold — use a tunnel to
+  expose the callback instead;
 - QR sessions are process-local; multi-replica deployments need API stickiness.

@@ -54,6 +54,7 @@ connected → disabled
 | 钉钉 | Stream | ActionCard 按钮**只能跳 URL** | HTTP 回调 1500ms；故用签名链接 `/api/im/action` |
 | 企业微信 | 智能机器人 WS | `template_card` + `template_card_event` | 5 秒内更新；**同一机器人只允许一条连接**；长连接/回调互斥 |
 | 微信个人号 | 长轮询 | **无卡片** | 仅单聊；协议非稳定契约；回复必须带 `context_token` |
+| Slack | **需公网回调** | Block Kit 按钮（`block_actions`） | 3 秒 ACK；按钮回调是 **form-encoded**；必须过滤 `bot_id` 消息否则自触发 |
 
 ### 4.1 长连接与回调互斥
 
@@ -71,6 +72,21 @@ connected → disabled
 
 飞书/钉钉推送是集群模式不广播、企微新连接会踢掉旧连接，因此**只允许一个进程
 建连**：`TDT_IM_CONSUMER=true`。多副本时必须主备，不能多活。
+
+### 4.3 Slack 的三处特殊处理
+
+**两种入站 Content-Type。** Events API 是 JSON，按钮回调（Interactivity）是
+`application/x-www-form-urlencoded`，真正的 JSON 在 `payload` 字段里。统一入口
+`/api/im/webhook/slack` 按 Content-Type 分流；验签一律对**原始 body** 计算——
+form 解析后重编码会让签名永远对不上。
+
+**Bot Token 不能明文落库。** Slack 没有「App ID + Secret」，实际需要 Bot Token
+（`xoxb-`）与 Signing Secret，而 Bot Token 本身就是凭据。表单两栏在入库前折叠
+成密文 JSON（`fold_credentials`），`app_id` 列留空；改 Signing Secret 时会从旧
+密文补回 token，避免写丢。
+
+**必须过滤机器人消息。** Slack 会把 bot 发言也推成 `message` 事件，不过滤就是
+自己触发自己。`bot_id` 与 `message_changed` 等 subtype 一律丢弃。
 
 ## 5. 数据契约
 
@@ -119,4 +135,6 @@ ImConnection      # 无明文；has_secret + secret_fingerprint
   协议变化时只需改 `wechat.py`；
 - 企微/微信的出站依赖进程内的长连接，`TDT_IM_CONSUMER` 应开在跑 orchestrator
   的进程（通常是 worker）；
-- 扫码会话不跨进程，多副本时前端需粘到同一台 API。
+- 扫码会话不跨进程，多副本时前端需粘到同一台 API；
+- Slack 只支持 Events API URL 回调：Socket Mode 需要第三个凭据（app-level token
+  `xapp-`），当前两字段表单放不下；内网部署建议用隧道把回调暴露出去。
