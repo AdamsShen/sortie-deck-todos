@@ -444,29 +444,48 @@ class ImConnectionManager:
             ok, error = await provider.probe(conn)
         except Exception as exc:  # noqa: BLE001 — 适配器异常一律表现为探活失败
             ok, error = False, str(exc)
-        updated = (
-            self.store.set_status(conn_id, "connected")
-            if ok
-            else self.store.set_status(conn_id, "error", error=error or "探活失败")
-        )
+        if ok and conn.mode == "stream" and conn.provider in {"feishu", "dingtalk"}:
+            # 探活只能证明凭据可用，真正的长连接由 runner 建立。停在 connecting，
+            # 收到首条事件才升 connected —— 否则用户会看到"已连接"却永远收不到消息。
+            updated = self.store.set_status(conn_id, "connecting", allow_force=True)
+        else:
+            updated = (
+                self.store.set_status(conn_id, "connected")
+                if ok
+                else self.store.set_status(conn_id, "error", error=error or "探活失败")
+            )
         self._publish(updated)
         return updated
 
     def health(self, conn_id: str) -> dict[str, Any]:
-        """连接健康度。``stale`` 表示连上了但长时间没收到事件——多半是订阅方式不匹配。"""
+        """连接健康度。
+
+        长连接的可信信号是「收到过事件」，不是「线程起来了」：
+        ``connecting`` 且从未收到事件 = 等待首条；``connected`` 但长时间无事件
+        = 订阅方式可能不匹配。两者提示不同，避免把正常的握手中状态说成故障。
+        """
         conn = self.store.get(conn_id)
         now = time.time()
+        awaiting_first = bool(
+            conn.status == "connecting"
+            and conn.events_seen_at is None
+            and conn.provider in {"feishu", "dingtalk"}
+        )
         stale = bool(
             conn.status == "connected"
             and (conn.events_seen_at is None or now - conn.events_seen_at > 6 * 3600)
         )
+        hint = ""
+        if awaiting_first:
+            hint = "长连接已建立，等待首条事件：在群里 @ 一次机器人即可确认"
+        elif stale:
+            hint = "已连接但长时间未收到事件：请确认平台后台的订阅方式与本地选择一致"
         return {
             "id": conn.id,
             "status": conn.status,
             "last_error": conn.last_error,
             "last_connected_at": conn.last_connected_at,
             "events_seen_at": conn.events_seen_at,
-            "hint": (
-                "已连接但长时间未收到事件：请确认平台后台的订阅方式与本地选择一致" if stale else ""
-            ),
+            "awaiting_first_event": awaiting_first,
+            "hint": hint,
         }

@@ -94,7 +94,7 @@ async def test_provider_catalog_lists_all_channels(im_env):
     assert "app_id" in providers["feishu"]["fields"]
 
 
-async def test_create_probes_and_marks_connected(im_env):
+async def test_create_probes_and_marks_connecting(im_env):
     _install_stack(im_env, providers={"feishu": FakeProvider(ok=True)})
     result = await app_mod.im_create(
         app_mod.ImConnectionBody(
@@ -103,7 +103,8 @@ async def test_create_probes_and_marks_connected(im_env):
         _user(),
     )
     conn = result["connection"]
-    assert conn["status"] == "connected"
+    # 长连接模式：探活只证明凭据可用，收到首条事件才升 connected
+    assert conn["status"] == "connecting"
     assert conn["has_secret"] is True
     # 明文永远不出现在响应里
     assert "secret" not in conn
@@ -153,7 +154,7 @@ async def test_patch_mode_resets_status(im_env):
         app_mod.ImConnectionBody(provider="feishu", mode="stream", app_id="cli", secret="s"),
         _user(),
     )
-    assert created["connection"]["status"] == "connected"
+    assert created["connection"]["status"] == "connecting"
 
     updated = await app_mod.im_update(
         created["connection"]["id"],
@@ -173,9 +174,10 @@ async def test_delete_and_health(im_env):
     conn_id = created["connection"]["id"]
 
     health = await app_mod.im_health(conn_id, _user())
-    assert health["status"] == "connected"
-    # 刚连上还没收到过事件：应提示订阅方式可能不匹配
-    assert "订阅方式" in health["hint"]
+    assert health["status"] == "connecting"
+    # 还没收到过事件：提示"等待首条"，不要把正常握手说成故障
+    assert health["awaiting_first_event"] is True
+    assert "等待首条事件" in health["hint"]
 
     assert (await app_mod.im_delete(conn_id, _user()))["ok"] is True
     assert (await app_mod.im_list(_user()))["connections"] == []

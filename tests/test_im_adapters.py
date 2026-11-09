@@ -124,8 +124,15 @@ def test_feishu_signature():
     assert not feishu.verify_signature(key, ts, nonce, body, "bad")
 
 
-async def test_feishu_probe_reports_missing_sdk():
-    """stream 模式缺 SDK 时要给出可操作提示，不能假装连上了。"""
+async def test_feishu_probe_reports_missing_sdk(monkeypatch):
+    """stream 模式缺 SDK 时要给出可操作提示，不能假装连上了。
+
+    SDK 已装进环境，所以这里用 ``sys.modules`` 里的 None 模拟未安装
+    （Python 对 ``import x`` 遇到 None 会抛 ImportError）。
+    """
+    import sys
+
+    monkeypatch.setitem(sys.modules, "lark_oapi", None)
     provider = FeishuProvider(secret_resolver=lambda c: "s")
     ok, error = await provider.probe(conn_stub())
     assert ok is False

@@ -3900,7 +3900,11 @@ async def im_create(
         raise HTTPException(400, str(exc)) from exc
     # 主动拉取型渠道（微信长轮询 / 企微 WS）在探活成功后立即起循环，
     # 否则会出现"显示已连接但收不到消息"。
-    if updated.status == "connected" and updated.provider in {"wechat", "wecom"}:
+    # 长连接渠道探活后停在 connecting，也要立刻起循环；等首条事件再转 connected
+    if updated.provider in {"wechat", "wecom", "feishu", "dingtalk"} and updated.status in {
+        "connected",
+        "connecting",
+    }:
         stack.runner.spawn(updated.id, updated.provider)
     return {"connection": updated.to_public()}
 

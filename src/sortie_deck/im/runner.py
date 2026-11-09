@@ -18,7 +18,7 @@ import contextlib
 import json
 import logging
 
-from sortie_deck.im import wechat, wecom
+from sortie_deck.im import streams, wechat, wecom
 from sortie_deck.im.connection import ImConnectionStore
 
 logger = logging.getLogger(__name__)
@@ -48,21 +48,30 @@ class ImRunner:
     async def start(self) -> None:
         """为所有「已启用的主动拉取型连接」起循环。
 
-        飞书/钉钉的 stream 模式依赖官方 SDK，本版本未内置长连接实现，
-        因此这里只处理 wechat（长轮询）与 wecom（WebSocket）。
+        微信（长轮询）、企微（WebSocket）、飞书/钉钉（官方 SDK 长连接）都走这里；
+        webhook 模式不需要后台循环，由 API 的入站路由直接处理。
         """
         for conn in self.store.list():
             if not conn.enabled or not conn.has_secret:
                 continue
-            if conn.provider in {"wechat", "wecom"}:
+            if conn.provider in {"wechat", "wecom", "feishu", "dingtalk"}:
                 self.spawn(conn.id, conn.provider)
 
     def spawn(self, conn_id: str, provider: str) -> None:
         existing = self._tasks.get(conn_id)
         if existing is not None and not existing.done():
             return
-        loop = self._wechat_loop if provider == "wechat" else self._wecom_loop
-        self._tasks[conn_id] = asyncio.create_task(loop(conn_id))
+        if provider == "wechat":
+            task = self._wechat_loop(conn_id)
+        elif provider == "wecom":
+            task = self._wecom_loop(conn_id)
+        elif provider in {"feishu", "dingtalk"}:
+            task = self._stream_loop(conn_id, provider)
+        else:
+            # 早先这里是 else → 企微循环，飞书会被错误地当成企微去连 WS
+            logger.warning("渠道 %s 没有后台循环实现，跳过 conn=%s", provider, conn_id)
+            return
+        self._tasks[conn_id] = asyncio.create_task(task)
         logger.info("IM 连接循环已启动 conn=%s provider=%s", conn_id, provider)
 
     async def cancel(self, conn_id: str) -> None:
@@ -146,6 +155,106 @@ class ImRunner:
         finally:
             if provider is not None and hasattr(provider, "mark_active"):
                 provider.mark_active(conn_id, False)
+
+    # --- 飞书 / 钉钉长连接 -------------------------------------------------
+
+    async def _stream_loop(self, conn_id: str, provider_name: str) -> None:
+        """SDK 的阻塞循环跑在 daemon 线程，事件桥回主循环。
+
+        状态语义：线程起来只是 ``connecting``；**收到第一条事件才算 connected**。
+        SDK 不提供握手回调，用「线程活着」冒充「已连接」就是之前那个骗人的 bug。
+        """
+        loop = asyncio.get_running_loop()
+        attempt = 0
+        failures = 0
+        while not self._stopping:
+            conn = self._safe_get(conn_id)
+            if conn is None or not conn.enabled:
+                return
+            secret = ""
+            with contextlib.suppress(Exception):
+                secret = self.store.decrypt_secret(conn_id)
+            if not conn.app_id or not secret:
+                logger.warning("%s 连接缺凭据，退出循环 conn=%s", provider_name, conn_id)
+                return
+
+            def emit(payload: dict, _loop=loop, _cid=conn_id) -> None:
+                # SDK 线程 → 主循环；不能在这里直接操作 store / router
+                asyncio.run_coroutine_threadsafe(
+                    self._handle_stream_event(_cid, provider_name, payload), _loop
+                )
+
+            try:
+                handle = streams.build_stream(
+                    provider_name, app_id=conn.app_id, app_secret=secret, emit=emit
+                )
+            except ImportError as exc:
+                # SDK 是可选依赖：缺了就停在这里，管理页显示可操作的错误
+                msg = f"未安装长连接 SDK：{exc}"
+                logger.warning("%s conn=%s", msg, conn_id)
+                with contextlib.suppress(Exception):
+                    self.store.set_status(conn_id, "error", error=msg)
+                return
+
+            handle.start()
+            with contextlib.suppress(Exception):
+                self.store.set_status(conn_id, "connecting", allow_force=True)
+            logger.info(
+                "%s 长连接线程已启动 conn=%s（等待首条事件确认握手）",
+                provider_name,
+                conn_id,
+            )
+
+            # SDK 内部 auto_reconnect，正常不会退出；这里只等它真的挂掉
+            while handle.alive and not self._stopping:
+                await asyncio.sleep(1.0)
+                current = self._safe_get(conn_id)
+                if current is None or not current.enabled:
+                    handle.stop()
+                    return
+            handle.stop()
+
+            if self._stopping:
+                return
+            failures += 1
+            attempt = min(attempt + 1, 5)
+            err = handle.error or "长连接线程退出"
+            logger.warning(
+                "%s 长连接断开 conn=%s 第 %s 次: %s（%.0fs 后重连）",
+                provider_name,
+                conn_id,
+                failures,
+                err,
+                _backoff(attempt),
+            )
+            if failures == MAX_SILENT_FAILURES:
+                with contextlib.suppress(Exception):
+                    self.store.set_status(conn_id, "error", error=err)
+            await asyncio.sleep(_backoff(attempt))
+
+    async def _handle_stream_event(
+        self, conn_id: str, provider_name: str, payload: dict
+    ) -> None:
+        """长连接收到的一帧：解析 → 记活跃 → 交给路由。"""
+        provider = self.providers.get(provider_name)
+        if provider is None:
+            return
+        try:
+            event = provider.parse_inbound(payload)
+        except Exception as exc:  # noqa: BLE001 — 一帧解析失败不能拖垮连接
+            logger.warning("%s 长连接事件解析失败: %s", provider_name, exc)
+            return
+        if event is None:
+            return
+        current = self._safe_get(conn_id)
+        if current is None:
+            return
+        with contextlib.suppress(Exception):
+            self.store.touch_event(conn_id)
+        if current.status != "connected":
+            with contextlib.suppress(Exception):
+                self.store.set_status(conn_id, "connected", allow_force=True)
+        self.router.schedule(event)
 
     # --- 企微 WebSocket ---------------------------------------------------
 
