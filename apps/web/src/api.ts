@@ -7,6 +7,12 @@ import type {
   ForgeDraft,
   HarnessesResponse,
   HumanDecisionRecord,
+  ImChatBinding,
+  ImConnection,
+  ImIdentity,
+  ImLinkCode,
+  ImProvider,
+  ImQrSession,
   Initiative,
   InsightMissionDetail,
   InsightMissionSummary,
@@ -537,4 +543,110 @@ export async function refreshKnowledgeParseStatus(
     token,
     method: "POST",
   });
+}
+
+// --- IM 集成 -----------------------------------------------------------------
+
+/** 渠道能力表（含 BETA 标记、支持的接入方式、表单字段） */
+export async function listImProviders(token: string): Promise<ImProvider[]> {
+  const data = await api<{ providers: ImProvider[] }>("/api/im/providers", { token });
+  return data.providers;
+}
+
+export async function listImConnections(token: string): Promise<ImConnection[]> {
+  const data = await api<{ connections: ImConnection[] }>("/api/im/connections", { token });
+  return data.connections;
+}
+
+/** 新建接入记录：凭据类会同步探活，返回的状态即最终结果（可能为 error） */
+export async function createImConnection(
+  token: string,
+  body: { provider: string; mode: string; app_id?: string; secret?: string; label?: string },
+): Promise<ImConnection> {
+  const data = await api<{ connection: ImConnection }>("/api/im/connections", {
+    token,
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  return data.connection;
+}
+
+/** 改配置：换 mode 会把状态打回未配置（平台侧长连接/回调互斥） */
+export async function updateImConnection(
+  token: string,
+  id: string,
+  body: { label?: string; mode?: string; app_id?: string; secret?: string; enabled?: boolean },
+): Promise<ImConnection> {
+  const data = await api<{ connection: ImConnection }>(`/api/im/connections/${id}`, {
+    token,
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+  return data.connection;
+}
+
+export async function deleteImConnection(token: string, id: string): Promise<void> {
+  await api(`/api/im/connections/${id}`, { token, method: "DELETE" });
+}
+
+/** 探活：用当前凭据真的连一次，失败时 last_error 带平台原始错误 */
+export async function probeImConnection(token: string, id: string): Promise<ImConnection> {
+  const data = await api<{ connection: ImConnection }>(`/api/im/connections/${id}/probe`, {
+    token,
+    method: "POST",
+  });
+  return data.connection;
+}
+
+/** 申请微信登录二维码（工作区级：已有记录则复用重新扫码） */
+export async function startWechatQr(
+  token: string,
+): Promise<ImQrSession & { conn_id: string }> {
+  return api<ImQrSession & { conn_id: string }>("/api/im/connections/wechat/qr", {
+    token,
+    method: "POST",
+  });
+}
+
+/** 轮询扫码状态：建议 2s 一次；confirmed 之后后端已起长轮询 */
+export async function pollWechatQr(token: string, ticket: string): Promise<ImQrSession> {
+  return api<ImQrSession>(`/api/im/connections/wechat/qr/${ticket}`, { token });
+}
+
+/** 该渠道已绑定的会话（数据源是 bridges 映射表） */
+export async function listImChats(token: string, id: string): Promise<ImChatBinding[]> {
+  const data = await api<{ chats: ImChatBinding[] }>(`/api/im/connections/${id}/chats`, { token });
+  return data.chats;
+}
+
+/** 把一个 IM 会话绑定到任务（工作区级绑定，管理员操作） */
+export async function bindImChat(
+  token: string,
+  body: { provider: string; channel_id: string; initiative_id: string; label?: string; chat_type?: string },
+): Promise<void> {
+  await api("/api/bridges/map", { token, method: "POST", body: JSON.stringify(body) });
+}
+
+// --- IM 身份绑定（IM 账号 ↔ 工作台账号）-------------------------------------
+
+/** 生成一次性绑定码（6 位、5 分钟、只能用一次） */
+export async function createImLinkCode(token: string): Promise<ImLinkCode> {
+  return api<ImLinkCode>("/api/im/link-code", { token, method: "POST" });
+}
+
+/** 已绑定的 IM 账号（管理员可见全部） */
+export async function listImIdentities(token: string): Promise<ImIdentity[]> {
+  const data = await api<{ identities: ImIdentity[] }>("/api/im/identities", { token });
+  return data.identities;
+}
+
+export async function deleteImIdentity(
+  token: string,
+  provider: string,
+  senderId: string,
+): Promise<void> {
+  await api(
+    `/api/im/identities/${encodeURIComponent(provider)}/${encodeURIComponent(senderId)}`,
+    { token, method: "DELETE" },
+  );
 }

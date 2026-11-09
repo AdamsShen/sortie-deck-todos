@@ -5,6 +5,7 @@ import type { I18nKey } from "../i18n";
 import type { Lang, PublicUser } from "../types";
 import { ApiKeysPage } from "./ApiKeysPage";
 import { GitSettingsPanel } from "./GitSettingsPanel";
+import { ImIntegrationsPanel } from "./ImIntegrationsPanel";
 import { MissionInsightsPanel } from "./MissionInsightsPanel";
 
 /**
@@ -24,6 +25,7 @@ const ZH = {
   appearance: "外观",
   git: "Git 凭据",
   keys: "API 密钥",
+  im: "IM 集成",
   data: "导出与删除",
   insights: "耗时分析",
   back: "返回应用",
@@ -78,6 +80,7 @@ const EN: typeof ZH = {
   appearance: "Appearance",
   git: "Git credentials",
   keys: "API keys",
+  im: "IM integrations",
   data: "Export & delete",
   insights: "Duration insights",
   back: "Back to app",
@@ -122,7 +125,7 @@ const EN: typeof ZH = {
   footer: "Secrets are write-only; admins manage workspace credentials and repos here, while members have read-only access.",
 };
 
-type Tab = "git" | "keys" | "account" | "appearance" | "data" | "insights";
+type Tab = "git" | "keys" | "im" | "account" | "appearance" | "data" | "insights";
 
 interface Props {
   open: boolean;
@@ -211,6 +214,8 @@ export function SettingsCenter({
       ? C.git
       : tab === "keys"
         ? C.keys
+        : tab === "im"
+          ? C.im
         : tab === "account"
           ? C.account
           : tab === "appearance"
@@ -256,6 +261,9 @@ export function SettingsCenter({
                 {C.keys}
                 <span className="num">{keysCount || ""}</span>
               </button>
+              <button type="button" className={tab === "im" ? "on" : ""} onClick={() => setTab("im")}>
+                {C.im}
+              </button>
             </div>
             <div className="grp">
               <div className="cap">{C.dataGroup}</div>
@@ -293,6 +301,12 @@ export function SettingsCenter({
             {tab === "keys" && (
               <div className="settings-embed">
                 <ApiKeysPage token={token} lang={lang} tr={tr} onCountChange={setKeysCount} />
+              </div>
+            )}
+
+            {tab === "im" && (
+              <div className="settings-embed">
+                <ImIntegrationsPanel token={token} lang={lang} />
               </div>
             )}
 

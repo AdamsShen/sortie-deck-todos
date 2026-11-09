@@ -8846,3 +8846,95 @@ tr:hover td {
 
 @media (max-width:760px){.insights-stats{grid-template-columns:repeat(2,1fr)}.insights-row{grid-template-columns:24px minmax(0,1.4fr) .7fr .5fr .7fr 1.05fr .9fr}.insights-row>:nth-child(3),.insights-row>:nth-child(7),.insights-row>:nth-child(8){display:none}.insight-meta-grid{grid-template-columns:repeat(2,1fr)}.stage-table-row{grid-template-columns:minmax(0,1.4fr) .8fr 1fr minmax(0,1.3fr)}.stage-table-row>:nth-child(4),.stage-table-row>:nth-child(6),.stage-table-row>:nth-child(7){display:none}}
 @media (max-width:860px){.settings-overlay{padding:0}.settings-center{border-radius:0}.settings-rail{width:9.5rem}.settings-body{padding:1rem}.stg-fields{grid-template-columns:1fr}.stg-kv{grid-template-columns:1fr}.stg-readout{flex-wrap:wrap}}
+
+/* --- IM 集成（设置 → 接入 → IM 集成）------------------------------------- */
+/* 注意：只用本项目已定义的变量（--panel / --panel-2 / --line / --line-hot /
+   --muted / --text / --copper / --danger）。曾误用 --card / --bg 导致弹框背景
+   透明、背后文字透上来，看起来像是布局错乱。尺寸一律用 px，避免根字号差异。 */
+.im{display:flex;flex-direction:column;gap:16px}
+.im-empty{color:var(--muted);font-size:12px;padding:12px 0}
+.im-error{color:var(--danger);font-size:12px;margin:4px 0}
+.im-list{display:flex;flex-direction:column;gap:10px}
+
+.im-card{display:flex;align-items:flex-start;gap:16px;justify-content:space-between;
+  padding:14px 16px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+.im-card-main{min-width:0;flex:1}
+.im-card-title{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.im-card-title b{font-size:14px;font-weight:600}
+.im-card-hint{margin:5px 0 0;color:var(--muted);font-size:12px;line-height:1.5}
+.im-card-err{margin:6px 0 0;color:var(--danger);font-size:12px;word-break:break-all}
+.im-card-meta{margin:6px 0 0;color:var(--muted);font-size:11px;word-break:break-all}
+.im-card-actions{display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end}
+
+.im-flag{font-style:normal;font-size:10px;letter-spacing:.06em;text-transform:uppercase;
+  padding:2px 6px;border-radius:4px;background:var(--signal-dim);color:var(--signal)}
+.im-flag.beta{background:rgba(230,145,56,.16);color:#b9770e}
+.im-badge{font-size:11px;padding:2px 7px;border-radius:5px;border:1px solid var(--line);color:var(--muted)}
+.im-badge.ok{border-color:rgba(14,159,110,.45);color:var(--signal);background:rgba(14,159,110,.08)}
+.im-badge.wait{border-color:rgba(230,145,56,.45);color:#b9770e;background:rgba(230,145,56,.08)}
+.im-badge.bad{border-color:rgba(201,80,58,.45);color:var(--danger);background:rgba(201,80,58,.08)}
+.im-badge.mute{opacity:.75}
+
+.im-overlay{position:fixed;inset:0;background:rgba(20,20,24,.45);display:flex;
+  align-items:center;justify-content:center;z-index:200;padding:24px}
+.im-dialog{width:560px;max-width:calc(100vw - 40px);max-height:86vh;overflow-y:auto;
+  overflow-x:hidden;background:var(--panel);border:0;border-radius:14px;
+  padding:26px 28px 22px;box-shadow:0 24px 64px rgba(0,0,0,.28);box-sizing:border-box}
+.im-dialog header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
+.im-dialog-head{min-width:0;flex:1}
+.im-dialog h3{margin:0;font-size:20px;font-weight:600;line-height:1.35}
+.im-lede{margin:8px 0 0;color:var(--muted);font-size:13px;line-height:1.6;max-width:430px}
+.im-guide{display:inline-block;margin-top:10px;font-size:13px;color:var(--copper);
+  text-decoration:none}
+.im-guide:hover{text-decoration:underline}
+.im-x{border:0;background:transparent;font-size:22px;line-height:1;cursor:pointer;
+  color:var(--muted);padding:0 2px;flex:0 0 auto}
+
+/* 单选组：原生外观、无外框。
+   必须显式固定 radio 宽高——项目全局有 `input, textarea, select { width:100% }`，
+   会把 radio 撑到 202px，文字只剩 2px 宽（表现为只剩一个字）。 */
+.im-mode-group{display:flex;gap:26px;margin:20px 0 10px;flex-wrap:wrap}
+.im-mode-group label{display:flex;align-items:center;gap:8px;font-size:14px;
+  cursor:pointer;color:var(--text);white-space:nowrap}
+.im-mode-group input[type="radio"]{width:16px;height:16px;min-width:16px;flex:0 0 16px;
+  margin:0;padding:0;border-radius:50%;accent-color:var(--copper)}
+.im-mode-hint{margin:0 0 18px;color:var(--muted);font-size:12px;line-height:1.6}
+
+.im-fields{display:flex;flex-direction:column;gap:12px}
+.im-fields input{width:100%;box-sizing:border-box;border:1px solid var(--line);
+  border-radius:10px;padding:13px 14px;font-size:14px;background:var(--panel);color:inherit}
+.im-fields input::placeholder{color:var(--muted)}
+.im-fields input:focus{outline:none;border-color:var(--copper)}
+
+.im-dialog-foot{display:flex;justify-content:flex-end;gap:10px;margin-top:24px}
+.im-btn{border:0;border-radius:10px;padding:11px 22px;font-size:14px;cursor:pointer;
+  font-family:inherit}
+.im-btn.ghost{background:var(--panel-2);color:var(--text);border:1px solid var(--line)}
+.im-btn.primary{background:var(--copper);color:#fff}
+.im-btn.primary:disabled{opacity:.55;cursor:default}
+
+.im-qr-wrap{display:flex;flex-direction:column;align-items:center;gap:9px;padding:10px 0 4px}
+.im-qr-title{margin:0;font-size:13px;color:var(--muted)}
+.im-qr{width:200px;height:200px;object-fit:contain;border:1px solid var(--line);
+  border-radius:8px;background:#fff}
+.im-qr.placeholder{display:flex;align-items:center;justify-content:center;color:var(--muted)}
+.im-qr-tip{margin:0;font-size:12px;font-variant-numeric:tabular-nums}
+.im-qr-ok{margin:8px 0;color:var(--signal);font-size:14px}
+.im-qr-fallback{margin:0;font-size:12px}
+.im-qr-note{margin:6px 0 0;color:var(--muted);font-size:11px;line-height:1.6;
+  text-align:center;max-width:360px}
+
+.im-binding{margin-top:24px;border-top:1px solid var(--line);padding-top:16px}
+.im-bind-form{display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap}
+.im-bind-form label{display:flex;flex-direction:column;gap:5px}
+.im-bind-form span{font-size:12px;color:var(--muted)}
+.im-bind-form input,.im-bind-form select{border:1px solid var(--line-hot);border-radius:8px;
+  padding:8px 10px;font-size:13px;background:var(--panel);color:inherit;min-width:150px}
+.im-bind-table{width:100%;border-collapse:collapse;margin-top:10px;font-size:12px}
+.im-bind-table th,.im-bind-table td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+.im-bind-table th{color:var(--muted);font-weight:500}
+.im-link-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:14px 0}
+.im-link-code{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  padding:10px 14px;border:1px dashed var(--line-hot);border-radius:10px;background:var(--panel-2)}
+.im-link-code code{font-family:var(--mono,monospace);font-size:14px;color:var(--copper);letter-spacing:.04em}
+.im-link-tip{color:var(--muted);font-size:12px}

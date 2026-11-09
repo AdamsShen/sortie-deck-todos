@@ -837,3 +837,88 @@ export type StageProgress = {
   /** 前端收到该事件的时间戳（用于展示已等待秒数） */
   at: number;
 };
+
+// --- IM 集成（设置 → IM 集成）------------------------------------------------
+export type ImProviderId = "wechat" | "wecom" | "feishu" | "dingtalk" | "slack";
+export type ImMode = "qr" | "stream" | "webhook";
+export type ImStatus =
+  | "unconfigured"
+  | "connecting"
+  | "connected"
+  | "error"
+  | "expired"
+  | "disabled";
+
+/** 渠道能力表：由后端 /api/im/providers 下发，前端不硬编码表单字段 */
+export interface ImProvider {
+  provider: ImProviderId;
+  name: string;
+  beta: boolean;
+  recommended: boolean;
+  modes: ImMode[];
+  fields: string[];
+  hint: string;
+  /** 弹窗副标题（说明这个渠道要填什么） */
+  lede: string;
+  /** 官方配置指南链接 */
+  guide_url: string;
+}
+
+/** 一条工作区级接入记录（永不包含明文凭据） */
+export interface ImConnection {
+  id: string;
+  provider: ImProviderId;
+  mode: ImMode;
+  label: string;
+  status: ImStatus;
+  app_id: string;
+  has_secret: boolean;
+  secret_fingerprint: string;
+  qr_expires_at: number | null;
+  last_error: string;
+  last_connected_at: number | null;
+  events_seen_at: number | null;
+  enabled: boolean;
+  created_by: string;
+  created_at: number;
+  updated_at: number;
+}
+
+/** 扫码会话：qr_content 用于渲染二维码，expires_in 用于倒计时 */
+export interface ImQrSession {
+  ticket: string;
+  status: "pending" | "scaned" | "confirmed" | "expired" | "need_verifycode" | "error";
+  qr_content: string;
+  /** 已渲染好的二维码（SVG data URI）。微信给的是网页链接，不是图片 */
+  qr_image: string;
+  expires_in: number;
+  error: string;
+  conn_id?: string;
+}
+
+/** IM 账号 → 工作台账号的绑定（一人一码，不是会话绑任务） */
+export interface ImIdentity {
+  provider: string;
+  sender_id: string;
+  user_id: string;
+  username: string;
+  bound_at: number;
+}
+
+/** 一次性绑定码 */
+export interface ImLinkCode {
+  code: string;
+  expires_at: number;
+  ttl: number;
+  instruction: string;
+}
+
+/** 会话 → 任务的绑定（已废弃：IM 改为命令终端后不再需要） */
+export interface ImChatBinding {
+  provider: ImProviderId;
+  channel_id: string;
+  initiative_id: string;
+  label: string;
+  chat_type: string;
+  created_by: string;
+}
