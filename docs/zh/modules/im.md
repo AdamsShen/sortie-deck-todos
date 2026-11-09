@@ -46,6 +46,16 @@ connected → disabled
 非法迁移抛 `InvalidTransition`；同状态重复设置是幂等（重连风暴下会重复上报）。
 状态变化通过 `ImConnectionManager.on_status` 广播，供 SSE 推给前端。
 
+**长连接模式的可信信号是「收到过事件」，不是「线程起来了」。** SDK 不提供握手
+回调，失败也只在内部重试并打日志，所以状态这样定义：
+
+- 探活通过后停在 `connecting`（凭据可用，等待建连）；
+- 收到第一条事件才升 `connected`，同时写 `events_seen_at`；
+- `health.awaiting_first_event=true` 表示「已建连、等首条」，`hint` 会提示
+  在群里 @ 一次机器人来确认。
+
+用「线程活着」冒充「已连接」是早期版本的 bug：用户看到绿灯却永远收不到消息。
+
 ## 4. 平台差异（决定了实现取舍）
 
 | 平台 | 免公网 | 卡片交互 | 关键约束 |
