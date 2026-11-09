@@ -2619,7 +2619,12 @@ class Orchestrator:
         ini = self.store.get(initiative_id)
         if not ini:
             raise KeyError(initiative_id)
-        if ini.status in {InitiativeStatus.STOPPED, InitiativeStatus.DONE}:
+        # 已通关 / 失败 / 已撤退都是终态，没有运行可终止；幂等返回，避免把终态改写回 stopped
+        if ini.status in {
+            InitiativeStatus.STOPPED,
+            InitiativeStatus.FAILED,
+            InitiativeStatus.DONE,
+        }:
             return ini
         if ini.status == InitiativeStatus.WAITING_HITL:
             return await self.submit_hitl(

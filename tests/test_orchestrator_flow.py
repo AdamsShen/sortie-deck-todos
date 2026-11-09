@@ -182,3 +182,30 @@ async def test_system_exit_marks_failed_instead_of_killing_process(tmp_path, mon
         assert any(e.kind == "error" for e in stored.timeline)
     finally:
         await orch.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "terminal_status",
+    [InitiativeStatus.DONE, InitiativeStatus.FAILED, InitiativeStatus.STOPPED],
+)
+async def test_stop_is_noop_for_terminal_mission(tmp_path, terminal_status):
+    """终态任务（含已通关）不可撤退：stop 幂等返回，不得改写状态。"""
+    cfg = Settings(data_dir=tmp_path / "data", deploy_executor="mock")
+    orch = Orchestrator(cfg)
+    await orch.startup()
+    try:
+        ini = await orch.create_initiative(
+            CreateInitiativeRequest(title="Terminal", brief="x", creator_name="Ada")
+        )
+        ini.status = terminal_status
+        orch.store.upsert(ini)
+
+        returned = await orch.stop(ini.id, author_name="Ada")
+
+        assert returned.status == terminal_status
+        stored = orch.store.get(ini.id)
+        assert stored is not None
+        assert stored.status == terminal_status
+    finally:
+        await orch.shutdown()

@@ -90,6 +90,9 @@ const CATEGORY_I18N: Record<string, I18nKey> = {
   office: "catOffice",
 };
 
+// 已通关 / 失败 / 已撤退都是终态，没有运行可终止；这些状态不再提供撤退入口
+const MISSION_TERMINAL_STATUSES: InitiativeStatus[] = ["done", "failed", "stopped"];
+
 // 知识库文件导入：与后端白名单一致的扩展名集合与 accept 串
 const KB_IMPORT_EXTS = new Set([
   "md", "markdown", "txt", "csv", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "pdf",
@@ -835,25 +838,30 @@ export default function App() {
   }, [lang, selected?.roles]);
 
   const commandOptions = useMemo<MentionOption[]>(() => {
-    if (lang === "zh") {
-      return [
-        { id: "confirm", label: "确认航线", hint: "确认规划官提案后可出击" },
-        { id: "start", label: "出击", hint: "启动已确认流水线" },
-        { id: "approve", label: "门禁通过", hint: "HITL 放行" },
-        { id: "reject", label: "门禁驳回", hint: "HITL 打回" },
-        { id: "rewrite", label: "改写指令", hint: "后接修订说明" },
-        { id: "stop", label: "停止", hint: "终止当前运行" },
-      ];
-    }
-    return [
-      { id: "confirm", label: "Confirm pipeline", hint: "lock stages then start" },
-      { id: "start", label: "Start sortie", hint: "run confirmed pipeline" },
-      { id: "approve", label: "Approve gate", hint: "HITL continue" },
-      { id: "reject", label: "Reject gate", hint: "HITL send back" },
-      { id: "rewrite", label: "Rewrite", hint: "append new instruction" },
-      { id: "stop", label: "Stop", hint: "halt the run" },
-    ];
-  }, [lang]);
+    const options: MentionOption[] =
+      lang === "zh"
+        ? [
+            { id: "confirm", label: "确认航线", hint: "确认规划官提案后可出击" },
+            { id: "start", label: "出击", hint: "启动已确认流水线" },
+            { id: "approve", label: "门禁通过", hint: "HITL 放行" },
+            { id: "reject", label: "门禁驳回", hint: "HITL 打回" },
+            { id: "rewrite", label: "改写指令", hint: "后接修订说明" },
+            { id: "stop", label: "停止", hint: "终止当前运行" },
+          ]
+        : [
+            { id: "confirm", label: "Confirm pipeline", hint: "lock stages then start" },
+            { id: "start", label: "Start sortie", hint: "run confirmed pipeline" },
+            { id: "approve", label: "Approve gate", hint: "HITL continue" },
+            { id: "reject", label: "Reject gate", hint: "HITL send back" },
+            { id: "rewrite", label: "Rewrite", hint: "append new instruction" },
+            { id: "stop", label: "Stop", hint: "halt the run" },
+          ];
+    // 终态任务没有运行可终止，不再提示 /stop 命令（后端 stop 对终态同样幂等）
+    const missionTerminal = selected
+      ? MISSION_TERMINAL_STATUSES.includes(selected.status)
+      : false;
+    return missionTerminal ? options.filter((o) => o.id !== "stop") : options;
+  }, [lang, selected?.status]);
 
   const filtered = useMemo(() => {
     if (filter === "all") return items;
@@ -3395,7 +3403,7 @@ export default function App() {
                   {tr("startPipeline")}
                 </button>
               )}
-              {canControlMission && (
+              {canControlMission && !MISSION_TERMINAL_STATUSES.includes(selected.status) && (
                 <button
                   className="btn danger"
                   type="button"
