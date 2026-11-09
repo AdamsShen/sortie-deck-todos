@@ -554,21 +554,22 @@ function ConnectDialog({ token, provider, conn, C, lang, onClose, onDone }: Dial
             <p className="im-mode-hint">{mode === "stream" ? C.modeHintStream : C.modeHintWebhook}</p>
 
             <div className="im-fields">
-              {provider.fields.map((field) => (
-                <label key={field}>
-                  <span>{fieldLabels[field] || field}</span>
-                  <input
-                    value={field === "app_id" || field === "bot_id" || field === "app_key" ? appId : secret}
-                    onChange={(e) =>
-                      field === "app_id" || field === "bot_id" || field === "app_key"
-                        ? setAppId(e.target.value)
-                        : setSecret(e.target.value)
-                    }
-                    placeholder={field}
-                    autoComplete="off"
-                  />
-                </label>
-              ))}
+              {/* 按位置而非字段名映射：Slack 的两栏是 Bot Token / Signing Secret，
+                  都不叫 app_id，按名字判断会让两个输入框绑同一个 state、互相覆盖。 */}
+              {provider.fields.map((field, index) => {
+                const primary = index === 0;
+                return (
+                  <label key={field}>
+                    <span>{fieldLabels[field] || field}</span>
+                    <input
+                      value={primary ? appId : secret}
+                      onChange={(e) => (primary ? setAppId(e.target.value) : setSecret(e.target.value))}
+                      placeholder={field}
+                      autoComplete="off"
+                    />
+                  </label>
+                );
+              })}
             </div>
 
             {error && <p className="im-error">{error}</p>}
