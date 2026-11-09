@@ -134,7 +134,7 @@ Agent harness 抽象已经支持 `claude_code` / `opencode` / `codex` / `cursor`
 | 标准 | 结果 |
 |---|---|
 | `/api/harnesses` 返回 `dsh`（label=DeepSeek Harness） | ✅ 注册表冒烟通过（本机未装 SDK 时 probe=`missing`） |
-| 选 dsh 的任务能跑完文档阶段与编码阶段 | ◑ provider 级：文档阶段落盘 + 编码阶段 MCP 落盘通过；完整链路待部署环境 |
+| 选 dsh 的任务能跑完文档阶段与编码阶段 | ✅ 真机任务四阶段全 ok（intake / eng_implement / qa_verify / deploy_preview），QA verdict=pass |
 | 技术方案/自审轮工具禁用生效 | ✅ 真实运行时工具表验证（Read 记 warn） |
 | 错误密钥进入 HITL 鉴权中断 | ✅ 单测覆盖 |
 | 第二轮能引用第一轮内容 | ✅ 本机与镜像内跨进程 resume 实测 |
@@ -174,4 +174,5 @@ provider 在 `native_id` 为空时直接 `start_session(同一 id)`，而 DSH �
   - **本机真实 SDK（provider 级）**：`probe=ok`；文档阶段传 `disallowed_tools=["Bash"]`，agent 改用 `write` 落 `prd.md`（3 条要点）；同会话跨进程 `resume_session` 追加 `## Result` 成功；MCP stdio server 的 `mcp__poc__echo_poc` 返回 `poc-mcp:acceptance` 并写入 `note.txt`；`_patches` 目录自动清理、`dsh_home` 会话日志正常生成。
   - **工具禁用实测**：`["Bash"]` → 工具表无 `bash`；`["Read","Bash","Grep","Glob"]` → 无 `bash`/`grep`，`read` 保留（warn 已记录）。
   - **镜像**：`docker build --target runtime-harness`（本地 node/python 镜像 + 清华 pip 源 + npmmirror）成功，产物 1.85GB；镜像内 `probe dsh=ok`，provider 两轮（含跨进程 resume）落盘通过。
-  - **未覆盖**：完整任务链路（PRD → 编码 → 自审）需要 LLM 编排密钥与队列 worker，本机未跑，留待部署环境验收；provider 级等价行为（文档阶段禁工具、编码阶段 MCP、自审轮禁用清单）已单独验证。
+  - **完整任务链路（2026-11-09 实跑 `ini_db3b6603109d`）**：harness 全程 `dsh`，四阶段全部 `ok` —— intake 40s、eng_implement 11m16s（26 文件 / +4070 行）、qa_verify 13m40s（20/20 用例、73 静态 + 57 浏览器断言全过、verdict=pass）、deploy_preview 5m15s；上线阶段还实际调用了阶段挂载的 MCP 工具（`mcp__filesystem__*`），产物 `deploy_plan.md` / `deploy_result.json` 落盘，任务终态 `done`。
+  - **首次真机暴露的会话冲突已修复**（见 8.1），修复后重启验证：连续轮与并发轮均可跑通。
