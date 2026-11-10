@@ -54,7 +54,7 @@ HarnessProvider(Protocol)
 
 | 名称 | 接入方式 | 说明 |
 |------|----------|------|
-| `claude_code` | `claude-agent-sdk`（`query()` + `resume`） | 权限模式取 `TDT_CODING_PERMISSION_MODE`；需 `ANTHROPIC_API_KEY` |
+| `claude_code` | `claude-agent-sdk`（`query()` + `resume`） | 权限模式取 `TDT_CODING_PERMISSION_MODE`，任务级 override 优先（见 2.2）；需 `ANTHROPIC_API_KEY` |
 | `dsh` | 官方 `deepseek-harness-sdk`（`DeepSeekHarness` + `resume_session`，stdio JSON-RPC + 随包运行时） | 凭据 `TDT_DSH_API_KEY` 或 `DEEPSEEK_API_KEY`；profile `sdk`；沙箱 `TDT_DSH_PERMISSION_MODE`（默认 `workspace-write`）；每轮新进程靠 resume 续跑，见「2.1 DSH 说明」 |
 | `opencode` | HTTP 调云端部署的 `opencode serve`（`TDT_OPENCODE_BASE_URL`） | 服务端接入，不起本地 CLI |
 | `codex` | 云端容器内 `codex exec --json` | 会话续用 `codex exec resume`；凭据认 `OPENAI_API_KEY` / `CODEX_API_KEY` 或 `$CODEX_HOME/auth.json`（`codex login`）；沙箱取 `TDT_CODEX_SANDBOX`（默认 `workspace-write`）；兼容 `item.completed` 新版事件与旧版 `agent_message` |
@@ -69,6 +69,15 @@ HarnessProvider(Protocol)
 - **阶段能力**：`disallowed_tools` 转成 DSH 的「禁用整行」patch（Bash→`tool-bash`、Grep/Glob→`tool-fs-search`、Task→`tool-subagent`、WebFetch/WebSearch→`tool-web`、TodoWrite→`tool-todo`）；**`Read` 无法单独禁用**（`tool-fs` 同时注册 read/write/edit），会在日志记 warn。阶段 MCP 通过动态 insert `@deepseek-ai/dsh-mcp-client` 挂载，只支持 `stdio` 与 `streamable-http`，`sse` 会跳过并记 warn。
 - **已知差距**：一个会话只有一个可写根，`extra_dirs` 拿不到写权限（读不受限，产物走既有归档兜底）；没有回合上限配置，只能靠请求/阶段超时；事件里没有 token 用量与成本，成本统计不纳入本期。
 - **安全提示**：DSH 沙箱只限制**写**，读不受限（能读 `~/.ssh`、`.env` 等），云端必须靠容器隔离，不要把密钥放在 agent 可读路径。
+
+### 2.2 权限模式与环境阻塞
+
+- **解析口径**：`permissions.resolve_permission_mode()` 按「任务级 override（HITL 指令里的 `[sortie:coding_permission_mode=...]` 或 `StageContext.permissions`）> `TDT_CODING_PERMISSION_MODE` > `acceptEdits`」解析，只接受 SDK 白名单内的值。CLI 执行器与 SDK harness 共用同一函数，结果经 `context_pack["permission_mode"]` 传入 `ClaudeAgentOptions`。
+- **为什么必须透传**：`acceptEdits` 只自动批准文件编辑与只读命令集，`node --test` / `npm` / `curl` 仍需审批；无人值守时这些调用直接被拒（官方 headless 文档）。隔离容器可显式配 `bypassPermissions`，并用 `TDT_PERMISSION_DENY_RULES` 配置作用域 deny 规则收紧危险命令（deny 在 bypass 下仍生效，默认留空）。
+- **预检**：`TDT_PERMISSION_PREFLIGHT=true`（默认）时 worker 进程首个阶段跑一条解释器命令，失败只告警；`/api/health` 返回实际生效的 `permission_mode`，便于发现环境漏配。
+- **失败归因**：阶段结束后从 `selftest_log.json`（`status=blocked`）、`test_report.json`（`verdict.not_a_code_defect` / `status=blocked`）与 provider 标记事后判定 `environment_blocked` / `auth_blocked`。这是**事后判定**，不做事前预检跳过任务。
+- **止血**：`TDT_ENV_BLOCK_PAUSE_ENABLED=true`（默认）时环境类失败第 1 轮即置 `stopped`，不再按 `qa_passed=False` 打回 `eng_implement`；`TDT_MAX_CONSECUTIVE_SAME_FAILURE`（默认 3）对任意重复失败兜底。采用终态而非 `interrupt` 是因为并非每个阶段都有 HITL 门禁，修复执行环境后重新发起任务即可恢复。
+- **沙箱落地（2026-11-10）**：`docker/claude-sandbox.json` 随 `runtime-harness` 镜像分发，`TDT_HARNESS_SETTINGS_FILE` 指向它即启用（文件不存在时自动跳过）。worker 容器需要 `cap_add: [SYS_ADMIN]` + `security_opt: [seccomp=unconfined, apparmor=unconfined]`；Ubuntu 24.04 的 `kernel.apparmor_restrict_unprivileged_userns=1` 下三者缺一都会失败。跨 harness 的公共档位放在 `context_pack["sandbox"]["mode"]`（`read_only|workspace_write|full_access`），dsh 映射到 `DSH_PERMISSION_MODE`，codex 映射到 `--sandbox` 并支持 `TDT_CODEX_ASK_FOR_APPROVAL` / `TDT_CODEX_NETWORK_ACCESS`。依赖只允许装进 workspace，全局安装由沙箱拒绝。
 
 选择与锁定：
 

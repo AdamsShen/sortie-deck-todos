@@ -57,7 +57,7 @@ HarnessProvider(Protocol)
 
 | Name | Transport | Notes |
 |------|-----------|-------|
-| `claude_code` | `claude-agent-sdk` (`query()` + `resume`) | Permission mode from `TDT_CODING_PERMISSION_MODE`; needs `ANTHROPIC_API_KEY` |
+| `claude_code` | `claude-agent-sdk` (`query()` + `resume`) | Permission mode from `TDT_CODING_PERMISSION_MODE`, task-level override wins (see 2.2); needs `ANTHROPIC_API_KEY` |
 | `dsh` | official `deepseek-harness-sdk` (`DeepSeekHarness` + `resume_session`, stdio JSON-RPC with a bundled runtime) | credentials from `TDT_DSH_API_KEY` or `DEEPSEEK_API_KEY`; profile `sdk`; sandbox from `TDT_DSH_PERMISSION_MODE` (default `workspace-write`); a fresh runtime per turn, resumed by session id — see "2.1 DSH notes" |
 | `opencode` | HTTP to a deployed `opencode serve` (`TDT_OPENCODE_BASE_URL`) | server-side, no local CLI |
 | `codex` | `codex exec --json` inside the cloud container | session resume via `codex exec resume`; credentials from `OPENAI_API_KEY` / `CODEX_API_KEY` or `$CODEX_HOME/auth.json` (`codex login`); sandbox from `TDT_CODEX_SANDBOX` (default `workspace-write`); parses both `item.completed` and legacy `agent_message` events |
@@ -82,6 +82,15 @@ Selection & locking:
   missions can switch via `PATCH /api/initiatives/{id}/harness`.
 - Mid-run switch requires HITL approval (`switch_harness` action) — the graph
   swaps the harness into the pipeline state and re-runs/re-enters the stage.
+
+### 2.2 Permissions and environment blocks
+
+- **Resolution**: `permissions.resolve_permission_mode()` applies "task-level override (`[sortie:coding_permission_mode=...]` in a HITL instruction, or `StageContext.permissions`) > `TDT_CODING_PERMISSION_MODE` > `acceptEdits`", accepting only SDK whitelisted values. The CLI executor and the SDK harness share this function; the result reaches `ClaudeAgentOptions` via `context_pack["permission_mode"]`.
+- **Why it matters**: `acceptEdits` auto-approves file edits and the read-only command set only — `node --test`, `npm` and `curl` still need approval and are denied outright in unattended runs (official headless docs). Isolated containers can set `bypassPermissions` and use `TDT_PERMISSION_DENY_RULES` for scoped deny rules (deny rules still apply under bypass; empty by default).
+- **Preflight**: with `TDT_PERMISSION_PREFLIGHT=true` (default) the worker runs one interpreter command on its first stage and only warns on failure; `/api/health` exposes the effective `permission_mode` so a missing env var is visible immediately.
+- **Failure classification**: after a stage, `environment_blocked` / `auth_blocked` is derived from `selftest_log.json` (`status=blocked`), `test_report.json` (`verdict.not_a_code_defect` / `status=blocked`) and provider markers. Classification is **post-hoc** — no pre-check ever skips a stage.
+- **Circuit breaker**: with `TDT_ENV_BLOCK_PAUSE_ENABLED=true` (default) an environment failure stops the run on the first occurrence instead of following `qa_passed=False` back to `eng_implement`; `TDT_MAX_CONSECUTIVE_SAME_FAILURE` (default 3) backstops any other repeated failure. A terminal `stopped` state is used rather than `interrupt` because not every stage has a HITL gate; re-launch the mission after fixing the environment.
+- **Sandbox rollout (2026-11-10)**: `docker/claude-sandbox.json` ships in the `runtime-harness` image and is activated by `TDT_HARNESS_SETTINGS_FILE` (missing file is skipped). The worker container needs `cap_add: [SYS_ADMIN]` plus `security_opt: [seccomp=unconfined, apparmor=unconfined]`; on Ubuntu 24.04 (`kernel.apparmor_restrict_unprivileged_userns=1`) all three are required. Harness-neutral modes live in `context_pack["sandbox"]["mode"]` (`read_only|workspace_write|full_access`): `dsh` maps it to `DSH_PERMISSION_MODE`, `codex` to `--sandbox` with `TDT_CODEX_ASK_FOR_APPROVAL` / `TDT_CODEX_NETWORK_ACCESS`. Dependencies are constrained to the workspace; global installs are denied by the sandbox.
 
 ## 3. Stage routing
 
