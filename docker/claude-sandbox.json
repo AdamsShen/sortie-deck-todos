@@ -6,7 +6,8 @@
     "allowUnsandboxedCommands": false,
     "failIfUnavailable": false,
     "filesystem": {
-      "denyWrite": ["/usr/local", "/etc", "/home/sortie/.claude"]
+      "denyWrite": ["/usr/local", "/etc", "/home/sortie/.claude"],
+      "allowWrite": ["/home/sortie/.npm", "/home/sortie/.cache", "/home/sortie/.local"]
     },
     "network": {
       "allowedDomains": [
