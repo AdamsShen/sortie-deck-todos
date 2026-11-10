@@ -92,6 +92,40 @@ Selection & locking:
 - **Circuit breaker**: with `TDT_ENV_BLOCK_PAUSE_ENABLED=true` (default) an environment failure stops the run on the first occurrence instead of following `qa_passed=False` back to `eng_implement`; `TDT_MAX_CONSECUTIVE_SAME_FAILURE` (default 3) backstops any other repeated failure. A terminal `stopped` state is used rather than `interrupt` because not every stage has a HITL gate; re-launch the mission after fixing the environment.
 - **Sandbox rollout (2026-11-10)**: `docker/claude-sandbox.json` ships in the `runtime-harness` image and is activated by `TDT_HARNESS_SETTINGS_FILE` (missing file is skipped). The worker container needs `cap_add: [SYS_ADMIN]` plus `security_opt: [seccomp=unconfined, apparmor=unconfined]`; on Ubuntu 24.04 (`kernel.apparmor_restrict_unprivileged_userns=1`) all three are required. Harness-neutral modes live in `context_pack["sandbox"]["mode"]` (`read_only|workspace_write|full_access`): `dsh` maps it to `DSH_PERMISSION_MODE`, `codex` to `--sandbox` with `TDT_CODEX_ASK_FOR_APPROVAL` / `TDT_CODEX_NETWORK_ACCESS`. Dependencies are constrained to the workspace; global installs are denied by the sandbox.
 
+### 2.3 DSH sandbox auto-fallback (off by default)
+
+Some runtimes (observed in the cloud linux wheel) ship without a sandbox runner: under
+`workspace-write` bash is refused before the command starts (`SANDBOX_UNAVAILABLE` /
+`no usable backend`), while escalating to `danger-full-access` fails because no approval
+channel exists. `DSH_PERMISSION_MODE` is resolved at process startup and the SDK exposes no
+hot-switch RPC, so the fallback is "probe → close runtime → relaunch that turn with
+`danger-full-access`", not a mid-run variable change.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `TDT_DSH_SANDBOX_AUTO_FALLBACK` | `false` | Master switch; when off there is no probe and behaviour is unchanged |
+| `TDT_DSH_SANDBOX_PROBE_TTL_SECONDS` | `600` | Process-level cache TTL (key includes host / SDK version / initial mode / cwd); `0` = probe every turn |
+| `TDT_DSH_SANDBOX_PROBE_TIMEOUT_SECONDS` | `30` | Probe timeout; on timeout or error the original mode is kept — never escalate on a failed probe |
+| `TDT_DSH_SANDBOX_PROBE_PROMPT` | fixed `echo __dsh_probe__` | No task content, no MCP/tool patches, no task artifacts |
+| `TDT_DSH_SANDBOX_UNAVAILABLE_HINTS` | built-in list | Comma-separated custom markers matched against `tool/result` and reply text |
+
+Explicit task-level `full_access` skips probing. The probe uses its own
+`dsh_home/_probe/<uuid>` and session id and is deleted afterwards, so the task's
+`native_id` is untouched. On a hit, that turn runs with `danger-full-access` and
+`reply.meta` carries `permission_fallback` / `probe_reason` / `effective_mode` /
+`probe_cached`; a `WARNING` records initiative, stage, session and reason (never secrets).
+
+**Semantics**: `approval.policy='never'` means "reject without asking", not "auto-allow".
+Under `workspace-write`, bash inside the workspace already needs no approval; only
+out-of-root escalation does, and it fails closed in unattended runs. This feature does
+**not** add "approval-free commands inside the sandbox" — it only falls back to an
+unconfined mode when the sandbox backend is unusable.
+
+**Security**: until the outer per-run launcher (mount namespace / env allowlist / egress
+proxy) lands, enabling this on a public multi-tenant container sharing `/data` widens the
+permission surface. It is temporary mitigation, not a safe default; see
+`docs/plans/2026-11-10-dsh-sandbox-auto-fallback.md` §3. Turn the switch off to roll back.
+
 ## 3. Stage routing
 
 `graph._executor_name()` returns `harness_stage` for **every** stage while the

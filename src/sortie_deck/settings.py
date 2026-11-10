@@ -177,6 +177,20 @@ class Settings(BaseSettings):
     dsh_isolate_skills: bool = True
     # 用任务级 HOME 隔离（默认关闭：git commit 等仍需要 ~/.gitconfig）
     dsh_isolate_home: bool = False
+    # --- DSH 沙箱可用性自动回退（见 docs/plans/2026-11-10-dsh-sandbox-auto-fallback.md）---
+    # 默认关闭：外层 launcher 尚未落地时回退到 danger-full-access 会放大权限面，
+    # 只作为云端「sandbox 后端缺失」的临时止血手段，不是安全默认值。
+    dsh_sandbox_auto_fallback: bool = False
+    # 探测结果进程级缓存 TTL（秒）；0 = 每轮都探测。到期重探便于环境修好后自动回到沙箱
+    dsh_sandbox_probe_ttl_seconds: float = 600.0
+    # 单轮探测超时（秒）：超时/异常一律保守保持原档位，绝不因探测失败而提权
+    dsh_sandbox_probe_timeout_seconds: float = 30.0
+    # 探测轮固定 prompt：只跑一条 workspace 内的 bash，不注入任务内容、不挂 MCP
+    dsh_sandbox_probe_prompt: str = (
+        "用 bash 执行 `echo __dsh_probe__`，然后只回答 ok。不要做其它事。"
+    )
+    # 识别「沙箱后端不可用」的特征词，逗号分隔；留空用内置集合
+    dsh_sandbox_unavailable_hints: str = ""
     # --- 上下文成本控制（见 docs/plans/2026-10-27-harness-context-cost.md）----
     # 上游产物在 prompt 里只给「摘要 + 路径」，让 agent 需要时自行 Read。
     # 关闭后回落为旧行为（prd.md 全文注入），用于灰度对比与回退。
@@ -485,9 +499,7 @@ class Settings(BaseSettings):
 
     def resolved_token_secret(self) -> str:
         secret = (self.token_secret or "").strip()
-        if self.env.strip().lower() == "production" and (
-            not secret or secret == "tdt-dev-secret"
-        ):
+        if self.env.strip().lower() == "production" and (not secret or secret == "tdt-dev-secret"):
             raise RuntimeError(
                 "TDT_TOKEN_SECRET must be set to a non-default value when TDT_ENV=production"
             )

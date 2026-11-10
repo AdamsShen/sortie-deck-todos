@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import importlib.metadata
 import importlib.util
 import inspect
 import json
@@ -28,6 +29,7 @@ import logging
 import os
 import re
 import shutil
+import socket
 import threading
 import time
 import uuid
@@ -111,6 +113,255 @@ def _sandbox_mode_from_pack(context_pack: dict[str, Any] | None) -> str | None:
     """把公共档位（read_only/workspace_write/full_access）映射成 DSH 值域。"""
     mode = str(((context_pack or {}).get("sandbox") or {}).get("mode") or "").strip()
     return _SANDBOX_TO_DSH.get(mode)
+
+
+# --- 沙箱可用性探测 / 自动回退 ------------------------------------------------
+# 云端 linux 运行时可能缺 sandbox runner，workspace-write 下 bash 会在启动前被拒
+# （SANDBOX_UNAVAILABLE / no usable backend）。DSH_PERMISSION_MODE 只在进程启动时
+# 解析，SDK 没有热切换 RPC，因此只能「探测 → 关运行时 → 用 danger-full-access 重跑」。
+
+_SANDBOX_UNAVAILABLE_HINTS = (
+    "sandbox_unavailable",
+    "no usable sandbox",
+    "no usable backend",
+    "sandbox backend",
+    "requires approval",
+    "no approval channel",
+    "operation not permitted",
+    "sandbox: file access denied",
+)
+
+# 进程级缓存：(主机, SDK 版本, 初始档位, cwd) -> (探测时刻, 是否可用, 原因)
+_probe_lock = threading.Lock()
+_probe_cache: dict[tuple[str, str, str, str], tuple[float, bool, str]] = {}
+
+
+def _probe_hints() -> tuple[str, ...]:
+    """识别沙箱不可用的特征词；配置为空时用内置集合。"""
+    from sortie_deck.settings import settings
+
+    raw = str(getattr(settings, "dsh_sandbox_unavailable_hints", "") or "").strip()
+    if not raw:
+        return _SANDBOX_UNAVAILABLE_HINTS
+    return tuple(part.strip().lower() for part in raw.split(",") if part.strip())
+
+
+def _probe_prompt() -> str:
+    from sortie_deck.settings import settings
+
+    return str(
+        getattr(settings, "dsh_sandbox_probe_prompt", "")
+        or "用 bash 执行 `echo __dsh_probe__`，然后只回答 ok。"
+    ).strip()
+
+
+def _probe_key(mode: str, cwd: str | None) -> tuple[str, str, str, str]:
+    """缓存键含 SDK 版本与 cwd，避免升级运行时或换工作区后沿用旧结论。"""
+    try:
+        version = importlib.metadata.version("deepseek-harness-sdk")
+    except Exception:  # noqa: BLE001 — 未装 SDK 时只影响缓存粒度
+        version = "unknown"
+    return (socket.gethostname(), version, mode, str(cwd or ""))
+
+
+def _probe_cache_get(key, ttl: float) -> tuple[bool, str] | None:
+    if ttl <= 0:
+        return None
+    with _probe_lock:
+        item = _probe_cache.get(key)
+    if item is None:
+        return None
+    at, available, reason = item
+    if time.monotonic() - at > ttl:
+        return None
+    return available, reason
+
+
+def _probe_cache_put(key, available: bool, reason: str) -> None:
+    with _probe_lock:
+        _probe_cache[key] = (time.monotonic(), available, reason)
+
+
+def reset_sandbox_probe_cache() -> None:
+    """清空探测缓存（配置变更后或单测里显式调用）。"""
+    with _probe_lock:
+        _probe_cache.clear()
+
+
+def _probe_unavailable_reason(result: Any) -> str:
+    """从探测轮的回复与执行结果里找沙箱后端不可用的特征，返回命中的词。
+
+    只扫 ``tool/result`` / ``turn/end`` / 回复正文：system/message 与 request/context
+    里本来就有「file access denied」这类策略说明，扫全量事件会把可用沙箱误判成
+    不可用（2026-11-10 本机实测）。另外 echo 探针确已执行成功时直接短路，
+    避免任何文案匹配造成误提权。
+    """
+    chunks: list[str] = [str(getattr(result, "final_response", "") or "")]
+    probe_ran = False
+    for event in list(getattr(result, "events", None) or []):
+        if not isinstance(event, dict):
+            continue
+        etype = str(event.get("type") or "")
+        if etype not in {"tool/result", "turn/end"}:
+            continue
+        try:
+            serialized = json.dumps(event.get("data"), ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            serialized = str(event.get("data"))
+        chunks.append(serialized)
+        if etype != "tool/result":
+            continue
+        message = (event.get("data") or {}).get("message")
+        if isinstance(message, dict) and not message.get("isError") and message.get("content"):
+            # 命令确实跑出结果说明沙箱后端可用，此时任何文案匹配都是误报
+            probe_ran = True
+    if probe_ran:
+        return ""
+    blob = "\n".join(chunks).lower()
+    for hint in _probe_hints():
+        if hint in blob:
+            return hint
+    return ""
+
+
+def _probe_kwargs(
+    base_kwargs: dict[str, Any], probe_home: Path, timeout: float, mode: str
+) -> dict[str, Any]:
+    """构造探测轮参数：独立 dsh_home、独立会话、不挂 MCP/工具禁用、不写任务产物。"""
+    env = dict(base_kwargs.get("env") or {})
+    env["DSH_PERMISSION_MODE"] = mode
+    patches = (str(_BASE_PATCH),) if _BASE_PATCH.is_file() else ()
+    return {
+        **{
+            k: v
+            for k, v in base_kwargs.items()
+            if k not in {"env", "patches", "dsh_home", "request_timeout_seconds"}
+        },
+        "dsh_home": str(probe_home),
+        "env": env,
+        "patches": patches,
+        "request_timeout_seconds": timeout,
+    }
+
+
+def _run_probe(
+    base_kwargs: dict[str, Any], home: Path, mode: str, timeout: float
+) -> tuple[bool, str]:
+    """同步跑一轮固定 prompt 的探测；异常/超时一律保守返回「可用」不提权。"""
+    from deepseek_harness import DeepSeekHarness
+
+    # 每次探测用独立子目录，跑完即删，避免 probe 会话在任务 home 下累积
+    probe_home = home / "_probe" / uuid.uuid4().hex[:8]
+    probe_home.mkdir(parents=True, exist_ok=True)
+    fired = {"timeout": False}
+    harness: Any = None
+    timer: Any = None
+
+    def _on_timeout() -> None:
+        fired["timeout"] = True
+        try:
+            if harness is not None:
+                harness.close()
+        except Exception:  # noqa: BLE001 — 关进程失败不影响判定
+            logger.debug("DSH 探测超时关闭运行时失败", exc_info=True)
+
+    try:
+        harness = DeepSeekHarness(**_probe_kwargs(base_kwargs, probe_home, timeout, mode))
+        timer = threading.Timer(timeout, _on_timeout)
+        timer.daemon = True
+        timer.start()
+        probe_session = harness.start_session(f"dsh-probe-{uuid.uuid4().hex[:8]}")
+        result = probe_session.run(_probe_prompt())
+        if fired["timeout"]:
+            return True, "probe timeout（保守保持原档位）"
+        reason = _probe_unavailable_reason(result)
+        return (False, reason) if reason else (True, "")
+    except Exception as exc:  # noqa: BLE001 — 探测失败不能变成提权理由
+        logger.warning(
+            "DSH 沙箱探测异常，保守保持原档位: error=%s detail=%s",
+            type(exc).__name__,
+            str(exc)[:160],
+        )
+        return True, f"probe error: {type(exc).__name__}"
+    finally:
+        if timer is not None:
+            timer.cancel()
+        if harness is not None:
+            try:
+                harness.close()
+            except Exception:  # noqa: BLE001
+                logger.debug("DSH 探测运行时关闭失败", exc_info=True)
+        shutil.rmtree(probe_home, ignore_errors=True)
+
+
+def _resolve_sandbox_mode(
+    *,
+    session: HarnessSession,
+    intended_mode: str,
+    base_kwargs: dict[str, Any],
+    home: Path,
+    cwd: str | None,
+) -> tuple[str, dict[str, Any]]:
+    """决定本轮实际生效的沙箱档位，返回 (档位, 需要写进 reply.meta 的审计字段)。
+
+    开关关闭或任务已显式 full_access 时零探测；命中不可用才回退到
+    danger-full-access，并把 WARNING / meta 作为可观测证据。
+    """
+    from sortie_deck.settings import settings
+
+    if not bool(getattr(settings, "dsh_sandbox_auto_fallback", False)):
+        return intended_mode, {}
+    if intended_mode == "danger-full-access":
+        return intended_mode, {"effective_mode": intended_mode, "permission_probe": "skipped"}
+
+    started = time.monotonic()
+    try:
+        ttl = float(getattr(settings, "dsh_sandbox_probe_ttl_seconds", 600.0) or 0.0)
+        timeout = float(getattr(settings, "dsh_sandbox_probe_timeout_seconds", 30.0) or 30.0)
+        key = _probe_key(intended_mode, cwd)
+        cached = _probe_cache_get(key, ttl)
+        if cached is None:
+            available, reason = _run_probe(base_kwargs, home, intended_mode, timeout)
+            _probe_cache_put(key, available, reason)
+            cached_from = False
+        else:
+            available, reason = cached
+            cached_from = True
+    except Exception as exc:  # noqa: BLE001 — 探测链路自身异常绝不能打断任务
+        logger.warning(
+            "DSH 沙箱探测链路异常，保持原档位: session=%s error=%s",
+            session.id,
+            type(exc).__name__,
+        )
+        return intended_mode, {"effective_mode": intended_mode, "permission_probe": "error"}
+
+    meta: dict[str, Any] = {
+        "effective_mode": intended_mode,
+        "permission_probe": "cached" if cached_from else "run",
+        "permission_probe_elapsed": round(time.monotonic() - started, 2),
+    }
+    if available:
+        return intended_mode, meta
+
+    logger.warning(
+        "DSH 沙箱后端不可用，自动回退到 danger-full-access: initiative=%s stage=%s "
+        "session=%s reason=%s cached=%s elapsed=%.2fs（外层隔离未落地时属权限面放大）",
+        (session.meta or {}).get("initiative_id"),
+        (session.meta or {}).get("stage"),
+        session.id,
+        reason[:200],
+        cached_from,
+        time.monotonic() - started,
+    )
+    meta.update(
+        {
+            "effective_mode": "danger-full-access",
+            "permission_fallback": True,
+            "probe_reason": reason[:200],
+            "probe_cached": cached_from,
+        }
+    )
+    return "danger-full-access", meta
 
 
 def _dsh_home(initiative_id: str) -> Path:
@@ -446,6 +697,9 @@ class DshProvider:
         try:
             patches, patch_meta = _build_patches(patch_dir, context_pack or {})
             loop = asyncio.get_running_loop()
+            # 运行时元数据回传：_run_once 在 worker 线程里写入，异常兜底分支也能
+            # 保留沙箱回退的审计字段（否则失败时无从判断是否提过权）
+            runtime_meta: dict[str, Any] = {}
             reply = await asyncio.to_thread(
                 self._run_once,
                 session,
@@ -457,6 +711,7 @@ class DshProvider:
                 on_activity,
                 patch_meta,
                 sandbox_mode,
+                runtime_meta,
             )
             return reply
         except Exception as exc:  # noqa: BLE001 — 降级为 fail，绝不把异常抛给编排层
@@ -472,7 +727,11 @@ class DshProvider:
                 text=f"deepseek-harness-sdk run failed: {exc}",
                 session_id=session.id,
                 native_id=session.native_id,
-                meta={"error": str(exc)[:300], "error_type": type(exc).__name__},
+                meta={
+                    **runtime_meta,
+                    "error": str(exc)[:300],
+                    "error_type": type(exc).__name__,
+                },
             )
         finally:
             shutil.rmtree(patch_dir, ignore_errors=True)
@@ -488,6 +747,7 @@ class DshProvider:
         on_activity: Any,
         patch_meta: dict[str, Any],
         sandbox_mode: str | None = None,
+        runtime_meta: dict[str, Any] | None = None,
     ) -> Any:
         """线程内同步跑一轮：建进程 → resume/start → run → 关进程。"""
         from deepseek_harness import DeepSeekHarness
@@ -497,8 +757,9 @@ class DshProvider:
 
         timeout = _request_timeout()
         max_tokens = int(getattr(settings, "dsh_max_tokens", 0) or 0)
+        intended_mode = _permission_mode(sandbox_mode)
         env: dict[str, str] = {
-            "DSH_PERMISSION_MODE": _permission_mode(sandbox_mode),
+            "DSH_PERMISSION_MODE": intended_mode,
             # 隔离用户级技能根：不设的话会扫 ~/.agents/skills 并注入任务提示
             "DSH_AGENTS_HOME": str(home / "agents"),
         }
@@ -506,21 +767,32 @@ class DshProvider:
             env["HOME"] = str(home / "home")
             Path(env["HOME"]).mkdir(parents=True, exist_ok=True)
 
-        harness = DeepSeekHarness(
-            provider=_llm_provider(),
-            model=_model(),
-            max_tokens=max_tokens or None,
-            reasoning_effort=str(getattr(settings, "dsh_reasoning_effort", "") or "") or None,
-            cwd=str(cwd) if cwd else None,
-            profile=_profile(),
-            patches=tuple(patches),
-            dsh_home=str(home),
-            api_key=_api_key() or None,
-            base_url=str(getattr(settings, "dsh_base_url", "") or "") or None,
-            env=env,
+        base_kwargs: dict[str, Any] = {
+            "provider": _llm_provider(),
+            "model": _model(),
+            "max_tokens": max_tokens or None,
+            "reasoning_effort": str(getattr(settings, "dsh_reasoning_effort", "") or "") or None,
+            "cwd": str(cwd) if cwd else None,
+            "profile": _profile(),
+            "patches": tuple(patches),
+            "dsh_home": str(home),
+            "api_key": _api_key() or None,
+            "base_url": str(getattr(settings, "dsh_base_url", "") or "") or None,
             # 注意：SDK 的请求超时只管单次 RPC，run 的等待要靠下面的看门狗
-            request_timeout_seconds=None,
+            "request_timeout_seconds": None,
+        }
+        # 探测在 worker 线程内同步执行，复用同一份构造参数；开关关闭时零开销
+        effective_mode, fallback_meta = _resolve_sandbox_mode(
+            session=session,
+            intended_mode=intended_mode,
+            base_kwargs={**base_kwargs, "env": env},
+            home=home,
+            cwd=cwd,
         )
+        env["DSH_PERMISSION_MODE"] = effective_mode
+        if runtime_meta is not None:
+            runtime_meta.update(fallback_meta)
+        harness = DeepSeekHarness(**base_kwargs, env=env)
 
         # 看门狗：Session.run() 无 cancel，超时只能从外部关掉子进程逼它退出
         fired = {"timeout": False}
@@ -571,7 +843,12 @@ class DshProvider:
                     text=f"DSH 单轮超时（{timeout:.0f}s）已终止",
                     session_id=session.id,
                     native_id=native_id or "",
-                    meta={**patch_meta, "timeout": True, "error_type": type(exc).__name__},
+                    meta={
+                        **patch_meta,
+                        **fallback_meta,
+                        "timeout": True,
+                        "error_type": type(exc).__name__,
+                    },
                 )
             raise
         finally:
@@ -592,6 +869,7 @@ class DshProvider:
             # 下游只读 meta["context"] 的压缩信息；DSH 不提供 token 口径，留空
             "context": {},
             **patch_meta,
+            **fallback_meta,
         }
         if error is not None:
             meta["error"] = str(error.get("message") or "")[:300]

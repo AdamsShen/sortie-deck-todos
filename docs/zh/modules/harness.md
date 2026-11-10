@@ -79,6 +79,34 @@ HarnessProvider(Protocol)
 - **止血**：`TDT_ENV_BLOCK_PAUSE_ENABLED=true`（默认）时环境类失败第 1 轮即置 `stopped`，不再按 `qa_passed=False` 打回 `eng_implement`；`TDT_MAX_CONSECUTIVE_SAME_FAILURE`（默认 3）对任意重复失败兜底。采用终态而非 `interrupt` 是因为并非每个阶段都有 HITL 门禁，修复执行环境后重新发起任务即可恢复。
 - **沙箱落地（2026-11-10）**：`docker/claude-sandbox.json` 随 `runtime-harness` 镜像分发，`TDT_HARNESS_SETTINGS_FILE` 指向它即启用（文件不存在时自动跳过）。worker 容器需要 `cap_add: [SYS_ADMIN]` + `security_opt: [seccomp=unconfined, apparmor=unconfined]`；Ubuntu 24.04 的 `kernel.apparmor_restrict_unprivileged_userns=1` 下三者缺一都会失败。跨 harness 的公共档位放在 `context_pack["sandbox"]["mode"]`（`read_only|workspace_write|full_access`），dsh 映射到 `DSH_PERMISSION_MODE`，codex 映射到 `--sandbox` 并支持 `TDT_CODEX_ASK_FOR_APPROVAL` / `TDT_CODEX_NETWORK_ACCESS`。依赖只允许装进 workspace，全局安装由沙箱拒绝。
 
+### 2.3 DSH 沙箱可用性自动回退（默认关闭）
+
+背景：部分运行时（实测云端 linux wheel）缺 sandbox runner，`workspace-write` 下 bash 在命令启动前即被拒
+（`SANDBOX_UNAVAILABLE` / `no usable backend`），`danger-full-access` 提权又因无审批通道失败。
+`DSH_PERMISSION_MODE` 只在进程启动时解析、SDK 无热切换 RPC，因此回退实现为「探测 → 关运行时 →
+以 `danger-full-access` 重拉该轮」，不是改运行中变量。
+
+| 配置 | 默认 | 说明 |
+|---|---|---|
+| `TDT_DSH_SANDBOX_AUTO_FALLBACK` | `false` | 总开关；关闭时零探测、行为与之前完全一致 |
+| `TDT_DSH_SANDBOX_PROBE_TTL_SECONDS` | `600` | 进程级缓存 TTL（键含主机/SDK 版本/初始档位/cwd）；0 = 每轮探测 |
+| `TDT_DSH_SANDBOX_PROBE_TIMEOUT_SECONDS` | `30` | 探测轮超时；超时/异常一律**保守保持原档位**，不提权 |
+| `TDT_DSH_SANDBOX_PROBE_PROMPT` | 固定 `echo __dsh_probe__` | 不注入任务内容、不挂 MCP/工具禁用、不写任务产物 |
+| `TDT_DSH_SANDBOX_UNAVAILABLE_HINTS` | 内置集合 | 逗号分隔自定义特征词；识别 `tool/result` 与回复里的不可用文案 |
+
+行为：任务已显式 `full_access` 时跳过探测；探测轮用独立 `dsh_home/_probe/<uuid>` 与独立会话，
+跑完即删，绝不污染任务 `native_id`；命中不可用时该轮以 `danger-full-access` 执行，`reply.meta`
+带 `permission_fallback` / `probe_reason` / `effective_mode` / `probe_cached`，并打 `WARNING` 记录
+任务、阶段、会话与原因（不含密钥）。
+
+**语义澄清**：`approval.policy='never'` 是「拒绝前不再询问」，不是自动放行；`workspace-write` 下
+workspace 内的 bash 本来就无需审批，只有越界/提权才需审批且无人值守时 fail closed。本能力**不做
+「沙箱内免审批」**，只在沙箱后端整体不可用时回退到无沙箱模式。
+
+**安全提示**：外层统一 launcher（per-run mount namespace / env 白名单 / egress 代理）尚未落地时，
+在公网多任务共享 `/data` 的容器里开启此开关等于放大权限面，属临时止血而非安全默认值。
+按 `docs/plans/2026-11-10-dsh-sandbox-auto-fallback.md` §3，根治仍需外层隔离；关开关即回滚。
+
 选择与锁定：
 
 - 创建任务时选择（`CreateInitiativeRequest.harness`），默认
