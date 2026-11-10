@@ -1864,13 +1864,17 @@ class Orchestrator:
 
         前端「执行中 Ns」的计时锚点必须来自服务端：只存在 SSE 内存里的话，
         刷新页面后锚点丢失，计时会被重置成 0（用户实际等了几分钟却显示 15s）。
-        这里只写时间戳，不改 ``current_stage``——它的推进仍由阶段结束时的
-        状态迁移负责，避免影响航线判定。
+        这里同时推进 ``current_stage``：它的旧推进点在 astream 回吐 stage，
+        而 stage 要等阶段跑完才更新，中间会留下「锚点已是新阶段、current_stage
+        还是上一阶段」的窗口（实测 ini_63c0dd4ae654 在 qa_verify→deploy_preview
+        上约 5 分钟），流程图高亮停在已完成阶段、顶部却在给新阶段计时。
+        两个字段必须同源，否则刷新前后显示不一致。
         """
         ini = self.store.get(initiative_id)
         if ini is None:
             logger.debug("阶段开始时间落库跳过：任务不存在 initiative=%s", initiative_id)
             return ""
+        ini.current_stage = stage
         ini.stage_started_at = utc_now()
         ini.stage_started_stage = stage
         self.store.upsert(ini)
