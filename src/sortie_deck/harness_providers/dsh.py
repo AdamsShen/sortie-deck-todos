@@ -86,15 +86,31 @@ def _api_key() -> str:
     ).strip()
 
 
-def _permission_mode() -> str:
+_SANDBOX_TO_DSH = {
+    "read_only": "read-only",
+    "workspace_write": "workspace-write",
+    "full_access": "danger-full-access",
+}
+
+
+def _permission_mode(override: str | None = None) -> str:
+    """解析 DSH 沙箱档位；任务级 override > 全局配置 > workspace-write。"""
     from sortie_deck.settings import settings
 
-    mode = str(getattr(settings, "dsh_permission_mode", "") or "workspace-write").strip()
+    mode = (override or "").strip() or str(
+        getattr(settings, "dsh_permission_mode", "") or "workspace-write"
+    ).strip()
     return (
         mode
         if mode in {"read-only", "workspace-write", "danger-full-access"}
         else "workspace-write"
     )
+
+
+def _sandbox_mode_from_pack(context_pack: dict[str, Any] | None) -> str | None:
+    """把公共档位（read_only/workspace_write/full_access）映射成 DSH 值域。"""
+    mode = str(((context_pack or {}).get("sandbox") or {}).get("mode") or "").strip()
+    return _SANDBOX_TO_DSH.get(mode)
 
 
 def _dsh_home(initiative_id: str) -> Path:
@@ -420,6 +436,8 @@ class DshProvider:
             )
 
         initiative_id = str((session.meta or {}).get("initiative_id") or "unknown")
+        # 公共档位（pack["sandbox"]["mode"]）优先，补齐任务级 override 对 DSH 的缺口
+        sandbox_mode = _sandbox_mode_from_pack(context_pack)
         home = _dsh_home(initiative_id)
         patch_dir = home / "_patches" / f"{session.id}-{uuid.uuid4().hex[:8]}"
         patch_dir.mkdir(parents=True, exist_ok=True)
@@ -438,6 +456,7 @@ class DshProvider:
                 loop,
                 on_activity,
                 patch_meta,
+                sandbox_mode,
             )
             return reply
         except Exception as exc:  # noqa: BLE001 — 降级为 fail，绝不把异常抛给编排层
@@ -468,6 +487,7 @@ class DshProvider:
         loop: Any,
         on_activity: Any,
         patch_meta: dict[str, Any],
+        sandbox_mode: str | None = None,
     ) -> Any:
         """线程内同步跑一轮：建进程 → resume/start → run → 关进程。"""
         from deepseek_harness import DeepSeekHarness
@@ -478,7 +498,7 @@ class DshProvider:
         timeout = _request_timeout()
         max_tokens = int(getattr(settings, "dsh_max_tokens", 0) or 0)
         env: dict[str, str] = {
-            "DSH_PERMISSION_MODE": _permission_mode(),
+            "DSH_PERMISSION_MODE": _permission_mode(sandbox_mode),
             # 隔离用户级技能根：不设的话会扫 ~/.agents/skills 并注入任务提示
             "DSH_AGENTS_HOME": str(home / "agents"),
         }

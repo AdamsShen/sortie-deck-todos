@@ -1,0 +1,30 @@
+{
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true,
+    "enableWeakerNestedSandbox": true,
+    "allowUnsandboxedCommands": false,
+    "failIfUnavailable": false,
+    "filesystem": {
+      "denyWrite": ["/usr/local", "/etc", "/home/sortie/.claude"]
+    },
+    "network": {
+      "allowedDomains": [
+        "registry.npmjs.org",
+        "*.npmjs.org",
+        "github.com",
+        "codeload.github.com",
+        "pypi.org",
+        "files.pythonhosted.org"
+      ]
+    },
+    "credentials": {
+      "envVars": [
+        "ANTHROPIC_API_KEY",
+        "TDT_LLM_API_KEY",
+        "TDT_DSH_API_KEY",
+        "TDT_GIT_SECRET_KEY"
+      ]
+    }
+  }
+}

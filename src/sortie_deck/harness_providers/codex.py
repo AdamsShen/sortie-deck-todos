@@ -106,19 +106,12 @@ class CodexProvider:
             )
         from sortie_deck.settings import settings
 
-        args = [binary, "exec", "--json", "--skip-git-repo-check"]
         if session.native_id:
             # 续跑沿用首次会话的沙箱档位（CLI 不接受在 resume 上改沙箱）
             args = [binary, "exec", "resume", session.native_id, "--json", "--skip-git-repo-check"]
         else:
-            sandbox = str(getattr(settings, "codex_sandbox", "") or "").strip()
-            if sandbox:
-                args += ["--sandbox", sandbox]
-            # 额外可写目录（阶段产物目录）：codex 首轮通过 --add-dir 扩展沙箱边界；
-            # resume 不支持再改沙箱，故只在首轮生效。
-            for extra in extra_dirs or []:
-                if str(extra or "").strip():
-                    args += ["--add-dir", str(extra)]
+            # 首轮按任务级公共档位定档；额外可写目录同样只在首轮生效
+            args = _first_turn_args(binary, settings, context_pack, extra_dirs)
         args.append(prompt)
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -173,6 +166,52 @@ class CodexProvider:
 
     async def close(self, session: HarnessSession) -> None:
         return None
+
+
+_SANDBOX_TO_CODEX = {
+    "read_only": "read-only",
+    "workspace_write": "workspace-write",
+    "full_access": "danger-full-access",
+}
+
+
+def _sandbox_flag(context_pack: dict[str, Any] | None, fallback: str) -> str:
+    """公共档位优先，否则回落 ``TDT_CODEX_SANDBOX``；非法值统一收敛到 workspace-write。"""
+    mode = str(((context_pack or {}).get("sandbox") or {}).get("mode") or "").strip()
+    mapped = _SANDBOX_TO_CODEX.get(mode)
+    if mapped:
+        return mapped
+    value = (fallback or "").strip()
+    return (
+        value
+        if value in {"read-only", "workspace-write", "danger-full-access"}
+        else "workspace-write"
+    )
+
+
+def _first_turn_args(
+    binary: str,
+    settings: Any,
+    context_pack: dict[str, Any] | None,
+    extra_dirs: list[str] | None,
+) -> list[str]:
+    """首轮参数：沙箱档位、审批策略、网络开关、额外可写目录。
+
+    ``codex exec`` 是非交互命令；不显式给 ``--ask-for-approval never`` 时，
+    需要审批的动作会被拒（与 Claude 的 acceptEdits 是同一类问题）。
+    """
+    sandbox = _sandbox_flag(context_pack, getattr(settings, "codex_sandbox", ""))
+    args = [binary, "exec", "--json", "--skip-git-repo-check", "--sandbox", sandbox]
+    approval = str(getattr(settings, "codex_ask_for_approval", "") or "").strip()
+    if approval:
+        args += ["--ask-for-approval", approval]
+    if bool(getattr(settings, "codex_network_access", False)):
+        # workspace-write 默认断网；装依赖需要联网（域名级收紧见 network_proxy）
+        args += ["-c", "sandbox_workspace_write.network_access=true"]
+    for extra in extra_dirs or []:
+        if str(extra or "").strip():
+            args += ["--add-dir", str(extra)]
+    return args
 
 
 def _parse_jsonl(stdout: str) -> tuple[str, str, bool, dict[str, Any]]:

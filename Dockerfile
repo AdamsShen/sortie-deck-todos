@@ -74,6 +74,22 @@ FROM runtime AS runtime-harness
 
 USER root
 
+# Bash 沙箱依赖（见 docs/plans/2026-11-10-claude-sandbox-替代bypass与任务级依赖.md）：
+# bubblewrap 负责文件系统/网络隔离，socat 把沙箱内网络转发到沙箱代理。
+# 只有 runtime-harness 需要：api 只跑探针，真正 spawn agent 的是 worker。
+ARG APT_MIRROR=""
+RUN if [ -n "$APT_MIRROR" ]; then \
+        sed -i "s|http://deb.debian.org/debian|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources 2>/dev/null || true; \
+        sed -i "s|http://deb.debian.org/debian|${APT_MIRROR}|g" /etc/apt/sources.list 2>/dev/null || true; \
+    fi \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends bubblewrap socat \
+    && rm -rf /var/lib/apt/lists/*
+
+# 沙箱配置随镜像分发；TDT_HARNESS_SETTINGS_FILE 指向它即可启用（见 .env.example）
+COPY docker/claude-sandbox.json /etc/sortie/claude-sandbox.json
+RUN chmod 644 /etc/sortie/claude-sandbox.json
+
 # Node 直接复用上面 web 构建阶段的二进制（22.x），
 # 不走 apt：Debian 12 自带 node 18 偏旧，且省一次 apt 网络依赖。
 COPY --from=web /usr/local/bin/node /usr/local/bin/node
