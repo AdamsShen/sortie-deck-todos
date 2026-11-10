@@ -49,12 +49,9 @@ services:
     init: true
     command: ["worker"]
     # Claude Code Bash 沙箱（bubblewrap）的容器级前提，2026-11-10 实测：
-    # 宿主 Ubuntu 24.04 默认 kernel.apparmor_restrict_unprivileged_userns=1，
-    # 容器内创建 user namespace / 写 uid_map 会被拒；seccomp、AppArmor、SYS_ADMIN
-    # 三者缺一都会失败（详见 docs/plans/2026-11-10-claude-sandbox-替代bypass与任务级依赖.md）。
+    # 宿主需 kernel.apparmor_restrict_unprivileged_userns=0（见部署说明），
+    # 容器内再放开 seccomp 与 AppArmor 两项即可，无需 SYS_ADMIN。
     # 只给 worker：api 不执行 agent，不扩大其权限面。
-    cap_add:
-      - SYS_ADMIN
     security_opt:
       - seccomp=unconfined
       - apparmor=unconfined

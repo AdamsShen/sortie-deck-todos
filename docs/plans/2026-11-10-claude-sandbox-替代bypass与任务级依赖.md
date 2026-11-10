@@ -306,11 +306,22 @@ SDK 的 `settings` 参数是 `str | None`（设置文件路径），因此：
 | `cap_add: SYS_ADMIN` + `apparmor=unconfined` | `CAP_AA_FAIL` |
 | **`seccomp=unconfined` + `apparmor=unconfined` + `cap_add: SYS_ADMIN`** | **`--unshare-user` / 不 unshare / `--unshare-pid` 三组全部 OK** |
 
+补充实测（非 root 进程，worker 以 uid 10001 运行）：
+
+| 组合（宿主 sysctl=0） | 结果 |
+|---|---|
+| 仅 `seccomp=unconfined` | `Failed to make / slave` |
+| 仅 `apparmor=unconfined` | `No permissions to create new namespace` |
+| 仅 `cap_add: SYS_ADMIN` | `Failed to make / slave` |
+| `seccomp=unconfined` + `apparmor=unconfined` | **成功，沙箱内仍为 uid 10001** |
+| 给 `bwrap` 加 setuid | `capset failed`，不可用 |
+
 已落地：
 - `Dockerfile` 的 runtime-harness 阶段 `apt-get install bubblewrap socat`；
-- `docker-compose.yml` 仅 `worker` 增加 `cap_add: [SYS_ADMIN]` 与 `security_opt: [seccomp=unconfined, apparmor=unconfined]`，`api` 保持不变。
+- `docker-compose.yml` 仅 `worker` 增加 `security_opt: [seccomp=unconfined, apparmor=unconfined]`，`api` 保持不变；
+- 宿主持久化 `kernel.apparmor_restrict_unprivileged_userns=0`（`/etc/sysctl.d/99-sortie-userns.conf`）。
 
-结论：该宿主必须用「三件套」；`enableWeakerNestedSandbox` 底层仍是 bwrap，不解决 AppArmor 限制，不作为主力方案。验证未改动现网容器（全部使用 `docker run --rm` 临时容器）。
+结论：`SYS_ADMIN` 不必要；`enableWeakerNestedSandbox` 底层仍是 bwrap，不解决 AppArmor 限制。
 
 ### 5.2 单测
 
@@ -349,7 +360,7 @@ SDK 的 `settings` 参数是 `str | None`（设置文件路径），因此：
 
 | 风险 | 处置 |
 |---|---|
-| 容器内 `bwrap` 因 seccomp/apparmor 起不来 | 已实测：必须 `seccomp=unconfined` + `apparmor=unconfined` + `cap_add: SYS_ADMIN` 三件套；`enableWeakerNestedSandbox` 不足以绕过 |
+| 容器内 `bwrap` 因 seccomp/apparmor 起不来 | 已实测：宿主持久化 `kernel.apparmor_restrict_unprivileged_userns=0` + worker `security_opt: [seccomp=unconfined, apparmor=unconfined]` 即可，无需 `SYS_ADMIN`；`enableWeakerNestedSandbox` 不足以绕过 |
 | 网络白名单漏配导致装包失败 | 白名单集中配置 + preflight 探测 registry；失败归为 `environment_blocked` 第 1 轮暂停 |
 | 沙箱只覆盖 Bash，Read 仍能读文件 | 配合 `permissions.deny` 的 `Read` 规则遮蔽 `.env`；长期靠任务级容器 |
 | 依赖装在 workspace 导致归档变大 | 沿用现有归档排除（`node_modules` 已排除），`.venv` 加入排除 |
