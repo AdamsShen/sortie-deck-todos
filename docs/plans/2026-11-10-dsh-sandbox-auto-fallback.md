@@ -1,7 +1,7 @@
 # DSH 沙箱自动探测/回退（方案 B）设计与统一 launcher（方案 C）影响评估
 
 - 日期：2026-11-10
-- 状态：**已实施（M1–M4 完成；M5 云端发布待用户确认）**
+- 状态：**已实施并上线（M1–M5 完成，2026-11-10）**
 - 关联：`docs/plans/2026-11-09-dsh-harness-provider.md`、`docs/plans/2026-11-10-三家沙箱隔离对齐.md`、`docs/plans/2026-11-09-权限阻断与环境阻塞熔断.md`
 
 ## 1. 需求背景
@@ -210,7 +210,33 @@ send(session, prompt, ...)
 | M2 单测 | ✅ `tests/test_harness_dsh_sandbox.py` 16 条；全量 `pytest -q` **1209 passed**；改动文件 `ruff check` / `format --check` 全过 |
 | M3 文档 | ✅ 中英文 `harness.md` §2.3、`.env.example`、`.env.docker.example`、`CHANGELOG`、本文档 |
 | M4 本地真机 | ✅ 真实 SDK 三条路径：开关关闭 `mode=None / 零探测`；开关开且沙箱可用 `workspace-write / 不回退`；模拟不可用 `danger-full-access / WARNING / permission_fallback=true` |
-| M5 云端发布 | ⏸ 待用户确认停掉空转任务 `ini_d8ff9eb21cb3` 后执行（改 `.env` 开关、发镜像、跑一次 QA 验收） |
+| M5 云端发布 | ✅ 见 §7.1；公网 `/api/health` 200、`dsh=ok`，容器内真实一轮验证回退与 bash 可执行 |
+
+### 7.1 M5 云端发布记录（2026-11-10 19:50 UTC+8 前后）
+
+发布前置：队列 52 `done` / 2 `failed`，无 running job，`initiative_locks` 为空；门禁任务
+`ini_d8ff9eb21cb3` 此时已因「连续 3 轮 sandbox blocked」自行升级为 `waiting_hitl`，
+**没有活跃 job**，因此无需停任务，该任务状态全程保留未动。
+
+| 步骤 | 结果 |
+|---|---|
+| 备份 `.env` | `.env.bak-20261110-195028-dsh-fallback` |
+| 开开关 | `TDT_DSH_SANDBOX_AUTO_FALLBACK=true`（`.env:52`） |
+| 快进代码 | `git merge --ff-only origin/dev` → `0097da5`（9 files，+962/-19） |
+| 重建镜像 | `DOCKER_BUILDKIT=1 docker compose build api`，exit 0 |
+| 重建容器 | `docker compose up -d --no-deps --force-recreate api worker` + `docker restart sortie-caddy` |
+| 公网验证 | `/api/health` = ok / version 0.5.0 / production；`/api/harnesses?refresh=true` 中 `dsh=ok` |
+| 容器内配置 | `dsh_sandbox_auto_fallback=True`、TTL 600s、探测超时 30s、初始 `workspace-write` |
+| 真机验收 | 容器内跑一轮 `DshProvider.send`：`STATUS ok / MODE danger-full-access / FALLBACK True / REASON sandbox backend / PROOF FALLBACK_OK`，即 bash 确实执行成功，WARNING 审计正常 |
+| 清理 | 验收临时目录 `/tmp/dsh-accept-*` 已删除，worker 近 5 分钟无 ERROR |
+
+**发布副作用（需运维跟进）**：`codex` 由 `ok` 变为 `auth_required`
+（`/home/sortie/.codex/auth.json` 位于容器可写层，`--force-recreate` 后丢失，探针无
+`OPENAI_API_KEY` / `CODEX_API_KEY` 兜底）。与 B 方案代码无关；恢复方式：重新
+`codex login` 并持久化该目录，或显式配置 API key。`claude_code` / `dsh` / `mock` 不受影响。
+
+**遗留**：`ini_d8ff9eb21cb3` 仍停在 `qa_verify` 的 `waiting_hitl`（保留未动）。
+它此前 3 轮 QA 产物都是环境阻塞，需要在页面上选择重跑/放行，或手动停止；由用户决定。
 
 ### 实施中发现并修正的一处误判
 
