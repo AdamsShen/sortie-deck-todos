@@ -106,6 +106,10 @@ class Settings(BaseSettings):
     # Codex `exec --sandbox` 档位（read-only | workspace-write | danger-full-access）。
     # 默认 workspace-write：编码阶段需要写文件；会话续跑沿用首次档位。
     codex_sandbox: str = "workspace-write"
+    # codex 非交互审批策略：never = 沙箱边界内不弹审批；空 = 用 CLI 默认
+    codex_ask_for_approval: str = "never"
+    # workspace-write 下是否允许网络（装依赖需要）；False 时只能跑本地已有依赖
+    codex_network_access: bool = True
     # 建队规划官发现目录外能力时会生成 forge 草稿；草稿未经人工审核前禁止出击。
     # 关闭后退化为旧行为（未发布 agent 直接随任务跑），仅建议临时排障时使用。
     forge_require_review: bool = True
@@ -127,10 +131,22 @@ class Settings(BaseSettings):
     # Claude Code --permission-mode for non-interactive -p runs in worktrees
     # acceptEdits | auto | bypassPermissions | default | dontAsk | plan
     coding_permission_mode: str = "acceptEdits"
+    # --- 权限与环境阻塞（见 docs/plans/2026-11-09-权限阻断与环境阻塞熔断.md）---
+    # SDK 的 deny 规则在 bypassPermissions 下仍生效；默认空表示不改变既有工具策略
+    permission_deny_rules: str = ""
+    # worker 启动自检：跑一条解释器命令，失败只告警（不判定任务、不跳过阶段）
+    permission_preflight: bool = True
+    # 环境阻塞（命令审批 / 无运行时证据）时第 1 轮即暂停，不再打回开发返工
+    env_block_pause_enabled: bool = True
+    # 兜底：同一失败签名连续出现 N 次自动暂停；0 表示关闭
+    max_consecutive_same_failure: int = 3
     # 传给 claude-agent-sdk 的 setting_sources："" 按 CLI 默认加载
     # user/project/local；"none" 为 SDK 隔离模式（不加载本机 settings 与插件
     # hooks，避免开发机的 hook 打断云端 stage）；其余为逗号分隔的 source 列表。
     harness_setting_sources: str = ""
+    # Claude Code 沙箱配置文件（SDK settings 路径）。留空 = 不注入，保持现有权限模式；
+    # docker 部署指向镜像内 /etc/sortie/claude-sandbox.json（见 docker/claude-sandbox.json）。
+    harness_settings_file: str = ""
     # --- DSH（DeepSeek Harness）provider --------------------------------------
     # 官方 Python SDK 走 stdio NDJSON-RPC 驱动随包附带的 dsh 运行时（不需要系统
     # Node）；会话落在任务级 dsh_home 下，每轮新进程靠 resume 续跑，见

@@ -444,6 +444,8 @@ export interface HitlRequest {
   verdict?: { passed?: boolean | null } | null;
   /** 推荐动作：有值时用它当主按钮（例如「返工」），而不是默认的「放行」 */
   recommended_action?: HitlRecommendation | null;
+  /** 环境阻塞原因：命令审批 / 无运行时证据，提示先修环境而不是反复返工 */
+  blocked_reason?: string | null;
 }
 
 /** POST /api/system/reveal 的返回：available=false 表示服务端无桌面环境，只能回传路径 */

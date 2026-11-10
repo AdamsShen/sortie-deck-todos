@@ -380,26 +380,15 @@ def _stage_artifact_dir(
 
 
 def _coding_perm_from_instruction(instruction: str | None) -> dict[str, str]:
-    """Parse Sortie Deck retry tag from human_instruction into StageContext.permissions."""
-    text = instruction or ""
-    markers = (
-        "[sortie:coding_permission_mode=",
-        "[rally:coding_permission_mode=",  # legacy
-    )
-    mode = ""
-    for marker in markers:
-        if marker not in text:
-            continue
-        try:
-            rest = text.split(marker, 1)[1]
-            mode = rest.split("]", 1)[0].strip()
-        except Exception:
-            mode = ""
-        if mode:
-            break
-    if not mode:
-        return {}
-    return {"coding_permission_mode": mode}
+    """把 HITL 指令里的提权标记解析成 ``StageContext.permissions`` 片段。
+
+    解析规则收口在 ``permissions.parse_permission_override``，CLI / SDK 两条路径共用；
+    非白名单值直接忽略，避免把任意字符串带进 SDK options。
+    """
+    from sortie_deck.permissions import parse_permission_override
+
+    mode = parse_permission_override(instruction)
+    return {"coding_permission_mode": mode} if mode else {}
 
 
 def _truncate_output(text: str, *, max_chars: int = 40000) -> str:
@@ -924,6 +913,8 @@ class PipelineState(TypedDict, total=False):
     handoff_total: int
     # 降级自检预算计数（按阶段）：status=fail 且自审未跑时重入本阶段的次数
     self_check_counts: dict[str, int]
+    # 连续同一失败签名的次数：非环境类失败的兜底熔断，防止无限返工
+    failure_signatures: dict[str, int]
     # Manager-driven parallel wave retry budget per group
     wave_attempts: dict[str, int]
     # Stop the run without marking the initiative as `stopped`
@@ -950,6 +941,9 @@ _SELF_CHECK_SKIP_PREFIXES = ("deploy",)
 # 自审真跑过（有独立结论）才算“不需要自检”；skipped / failed / unparsed 都算没跑成。
 _REVIEW_DONE_STATUSES = {"passed", "findings", "blocking"}
 
+# 环境侧失败：重跑同一阶段不会改变结论，必须暂停而不是打回开发
+_ENV_BLOCK_KINDS = {"environment_blocked", "auth_blocked"}
+
 
 def _needs_self_check(stage_name: str, result: dict[str, Any]) -> bool:
     """阶段失败且自审没有任何结论时返回 True：应先自检再放行下游。
@@ -960,9 +954,85 @@ def _needs_self_check(stage_name: str, result: dict[str, Any]) -> bool:
         return False
     if str(result.get("status") or "ok") != "fail":
         return False
+    # 已归因为环境/认证阻塞时不再自检重入：重跑同一阶段拿不到新证据，
+    # 交给守卫暂停并由人修环境，避免把自检预算也烧掉。
+    if (result.get("meta") or {}).get("failure_kind") in _ENV_BLOCK_KINDS:
+        return False
     review = (result.get("meta") or {}).get("review") or {}
     statuses = review.get("statuses") or {}
     return not any(str(v) in _REVIEW_DONE_STATUSES for v in statuses.values())
+
+
+def _failure_signature(stage: str, result: dict[str, Any]) -> str:
+    """把一次阶段失败压成可比对签名，用于识别「同一失败反复重跑」。"""
+    meta = result.get("meta") or {}
+    reason = str(meta.get("failure_reason") or result.get("message") or "")[:120]
+    kind = str(meta.get("failure_kind") or result.get("failure_kind") or "")
+    return f"{stage}|{result.get('status')}|{kind}|{reason}"
+
+
+def _apply_environment_block_guard(
+    st: PipelineState, stage_name: str, result: dict[str, Any]
+) -> PipelineState | None:
+    """环境阻塞第 1 轮即暂停；同一失败连续 N 次兜底暂停。
+
+    返回非 None 表示本次运行已终止（调用方直接返回该 state）；None 表示继续原流程。
+    采用 ``stopped`` 终态而非 ``interrupt``：并非每个阶段都有 HITL 门禁，终态在
+    任意阶段都可靠，人修好执行环境后重新发起任务即可恢复。
+    """
+    from sortie_deck.settings import settings
+
+    meta = result.get("meta") or {}
+    kind = str(meta.get("failure_kind") or result.get("failure_kind") or "")
+    status = str(result.get("status") or "ok")
+    if status == "ok" and not kind:
+        st["failure_signatures"] = {}
+        return None
+
+    sig = _failure_signature(stage_name, result)
+    # 只保留当前签名：计数语义是「连续」，换一种失败即重新计
+    prior = st.get("failure_signatures") or {}
+    count = int(prior.get(sig, 0)) + 1
+    st["failure_signatures"] = {sig: count}
+
+    reasons: list[str] = []
+    if kind in _ENV_BLOCK_KINDS and settings.env_block_pause_enabled:
+        reasons.append(f"环境阻塞（{kind}）：{meta.get('failure_reason') or '无运行时证据'}")
+    limit = int(getattr(settings, "max_consecutive_same_failure", 0) or 0)
+    if not reasons and limit > 0 and count >= limit:
+        reasons.append(f"同一失败连续 {count} 次（{sig[:80]}）")
+    if not reasons:
+        return None
+
+    why = "；".join(reasons)
+    events = list(st.get("events") or [])
+    events.append(
+        {
+            "stage": stage_name,
+            "kind": "error",
+            "message": f"已自动暂停，避免无限返工：{why}。修复执行环境后重新发起任务。",
+            "data": {"failure_kind": kind or "unknown", "consecutive": count, "reason": why},
+        }
+    )
+    logger.warning(
+        "阶段失败触发自动暂停: initiative=%s stage=%s kind=%s consecutive=%s",
+        st.get("initiative_id"),
+        stage_name,
+        kind or "unknown",
+        count,
+    )
+    return {
+        **st,
+        "events": events,
+        "stopped": True,
+        "status": "stopped",
+        "handoff_target": None,
+        "failure_signatures": {sig: count},
+        "last_result": {
+            **result,
+            "message": f"{result.get('message') or ''}（已自动暂停：{why}）",
+        },
+    }
 
 
 def _gate_recommendation(
@@ -980,8 +1050,20 @@ def _gate_recommendation(
         return {}
     if passed:
         return {"verdict": {"passed": True}, "recommended_action": {"action": "approve"}}
+    blocked = (result.get("meta") or {}).get("failure_kind") in _ENV_BLOCK_KINDS
     return {
         "verdict": {"passed": False},
+        # 守卫被显式关闭时也要让人看清楚：这是环境问题，不是代码没写好
+        **(
+            {
+                "blocked_reason": (
+                    "执行环境阻塞（命令审批 / 无运行时证据），返工不会改变结论；"
+                    "请先修复执行环境再恢复任务。"
+                )
+            }
+            if blocked
+            else {}
+        ),
         "recommended_action": {
             "action": "reroute",
             "next_stage": on_fail,
@@ -2463,6 +2545,11 @@ def build_graph_from_template(
                 st = await run_stage(state, stage_name)
 
             result = st.get("last_result") or {}
+            # 环境阻塞 / 连续同一失败：在任何返工、自检、门禁之前先止血，
+            # 否则会被 qa_passed=False 打回开发，形成多轮无效重跑。
+            guard = _apply_environment_block_guard(st, stage_name, result)
+            if guard is not None:
+                return guard
             # 降级自检：上一次运行失败、自审又没跑成时，先把产物补齐再放行下游，
             # 否则 QA 只能对着一份残缺交付判 fail，白跑一整轮（9 分钟量级）。
             if _needs_self_check(stage_name, result):

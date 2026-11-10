@@ -3647,7 +3647,9 @@ export default function App() {
                   </span>
                   {selected.pending_hitl.verdict?.passed === false && (
                     <span className="hitl-verdict">
-                      {selected.pending_hitl.recommended_action?.hint || tr("gateVerdictFailed")}
+                      {selected.pending_hitl.blocked_reason ||
+                        selected.pending_hitl.recommended_action?.hint ||
+                        tr("gateVerdictFailed")}
                     </span>
                   )}
                   {selected.pending_hitl.recommended_action?.action === "reroute" ? (

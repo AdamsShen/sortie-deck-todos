@@ -422,6 +422,24 @@ def _mission_control_guard(
     return user
 
 
+def _sandbox_health() -> dict[str, Any]:
+    """health 用的沙箱状态：配置文件是否存在、依赖二进制是否在 PATH。
+
+    只回答「镜像装没装齐、配置指没指对」，不探测 namespace 权限（那由容器
+    security_opt 决定，属于部署事实）。
+    """
+    from sortie_deck.permissions import sandbox_preflight
+
+    config_file = str(settings.harness_settings_file or "").strip()
+    missing = set(sandbox_preflight()["missing"])
+    return {
+        "config_file": config_file,
+        "config_present": bool(config_file) and Path(config_file).is_file(),
+        "bwrap": "bwrap" not in missing,
+        "socat": "socat" not in missing,
+    }
+
+
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
     o = orch()
@@ -433,6 +451,9 @@ async def health() -> dict[str, Any]:
         "storage": settings.storage,
         "run_backend": settings.run_backend,
         "artifact_backend": settings.artifact_backend,
+        # 运维可直接核对云端/本地是否配成同一个权限模式（漏配是本次故障的起点）
+        "permission_mode": settings.coding_permission_mode,
+        "sandbox": _sandbox_health(),
         "initiatives": len(o.list_initiatives()),
         "executors": len(o.registry.names()),
     }

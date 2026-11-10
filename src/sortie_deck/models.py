@@ -431,12 +431,29 @@ class StageContext(BaseModel):
     disallowed_tools: list[str] = Field(default_factory=list)
 
 
+class StageFailureKind(str, Enum):
+    """阶段失败归因：决定失败后能否重试，而不是一律当作代码缺陷打回开发。
+
+    ``environment_blocked``：命令审批、浏览器缺失、无运行时证据等环境侧问题，
+    重跑同一阶段不会改变结论；``auth_blocked`` 同理但需要人补凭据。
+    """
+
+    CODE_DEFECT = "code_defect"
+    ENVIRONMENT_BLOCKED = "environment_blocked"
+    AUTH_BLOCKED = "auth_blocked"
+    UNKNOWN = "unknown"
+
+
 class StageResult(BaseModel):
     status: Literal["ok", "fail", "needs_hitl"] = "ok"
     message: str = ""
     artifacts: dict[str, str] = Field(default_factory=dict)
     proposed_next: str | None = None
     qa_passed: bool | None = None
+    # None 表示沿用旧行为（不分类）。环境类失败 retryable=False，编排层据此暂停
+    # 而不是按 qa_passed=False 打回 eng_implement，避免无限返工。
+    failure_kind: StageFailureKind | None = None
+    retryable: bool | None = None
     meta: dict[str, Any] = Field(default_factory=dict)
 
 

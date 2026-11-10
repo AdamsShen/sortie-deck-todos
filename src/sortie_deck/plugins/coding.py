@@ -236,25 +236,19 @@ def _write_mcp_config(workspace: Path, ctx: StageContext) -> tuple[str, list[str
 
 
 def _permission_mode(ctx: StageContext) -> str:
+    """解析本阶段的 Claude Code 权限模式（CLI 执行器路径）。
+
+    HITL 放行权限阻断后会在指令里注入 ``[sortie:coding_permission_mode=...]``；
+    解析统一走 ``permissions.resolve_permission_mode``，与 SDK harness 路径同口径。
+    """
+    from sortie_deck.permissions import resolve_permission_mode
     from sortie_deck.settings import settings
 
-    # HITL approve after permission block can force bypass for retry
-    forced = (ctx.permissions or {}).get("coding_permission_mode") or (
-        ctx.human_instruction or ""
+    return resolve_permission_mode(
+        permissions=ctx.permissions,
+        human_instruction=ctx.human_instruction,
+        default=getattr(settings, "coding_permission_mode", "acceptEdits"),
     )
-    if isinstance(forced, str) and "bypass" in forced.lower():
-        return "bypassPermissions"
-    mode = (getattr(settings, "coding_permission_mode", None) or "acceptEdits").strip()
-    if mode not in {
-        "acceptEdits",
-        "auto",
-        "bypassPermissions",
-        "default",
-        "dontAsk",
-        "plan",
-    }:
-        mode = "acceptEdits"
-    return mode
 
 
 def _looks_like_permission_block(text: str) -> bool:
@@ -368,6 +362,14 @@ def _workspace_file_listing(workspace: Path) -> str:
         ".git",
         "__pycache__",
         "node_modules",
+        # 任务内依赖/构建产物：沙箱方案允许装在 workspace，但不能算手写实现
+        ".venv",
+        "venv",
+        "dist",
+        "build",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".next",
         ".cursor",
         ".sortie-deck",
         ".write_probe",
@@ -823,6 +825,8 @@ class ClaudeCodeExecutor:
             f"Workspace (cwd): {workspace}\n"
             f"Write the implementation into this directory (e.g. index.html / src/).\n"
             f"Do not ask the user to approve writes — permission mode is `{mode}`.\n"
+            "Install project dependencies inside this workspace only (node_modules/.venv); "
+            "global installs (npm i -g, apt-get) are out of scope.\n"
             f"Human instruction: {ctx.human_instruction or 'none'}\n\n"
             f"{artifact_section}"
             f"{repo_section}"

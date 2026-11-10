@@ -23,7 +23,116 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from sortie_deck.models import CODING_ROLE_VALUES, ENG_BUILD_STAGES, StageContext, StageResult
+from sortie_deck.models import (
+    CODING_ROLE_VALUES,
+    ENG_BUILD_STAGES,
+    StageContext,
+    StageFailureKind,
+    StageResult,
+)
+from sortie_deck.permissions import (
+    configured_deny_rules,
+    maybe_permission_preflight,
+    resolve_permission_mode,
+    resolve_sandbox_mode,
+)
+
+# 命令审批被拒时底层 CLI/SDK 回显的特征串；命中即认为是环境侧问题
+_BLOCKED_HINTS = ("requires approval", "permission denied", "command not allowed")
+
+
+def _parse_artifact_json(text: str) -> Any:
+    """解析阶段产物 JSON；缺文件/格式错误返回 None，分类是旁路能力不能打断阶段。"""
+    try:
+        return json.loads(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _selftest_blocked(data: Any) -> bool:
+    """自测日志里出现 blocked 记录即视为「无运行时证据」。
+
+    只在阶段未成功时调用；历史 blocked 记录可能来自上一轮，但此时继续返工
+    同样拿不到新证据，交给人工处置比自动重跑更安全。
+    """
+    if isinstance(data, dict):
+        items = data.get("items") or data.get("checks") or []
+    elif isinstance(data, list):
+        items = data
+    else:
+        return False
+    if not isinstance(items, list):
+        return False
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status") or "").lower()
+        tail = str(item.get("tail") or "").lower()
+        if status == "blocked" or any(hint in tail for hint in _BLOCKED_HINTS):
+            return True
+    return False
+
+
+def _qa_blocked(data: Any) -> bool:
+    """QA 报告明确判定「非代码缺陷 / 无法验证」时返回 True。
+
+    只看 ``not_a_code_defect`` 与 ``status=blocked``；``release_decision=do_not_release``
+    可能是真实代码缺陷，不能据此归因为环境问题。
+    """
+    if not isinstance(data, dict):
+        return False
+    verdict = data.get("verdict")
+    if not isinstance(verdict, dict):
+        return False
+    if verdict.get("not_a_code_defect") is True:
+        return True
+    return str(verdict.get("status") or "").lower() == "blocked"
+
+
+def classify_stage_failure(
+    *,
+    reply_meta: dict[str, Any] | None,
+    artifacts: dict[str, str],
+    workspace: Path,
+    artifact_dir: Path | None,
+) -> tuple[StageFailureKind | None, str]:
+    """从事后产物判定阶段失败归因，返回 ``(类别, 原因摘要)``；无结论返回 ``(None, "")``。
+
+    输入示例：``selftest_log.json`` 的 ``[{"status":"blocked","tail":"This command requires
+    approval"}]`` 或 ``test_report.json`` 的 ``{"verdict":{"not_a_code_defect":true}}``。
+    只做事后判定，不在阶段开头预检、不跳过阶段（SWE-bench PR #594 的教训）；
+    provider 的 ``permission_block`` / ``auth_block`` 标记优先级高于产物解析。
+    """
+    meta = reply_meta or {}
+    if meta.get("auth_block"):
+        return StageFailureKind.AUTH_BLOCKED, "harness 认证/授权被阻断"
+    if meta.get("permission_block"):
+        return StageFailureKind.ENVIRONMENT_BLOCKED, "harness 命令审批被阻断"
+
+    texts: list[str] = []
+    for key in ("selftest_log.json", "test_report.json"):
+        value = artifacts.get(key)
+        if isinstance(value, str) and value.strip():
+            texts.append(value)
+    bases: list[Path] = [workspace, workspace / ".upstream"]
+    if artifact_dir is not None:
+        bases.insert(0, artifact_dir)
+    for base in bases:
+        for name in ("selftest_log.json", "test_report.json"):
+            path = base / name
+            try:
+                if path.is_file():
+                    texts.append(path.read_text(encoding="utf-8", errors="replace"))
+            except OSError as exc:  # noqa: BLE001 — 产物读取失败不影响阶段收尾
+                logger.debug("阶段产物读取失败: path=%s error=%s", path.name, type(exc).__name__)
+
+    for text in texts:
+        data = _parse_artifact_json(text)
+        if _selftest_blocked(data):
+            return StageFailureKind.ENVIRONMENT_BLOCKED, "自测命令被审批阻断，无运行时证据"
+        if _qa_blocked(data):
+            return StageFailureKind.ENVIRONMENT_BLOCKED, "QA 判定环境阻塞（not_a_code_defect）"
+    return None, ""
 
 
 async def _emit_progress(ctx: StageContext, payload: dict[str, Any]) -> None:
@@ -965,6 +1074,13 @@ class HarnessStageExecutor:
         from sortie_deck.harness_providers.base import ProbeStatus, get_harness_registry
         from sortie_deck.settings import settings
 
+        # 漏配 permission_mode 的环境在第一条日志就暴露，不必等 3 小时后复盘
+        await maybe_permission_preflight(
+            enabled=settings.permission_preflight,
+            mode=settings.coding_permission_mode,
+            initiative_id=ctx.initiative_id,
+            stage=ctx.stage,
+        )
         harness = (ctx.harness or "").strip() or settings.default_harness
         registry = get_harness_registry()
         probe = ProbeStatus(status="missing", detail=f"harness `{harness}` is not registered")
@@ -1385,6 +1501,27 @@ class HarnessStageExecutor:
         # 意图解析层：回复文本里的 ```toolkit_intent 围栏 → StageResult.meta，
         # 编排层（graph.run_toolkit_meta / _run_mcp_calls）据此兑现
         meta.update(_parse_toolkit_intents(reply.text or ""))
+        # 只在失败/待授权时归因：成功阶段里的历史 blocked 记录不能反过来标记本轮。
+        failure_kind: StageFailureKind | None = None
+        retryable: bool | None = None
+        if not ok or needs_hitl or qa_passed is False:
+            failure_kind, failure_reason = classify_stage_failure(
+                reply_meta=reply_meta if isinstance(reply_meta, dict) else None,
+                artifacts=artifacts,
+                workspace=workspace,
+                artifact_dir=artifact_dir,
+            )
+            if failure_kind is not None:
+                retryable = False
+                meta["failure_kind"] = failure_kind.value
+                meta["failure_reason"] = failure_reason
+                logger.warning(
+                    "阶段失败归因: initiative=%s stage=%s kind=%s reason=%s",
+                    ctx.initiative_id,
+                    ctx.stage,
+                    failure_kind.value,
+                    failure_reason,
+                )
         if needs_hitl:
             return StageResult(
                 status="needs_hitl",
@@ -1394,6 +1531,8 @@ class HarnessStageExecutor:
                 ),
                 artifacts=artifacts,
                 proposed_next=ctx.stage,
+                failure_kind=failure_kind,
+                retryable=retryable,
                 meta={**meta, "permission_block": True, "auth_block": reply.status == "needs_auth"},
             )
         # 自审仍有 blocking：按策略转人工门禁或直接判失败。
@@ -1410,6 +1549,8 @@ class HarnessStageExecutor:
                     message=message + ("请在门禁裁决后重试。" if policy == "hitl" else ""),
                     artifacts=artifacts,
                     proposed_next=ctx.stage,
+                    failure_kind=failure_kind,
+                    retryable=retryable,
                     meta={**meta, "review_blocking": True},
                 )
         # 模型没声明交接时保留编码角色的既有默认落点（qa_verify）
@@ -1433,6 +1574,8 @@ class HarnessStageExecutor:
             artifacts=artifacts,
             proposed_next=proposed_next or fallback_next,
             qa_passed=qa_passed,
+            failure_kind=failure_kind,
+            retryable=retryable,
             meta={**meta, **({"control_intent": control_meta} if control_meta else {})},
         )
 
@@ -1811,6 +1954,7 @@ class HarnessStageExecutor:
     async def _build_context_pack(self, ctx: StageContext) -> dict[str, Any]:
         from sortie_deck.mission_memory import get_mission_memory
         from sortie_deck.orchestrator import get_orchestrator
+        from sortie_deck.settings import settings
 
         mm = get_mission_memory()
         ini = None
@@ -1838,7 +1982,25 @@ class HarnessStageExecutor:
             # 本阶段禁用工具：provider 据此设置底层 agent 的工具白名单（claude_code
             # 映射到 SDK disallowed_tools）。放在 pack 里而不是改 send 签名，
             # 旧 provider 忽略该键即可，不会因签名不匹配报错。
-            "disallowed_tools": list(ctx.disallowed_tools or []),
+            "disallowed_tools": [
+                *list(ctx.disallowed_tools or []),
+                *configured_deny_rules(settings.permission_deny_rules),
+            ],
+            # 任务级权限 override 必须透传到 SDK：此前只落在 StageContext，
+            # provider 恒取全局默认，HITL 提权在 harness_stage 路径完全失效。
+            "permission_mode": resolve_permission_mode(
+                permissions=ctx.permissions,
+                human_instruction=ctx.human_instruction,
+                default=settings.coding_permission_mode,
+            ),
+            # 公共沙箱档位：dsh / codex 消费；claude 仍用自己的 permission_mode。
+            # 放在 pack 里而不是改 send 签名，旧 provider 忽略未知键即可。
+            "sandbox": {
+                "mode": resolve_sandbox_mode(
+                    permissions=ctx.permissions,
+                    human_instruction=ctx.human_instruction,
+                ),
+            },
         }
         return out
 
@@ -1988,6 +2150,15 @@ class HarnessStageExecutor:
             f"Human instruction: {ctx.human_instruction or 'none'}",
             f"Mission brief:\n{ctx.brief}",
         ]
+        if not doc_stage:
+            # 沙箱默认只允许写 cwd + add-dir；全局安装会被拒且会污染同容器其他任务
+            sections.append(
+                "Dependency boundary: install project dependencies inside the workspace "
+                f"(`{workspace}/node_modules`, `{workspace}/.venv`). Global installs "
+                "(`npm i -g`, `apt-get`, writing `/usr/local`) are blocked by the sandbox and "
+                "would affect other missions. If a runtime is missing, report it instead of "
+                "trying to install it globally."
+            )
         if ctx.disallowed_tools:
             # 显式告知工具禁用：否则 agent 会先尝试 Bash 撞一次拒绝再放弃，白烧回合。
             sections.append(

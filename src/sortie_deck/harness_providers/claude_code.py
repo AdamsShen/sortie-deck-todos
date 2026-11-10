@@ -223,9 +223,18 @@ class ClaudeCodeProvider:
             for name in (pack.get("disallowed_tools") or [])
             if str(name or "").strip()
         ]
+        # 任务级 override 优先（HITL 提权 / 阶段策略），否则回落全局配置；
+        # 此前恒取全局值，SDK 路径下任务级提权完全失效。
+        permission_mode = str(pack.get("permission_mode") or settings.coding_permission_mode)
+        # 沙箱配置走 SDK settings 文件：路径存在才传，避免本地未部署配置时报错。
+        settings_file = str(getattr(settings, "harness_settings_file", "") or "").strip()
+        settings_option = settings_file if settings_file and Path(settings_file).is_file() else None
+        if settings_file and settings_option is None:
+            logger.warning("沙箱配置文件不存在，忽略: %s", settings_file)
         options = ClaudeAgentOptions(
             cwd=cwd or None,
-            permission_mode=settings.coding_permission_mode,
+            permission_mode=permission_mode,
+            settings=settings_option,
             disallowed_tools=disallowed or None,
             resume=session.native_id or None,
             setting_sources=_setting_sources(settings.harness_setting_sources),
