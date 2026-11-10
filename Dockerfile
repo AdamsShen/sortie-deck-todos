@@ -86,10 +86,6 @@ RUN if [ -n "$APT_MIRROR" ]; then \
     && apt-get install -y --no-install-recommends bubblewrap socat \
     && rm -rf /var/lib/apt/lists/*
 
-# 沙箱配置随镜像分发；TDT_HARNESS_SETTINGS_FILE 指向它即可启用（见 .env.example）
-COPY docker/claude-sandbox.json /etc/sortie/claude-sandbox.json
-RUN chmod 644 /etc/sortie/claude-sandbox.json
-
 # Node 直接复用上面 web 构建阶段的二进制（22.x），
 # 不走 apt：Debian 12 自带 node 18 偏旧，且省一次 apt 网络依赖。
 COPY --from=web /usr/local/bin/node /usr/local/bin/node
@@ -117,6 +113,11 @@ RUN ln -sf /usr/local/lib/python3.12/site-packages/claude_agent_sdk/_bundled/cla
 ARG NPM_REGISTRY="https://registry.npmjs.org"
 RUN npm i -g --registry="${NPM_REGISTRY}" @openai/codex \
     && codex --version
+
+# 沙箱配置放最后：只改 JSON 时只重建本层，不必重跑 pip / npm 安装。
+# TDT_HARNESS_SETTINGS_FILE 指向它即可启用（见 .env.example）。
+COPY docker/claude-sandbox.json /etc/sortie/claude-sandbox.json
+RUN chmod 644 /etc/sortie/claude-sandbox.json
 
 # cursor 暂不装：它的 install 脚本装到 $HOME/.local/bin（构建期是 /root，运行期是
 # /home/sortie，路径对不上，需显式搬到 /usr/local/bin），且必须有 CURSOR_API_KEY

@@ -20,10 +20,10 @@
     },
     "credentials": {
       "envVars": [
-        "ANTHROPIC_API_KEY",
-        "TDT_LLM_API_KEY",
-        "TDT_DSH_API_KEY",
-        "TDT_GIT_SECRET_KEY"
+        { "name": "ANTHROPIC_API_KEY", "mode": "deny" },
+        { "name": "TDT_LLM_API_KEY", "mode": "deny" },
+        { "name": "TDT_DSH_API_KEY", "mode": "deny" },
+        { "name": "TDT_GIT_SECRET_KEY", "mode": "deny" }
       ]
     }
   }

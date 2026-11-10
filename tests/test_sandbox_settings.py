@@ -75,7 +75,9 @@ def test_shipped_sandbox_config_enables_sandbox_without_prompts() -> None:
     assert sandbox["autoAllowBashIfSandboxed"] is True
     assert sandbox["allowUnsandboxedCommands"] is False
     assert "registry.npmjs.org" in sandbox["network"]["allowedDomains"]
-    assert "ANTHROPIC_API_KEY" in sandbox["credentials"]["envVars"]
+    credential_names = {item["name"] for item in sandbox["credentials"]["envVars"]}
+    assert "ANTHROPIC_API_KEY" in credential_names
+    assert all(item["mode"] == "deny" for item in sandbox["credentials"]["envVars"])
     assert "/usr/local" in sandbox["filesystem"]["denyWrite"]
 
 
