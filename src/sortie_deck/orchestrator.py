@@ -1529,7 +1529,7 @@ class Orchestrator:
         from sortie_deck.harness_providers import get_harness_registry, is_valid_harness
         from sortie_deck.settings import settings
 
-        harness = (preferred or settings.default_harness or "claude_code").strip()
+        harness = (preferred or settings.default_harness or "dsh").strip()
         if not is_valid_harness(harness) or not get_harness_registry().has(harness):
             raise UnknownHarnessError(f"Unknown harness provider: `{harness}`")
         return harness

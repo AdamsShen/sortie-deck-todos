@@ -110,7 +110,7 @@ workspace 内的 bash 本来就无需审批，只有越界/提权才需审批且
 选择与锁定：
 
 - 创建任务时选择（`CreateInitiativeRequest.harness`），默认
-  `TDT_DEFAULT_HARNESS=claude_code`；注册表校验失败抛 `UnknownHarnessError`。
+  `TDT_DEFAULT_HARNESS=dsh`；注册表校验失败抛 `UnknownHarnessError`。
 - `/start` 时锁定（`Initiative.harness_locked=True`）；草稿期可经
   `PATCH /api/initiatives/{id}/harness` 更换。
 - 运行中更换必须经 HITL 授权（`switch_harness` 动作）—— 图把新 harness 写入

@@ -52,7 +52,10 @@ class Settings(BaseSettings):
     # --- agent harness (system-wide capability) ------------------------------
     # Initiative-level harness; locked once the mission starts.
     # claude_code | dsh | opencode | codex | cursor | mock
-    default_harness: str = "claude_code"
+    # 默认 dsh（DeepSeek Harness）：同一 brief 下比 claude_code 快约 2 倍
+    # （2026-11-11 本地 metrics 对比，见 CHANGELOG）。未装 SDK / 无凭据时
+    # 由 harness_fallback 回退到 legacy stage executor，不会硬失败。
+    default_harness: str = "dsh"
     # Probe cache TTL for harness availability checks (seconds)
     harness_probe_ttl: float = 60.0
     # When the chosen harness provider is unavailable, fall back to the legacy

@@ -76,7 +76,7 @@ HarnessProvider(Protocol)
 Selection & locking:
 
 - Chosen at mission creation (`CreateInitiativeRequest.harness`), default
-  `TDT_DEFAULT_HARNESS=claude_code`; validated against the registry
+  `TDT_DEFAULT_HARNESS=dsh`; validated against the registry
   (`UnknownHarnessError` otherwise).
 - Locked when the pipeline starts (`Initiative.harness_locked=True`); draft
   missions can switch via `PATCH /api/initiatives/{id}/harness`.
