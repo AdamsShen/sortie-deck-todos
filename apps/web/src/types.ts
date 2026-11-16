@@ -622,6 +622,10 @@ export interface PublishedAgent {
   tags: string[];
   visibility: Visibility;
   toolkit_ids?: string[];
+  /** 角色级模型；缺省时后端使用全局默认 */
+  model?: string;
+  /** 角色级工具白名单；空数组表示不限制 */
+  tools_allowed?: string[];
   avatar?: string | null;
   author_id?: string;
   author_name?: string;

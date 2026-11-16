@@ -101,6 +101,9 @@ const KB_IMPORT_ACCEPT = KB_IMPORT_EXTS.size
   ? Array.from(KB_IMPORT_EXTS).map((x) => `.${x}`).join(",")
   : "";
 
+// 角色级默认模型：与后端 models.DEFAULT_ROLE_MODEL 保持一致，仅作表单默认值
+const DEFAULT_ROLE_MODEL = "deepseek/deepseek-v4-flash-20260731";
+
 const AGENT_SLOTS: AgentSlot[] = [
   "product",
   "design",
@@ -369,6 +372,8 @@ export default function App() {
     tags: string;
     visibility: Visibility;
     toolkit_ids: string[];
+    model: string;
+    tools_allowed: string[];
     avatar: string;
   }>({
     title: "",
@@ -378,6 +383,8 @@ export default function App() {
     tags: "",
     visibility: "public",
     toolkit_ids: [],
+    model: DEFAULT_ROLE_MODEL,
+    tools_allowed: [],
     avatar: "",
   });
   // V-C 装配线：工具绑定弹框状态（草稿勾选在弹框内暂存，点「确定」才写回 agentForm）
@@ -2029,6 +2036,8 @@ export default function App() {
       tags: "",
       visibility: "public",
       toolkit_ids: [],
+      model: DEFAULT_ROLE_MODEL,
+      tools_allowed: [],
       avatar: "",
     });
     setAgentSpec(emptyPersonaSpec());
@@ -2047,6 +2056,8 @@ export default function App() {
       tags: (a.tags || []).join(", "),
       visibility: a.visibility || "public",
       toolkit_ids: [...(a.toolkit_ids || [])],
+      model: a.model || DEFAULT_ROLE_MODEL,
+      tools_allowed: [...(a.tools_allowed || [])],
       avatar: a.avatar || `preset:${a.slot || "product"}`,
     });
     // 旧角色可能只有自由文本：本地解析一份结构化视图，便于直接分段编辑
@@ -2097,6 +2108,8 @@ export default function App() {
         : { persona: agentForm.persona }),
       visibility: agentForm.visibility,
       toolkit_ids: agentForm.toolkit_ids,
+      model: agentForm.model.trim() || DEFAULT_ROLE_MODEL,
+      tools_allowed: agentForm.tools_allowed,
       avatar: agentForm.avatar || `preset:${agentForm.slot}`,
       tags: agentForm.tags
         .split(",")
@@ -2159,6 +2172,15 @@ export default function App() {
       const cur = prev.toolkit_ids || [];
       const toolkit_ids = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
       return { ...prev, toolkit_ids };
+    });
+  }
+
+  // 角色级工具白名单：与「默认绑定」分开，空集 = 不限制
+  function toggleAgentFormToolsAllowed(id: string) {
+    setAgentForm((prev) => {
+      const cur = prev.tools_allowed || [];
+      const tools_allowed = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
+      return { ...prev, tools_allowed };
     });
   }
 
@@ -5074,6 +5096,43 @@ export default function App() {
                       {tr("wrGearCta")}
                       <small>{tr("wrGearCtaHint")}</small>
                     </button>
+                  </div>
+                  {/* 角色级模型：留空回落后端默认 */}
+                  <label className="wr-field">
+                    <span>{tr("agentModel")}</span>
+                    <input
+                      value={agentForm.model}
+                      placeholder={DEFAULT_ROLE_MODEL}
+                      onChange={(e) => setAgentForm({ ...agentForm, model: e.target.value })}
+                    />
+                    <small>{tr("agentModelHint")}</small>
+                  </label>
+                  {/* 角色级工具白名单：不选 = 不限制，选了则只能加载这些条目 */}
+                  <div className="wr-field">
+                    <span>
+                      {tr("agentToolsAllowed")}
+                      <small>
+                        {" "}
+                        {tr("toolsSelected")} {agentForm.tools_allowed.length}
+                      </small>
+                    </span>
+                    <div className="toolkit-pick">
+                      {enabledToolkit.length === 0 && <small>{tr("noToolkitYet")}</small>}
+                      {enabledToolkit.map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          className={`toolkit-chip${
+                            agentForm.tools_allowed.includes(item.id) ? " on" : ""
+                          } kind-${item.kind}`}
+                          title={item.summary}
+                          onClick={() => toggleAgentFormToolsAllowed(item.id)}
+                        >
+                          {item.kind}/{item.name}
+                        </button>
+                      ))}
+                    </div>
+                    <small>{tr("agentToolsAllowedHint")}</small>
                   </div>
                 </section>
 
