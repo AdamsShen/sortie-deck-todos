@@ -12,8 +12,18 @@
 
 ## 2. 模型
 
-`PublishedAgent`：slot、persona、persona_spec、toolkit_ids、visibility、version…
+`PublishedAgent`：slot、persona、persona_spec、toolkit_ids、model、visibility、version…
 创建任务时 `resolve_slot_map`。
+
+### 角色级模型与工具白名单
+
+- `model`：角色级模型，默认 `deepseek/deepseek-v4-flash-20260731`。任务创建时写入
+  `RoleAgent.model` → 阶段 `StageContext.model` → `context_pack["model"]`，由 provider 原样
+  透传（dsh 走 `model` 参数，claude_code 走 SDK `ClaudeAgentOptions.model`）；置空则回落
+  provider 默认。
+- `tools_allowed`：角色级工具白名单，可在角色工坊创建/编辑时勾选。非空时把该角色的
+  `toolkit_ids` 收敛到白名单内（MCP / skill 不再加载契约外条目），并在提示词里声明能力边界；
+  角色级为空时回落 persona front-matter 的 `tools_allowed`，两者都为空表示不限制（与旧行为一致）。
 
 ### 人设结构（六段式）
 

@@ -17,8 +17,19 @@ PublishedAgent
   id, slug, title,
   slot: product|design|eng|eng_ios|eng_android|eng_web|eng_backend|eng_agent|qa|deploy
   summary, persona, persona_spec?, tags, visibility: public|private
-  toolkit_ids[], author_*, version, published
+  toolkit_ids[], model, author_*, version, published
 ```
+
+Role-level capabilities:
+
+- `model` defaults to `deepseek/deepseek-v4-flash-20260731`. It flows through
+  `RoleAgent.model` → `StageContext.model` → `context_pack["model"]` and is passed verbatim to
+  the provider (dsh `model` argument, claude_code `ClaudeAgentOptions.model`). Empty falls back
+  to the provider default.
+- `tools_allowed`: a role-level allowlist editable in the Agent Forge (create/edit). When
+  non-empty, it narrows the role's `toolkit_ids` so out-of-contract MCP/skill items are not
+  loaded, and the prompt states the boundary. When the role-level list is empty it falls back
+  to the persona front-matter `tools_allowed`; both empty means no restriction (legacy behavior).
 
 `persona` is the compiled system prompt and the **only runtime source**; `persona_spec` is
 the workshop's structured view, shaped as six sections: **role / background / skills /
