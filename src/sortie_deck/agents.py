@@ -8,7 +8,7 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, Field
 
-from sortie_deck.models import RoleId, new_id, utc_now
+from sortie_deck.models import DEFAULT_ROLE_MODEL, RoleId, new_id, utc_now
 from sortie_deck.persona import PersonaSpec, render_persona
 from sortie_deck.templates import load_persona_spec
 
@@ -53,6 +53,10 @@ class PublishedAgent(BaseModel):
     persona_spec: PersonaSpec | None = None
     tags: list[str] = Field(default_factory=list)
     toolkit_ids: list[str] = Field(default_factory=list)
+    # 角色级模型：provider 原样透传；未配置时用全局默认
+    model: str = DEFAULT_ROLE_MODEL
+    # 角色级工具白名单：非空时收敛 toolkit_ids；空 = 回落 persona 契约 / 不限制
+    tools_allowed: list[str] = Field(default_factory=list)
     visibility: Visibility = "public"
     author_id: str = ""
     author_name: str = ""
@@ -73,6 +77,9 @@ class CreateAgentRequest(BaseModel):
     persona_spec: PersonaSpec | None = None
     tags: list[str] = Field(default_factory=list)
     toolkit_ids: list[str] = Field(default_factory=list)
+    # 不传 / 传空串时回落 DEFAULT_ROLE_MODEL
+    model: str | None = None
+    tools_allowed: list[str] = Field(default_factory=list)
     visibility: Visibility = "public"
     slug: str | None = None
     published: bool = True
@@ -86,6 +93,8 @@ class UpdateAgentRequest(BaseModel):
     persona_spec: PersonaSpec | None = None
     tags: list[str] | None = None
     toolkit_ids: list[str] | None = None
+    model: str | None = None
+    tools_allowed: list[str] | None = None
     visibility: Visibility | None = None
     published: bool | None = None
     slot: AgentSlot | None = None
@@ -307,6 +316,8 @@ class AgentCatalog:
                 persona_spec=spec,
                 tags=[t.strip() for t in req.tags if t.strip()],
                 toolkit_ids=list(req.toolkit_ids),
+                model=(req.model or "").strip() or DEFAULT_ROLE_MODEL,
+                tools_allowed=[str(x).strip() for x in req.tools_allowed if str(x).strip()],
                 visibility=req.visibility,
                 published=req.published,
                 author_id=author_id,
@@ -343,6 +354,13 @@ class AgentCatalog:
                     patch["tags"] = [t.strip() for t in patch["tags"] if t.strip()]
                 if "toolkit_ids" in patch and patch["toolkit_ids"] is not None:
                     patch["toolkit_ids"] = [str(x) for x in patch["toolkit_ids"]]
+                if "tools_allowed" in patch and patch["tools_allowed"] is not None:
+                    patch["tools_allowed"] = [
+                        str(x).strip() for x in patch["tools_allowed"] if str(x).strip()
+                    ]
+                # 显式清空 model 时回落默认值，避免出现空模型透传给 provider
+                if "model" in patch:
+                    patch["model"] = str(patch.get("model") or "").strip() or DEFAULT_ROLE_MODEL
                 data.update(patch)
                 data["version"] = int(data.get("version", 1)) + 1
                 data["updated_at"] = utc_now().isoformat()

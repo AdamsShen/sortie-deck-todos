@@ -1979,6 +1979,10 @@ class HarnessStageExecutor:
             # 本阶段实际挂载的 MCP（strict 关闭时为空，由 SDK 按 setting_sources 全量加载）
             "mcp_servers": mcp_servers,
             "mcp_notes": mcp_notes,
+            # 角色级模型：provider 原样透传（dsh 走 model 参数，claude 走 SDK model）
+            "model": str(getattr(ctx, "model", "") or ""),
+            # 角色契约的工具白名单：非空表示只允许这些 toolkit 条目
+            "tools_allowed": list(getattr(ctx, "tools_allowed", []) or []),
             # 本阶段禁用工具：provider 据此设置底层 agent 的工具白名单（claude_code
             # 映射到 SDK disallowed_tools）。放在 pack 里而不是改 send 签名，
             # 旧 provider 忽略该键即可，不会因签名不匹配报错。
@@ -2166,6 +2170,12 @@ class HarnessStageExecutor:
                 f"{', '.join(ctx.disallowed_tools)} is NOT available. "
                 "Do not verify code by executing it here — this stage only produces the "
                 "design document; implementation and verification belong to later stages."
+            )
+        if ctx.tools_allowed:
+            # 契约白名单：让模型知道能力边界，避免尝试未挂载的 MCP / skill。
+            sections.append(
+                "Tool allowlist for this role: only these toolkit items are available — "
+                f"{', '.join(ctx.tools_allowed)}. Do not attempt to load or call anything else."
             )
         if ctx.stage == "intake":
             # 集结只做需求收敛：这段写死唯一产出与轮次目标，防止它去产 PRD

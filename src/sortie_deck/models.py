@@ -60,6 +60,25 @@ def role_key(role: Any) -> str:
     return str(value) if value is not None else str(role)
 
 
+# 角色级默认模型：角色未显式配置 model 时统一使用该值。
+# 形如 `<provider>/<model>`，由 harness provider 原样透传（dsh 走 model 参数）。
+DEFAULT_ROLE_MODEL = "deepseek/deepseek-v4-flash-20260731"
+
+
+def filter_toolkit_by_contract(
+    toolkit_ids: list[str], tools_allowed: list[str]
+) -> list[str]:
+    """按角色契约的工具白名单过滤 toolkit id。
+
+    白名单为空表示不限制（保持旧行为）；非空时只保留命中的条目，
+    避免角色加载契约外的 MCP / skill。
+    """
+    if not tools_allowed:
+        return list(toolkit_ids)
+    allowed = {t.strip() for t in tools_allowed if t and t.strip()}
+    return [t for t in toolkit_ids if t in allowed]
+
+
 # Roles that run coding executors (Cursor / Claude Code / mock_eng)
 CODING_ROLE_VALUES = frozenset(
     {
@@ -201,6 +220,10 @@ class RoleAgent(BaseModel):
     executor: str
     status: str = "idle"
     toolkit_ids: list[str] = Field(default_factory=list)
+    # 角色级模型：由 published agent 带入，未配置时统一走默认值
+    model: str = DEFAULT_ROLE_MODEL
+    # 角色级工具白名单：非空时收敛 toolkit_ids（空 = 不限制）
+    tools_allowed: list[str] = Field(default_factory=list)
     # Repositories this role must clone & read in its workspace before coding
     repos: list[RepoConfig] = Field(default_factory=list)
     catalog_agent_id: str | None = None
@@ -429,6 +452,10 @@ class StageContext(BaseModel):
     # 本阶段禁用的工具名（编排层注入，如 tech_design 禁 Bash）。执行器转交
     # harness 后由底层 agent 直接拒绝该工具；空列表表示不限制，保持旧行为。
     disallowed_tools: list[str] = Field(default_factory=list)
+    # 角色级模型（由编排层从 RoleAgent 带入；空 = provider 默认）
+    model: str = ""
+    # 角色契约声明的 toolkit 白名单（AgentContract.tools_allowed）；空 = 不限制
+    tools_allowed: list[str] = Field(default_factory=list)
 
 
 class StageFailureKind(str, Enum):

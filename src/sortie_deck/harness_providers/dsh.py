@@ -712,6 +712,7 @@ class DshProvider:
                 patch_meta,
                 sandbox_mode,
                 runtime_meta,
+                str((context_pack or {}).get("model") or "").strip() or None,
             )
             return reply
         except Exception as exc:  # noqa: BLE001 — 降级为 fail，绝不把异常抛给编排层
@@ -748,6 +749,7 @@ class DshProvider:
         patch_meta: dict[str, Any],
         sandbox_mode: str | None = None,
         runtime_meta: dict[str, Any] | None = None,
+        model: str | None = None,
     ) -> Any:
         """线程内同步跑一轮：建进程 → resume/start → run → 关进程。"""
         from deepseek_harness import DeepSeekHarness
@@ -769,7 +771,8 @@ class DshProvider:
 
         base_kwargs: dict[str, Any] = {
             "provider": _llm_provider(),
-            "model": _model(),
+            # 角色级模型优先（context_pack["model"]），缺省回落全局 dsh_model
+            "model": model or _model(),
             "max_tokens": max_tokens or None,
             "reasoning_effort": str(getattr(settings, "dsh_reasoning_effort", "") or "") or None,
             "cwd": str(cwd) if cwd else None,

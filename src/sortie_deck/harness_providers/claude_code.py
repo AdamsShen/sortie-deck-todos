@@ -231,26 +231,32 @@ class ClaudeCodeProvider:
         settings_option = settings_file if settings_file and Path(settings_file).is_file() else None
         if settings_file and settings_option is None:
             logger.warning("沙箱配置文件不存在，忽略: %s", settings_file)
-        options = ClaudeAgentOptions(
-            cwd=cwd or None,
-            permission_mode=permission_mode,
-            settings=settings_option,
-            disallowed_tools=disallowed or None,
-            resume=session.native_id or None,
-            setting_sources=_setting_sources(settings.harness_setting_sources),
+        options_kwargs: dict[str, Any] = {
+            "cwd": cwd or None,
+            "permission_mode": permission_mode,
+            "settings": settings_option,
+            "disallowed_tools": disallowed or None,
+            "resume": session.native_id or None,
+            "setting_sources": _setting_sources(settings.harness_setting_sources),
             # 额外可写目录（阶段产物目录 / 沙盒）：CLI 会把它当 --add-dir 处理。
             # 注意 add_dirs 同时会加载该目录下的 .claude 配置（skills/commands），
             # 阶段产物目录里没有这类文件，影响可忽略。
-            add_dirs=[str(d) for d in (extra_dirs or []) if str(d or "").strip()],
+            "add_dirs": [str(d) for d in (extra_dirs or []) if str(d or "").strip()],
             # strict 模式下这就是本阶段 MCP 的全部；空 dict = 本阶段不挂任何 MCP
-            mcp_servers=dict(pack.get("mcp_servers") or {}),
-            strict_mcp_config=strict,
-            env=_auto_compact_env(settings.harness_auto_compact_window),
+            "mcp_servers": dict(pack.get("mcp_servers") or {}),
+            "strict_mcp_config": strict,
+            "env": _auto_compact_env(settings.harness_auto_compact_window),
             # 阶段回合上限：intake 等对齐阶段封顶（stage_max_turns），编码阶段默认不限
-            max_turns=resolve_stage_max_turns(str((session.meta or {}).get("stage", ""))) or None,
+            "max_turns": resolve_stage_max_turns(str((session.meta or {}).get("stage", "")))
+            or None,
             # 单条 CLI 消息上限：默认 1 MiB，agent Read 截图时 base64 后会溢出
-            max_buffer_size=_max_buffer_size(settings.harness_max_buffer_bytes),
-        )
+            "max_buffer_size": _max_buffer_size(settings.harness_max_buffer_bytes),
+        }
+        # 角色级模型：SDK 支持该字段时原样透传；旧版本 SDK 没有则忽略（零回归）
+        model = str(pack.get("model") or "").strip()
+        if model and "model" in getattr(ClaudeAgentOptions, "__dataclass_fields__", {}):
+            options_kwargs["model"] = model
+        options = ClaudeAgentOptions(**options_kwargs)
         parts: list[str] = []
         native_id = session.native_id
         is_error = False

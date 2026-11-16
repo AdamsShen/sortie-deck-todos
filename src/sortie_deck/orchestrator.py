@@ -22,6 +22,7 @@ from sortie_deck.memory import MemoryStore
 from sortie_deck.metrics import StageMetricsStore
 from sortie_deck.models import (
     CODING_ROLE_VALUES,
+    DEFAULT_ROLE_MODEL,
     ActorKind,
     ArtifactRef,
     ConfirmPipelineRequest,
@@ -43,6 +44,7 @@ from sortie_deck.models import (
     TimelineEvent,
     UnknownHarnessError,
     UpdatePipelineRequest,
+    filter_toolkit_by_contract,
     new_id,
     utc_now,
 )
@@ -68,7 +70,7 @@ from sortie_deck.rooms import RoomStore
 from sortie_deck.run_queue import SqliteRunQueue
 from sortie_deck.settings import Settings, settings
 from sortie_deck.store import InitiativeStore
-from sortie_deck.templates import load_persona, load_pipeline_template
+from sortie_deck.templates import load_agent_contract, load_persona, load_pipeline_template
 from sortie_deck.toolkit import ToolkitStore
 from sortie_deck.webhooks import notify_webhook
 
@@ -944,12 +946,22 @@ class Orchestrator:
                 if published
                 else load_persona(item.get("persona", role.value))
             )
+            # 角色级模型：published agent 配置优先，缺省统一默认模型
+            model = (published.model if published and published.model else "") or DEFAULT_ROLE_MODEL
             # Mission override > agent default toolkit
             toolkit_ids: list[str] = []
             if role_toolkits and role.value in role_toolkits:
                 toolkit_ids = list(role_toolkits[role.value])
             elif published and published.toolkit_ids:
                 toolkit_ids = list(published.toolkit_ids)
+            # 工具白名单优先级：工坊配置（published）> persona front-matter > 不限制
+            contract = load_agent_contract(role.value)
+            tools_allowed = (
+                [str(x) for x in published.tools_allowed]
+                if published and published.tools_allowed
+                else (list(contract.tools_allowed) if contract is not None else [])
+            )
+            toolkit_ids = filter_toolkit_by_contract(toolkit_ids, tools_allowed)
             roles.append(
                 RoleAgent(
                     id=new_id(f"{role.value}_"),
@@ -958,6 +970,8 @@ class Orchestrator:
                     persona=persona,
                     executor=executor,
                     toolkit_ids=toolkit_ids,
+                    model=model,
+                    tools_allowed=tools_allowed,
                     repos=list((role_repos or {}).get(role.value) or []),
                     catalog_agent_id=published.id if published else None,
                     avatar=(
@@ -1015,6 +1029,16 @@ class Orchestrator:
         meta_roles = ini.meta.get("role_toolkits") or {}
         for slot, ids in meta_roles.items():
             role_toolkits[slot] = list(ids)
+        # 白名单同样约束任务级 override（meta 里是未过滤的原始值）
+        role_tools_allowed = {
+            r.role.value: list(r.tools_allowed) for r in ini.roles if r.tools_allowed
+        }
+        for slot in list(role_toolkits):
+            allowed = role_tools_allowed.get(slot)
+            if allowed is None:
+                contract = load_agent_contract(str(slot))
+                allowed = list(contract.tools_allowed) if contract is not None else []
+            role_toolkits[slot] = filter_toolkit_by_contract(role_toolkits[slot], allowed)
         stage_toolkits = {
             stage: list(ids)
             for stage, ids in (ini.meta.get("stage_toolkits") or {}).items()
@@ -1038,12 +1062,15 @@ class Orchestrator:
         for slot, repos in meta_repos.items():
             if repos:
                 role_repos[slot] = [RepoConfig.model_validate(r).model_dump(mode="json") for r in repos]
+        role_models = {r.role.value: r.model for r in ini.roles if r.model}
         return {
             "role_personas": role_personas,
             "role_toolkits": role_toolkits,
             "stage_toolkits": stage_toolkits,
             "toolkit_briefs": toolkit_briefs,
             "role_repos": role_repos,
+            "role_models": role_models,
+            "role_tools_allowed": role_tools_allowed,
         }
 
     async def _apply_dynamic_loadout(self, ini: Initiative, loadout: dict[str, Any]) -> None:

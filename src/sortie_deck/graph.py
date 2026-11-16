@@ -34,6 +34,7 @@ from sortie_deck.loadout import (
 from sortie_deck.manager import BranchStatus, MissionManager
 from sortie_deck.models import (
     CODING_ROLE_VALUES,
+    DEFAULT_ROLE_MODEL,
     ENG_BUILD_STAGES,
     HitlAction,
     HitlDecision,
@@ -41,6 +42,7 @@ from sortie_deck.models import (
     RoleId,
     StageContext,
     StageResult,
+    filter_toolkit_by_contract,
     role_key,
 )
 from sortie_deck.parallel import collapse_to_waves, wave_node_name
@@ -886,6 +888,10 @@ class PipelineState(TypedDict, total=False):
     pipeline_track: str
     role_personas: dict[str, str]
     role_toolkits: dict[str, list[str]]
+    # Role-level model per slot (slot -> model)
+    role_models: dict[str, str]
+    # Role-level toolkit allowlist per slot (empty list = no restriction)
+    role_tools_allowed: dict[str, list[str]]
     # Mission-scoped git repos per role slot (slot -> list of repo dicts)
     role_repos: dict[str, list[dict[str, Any]]]
     stage_toolkits: dict[str, list[str]]
@@ -1866,11 +1872,22 @@ def build_graph_from_template(
 
         role_personas = state.get("role_personas") or {}
         role_toolkits = state.get("role_toolkits") or {}
+        role_models = state.get("role_models") or {}
+        role_tools_allowed = state.get("role_tools_allowed") or {}
         role_repos_state = state.get("role_repos") or {}
         stage_repos = repos_for_role(role_repos_state, role.value, stage)
         stage_toolkits = state.get("stage_toolkits") or {}
         toolkit_briefs = state.get("toolkit_briefs") or {}
         persona = role_personas.get(role.value) or load_persona(role.value)
+        # 角色级模型：任务 loadout 优先，缺省统一默认模型
+        model = role_models.get(role.value) or DEFAULT_ROLE_MODEL
+        # 契约提前加载：tools_allowed 与 handoff_targets 共用同一份 front-matter
+        contract = load_agent_contract(role.value)
+        # 白名单优先级：角色级（工坊配置）> persona front-matter > 不限制
+        allowed_tools = list(
+            role_tools_allowed.get(role.value)
+            or (contract.tools_allowed if contract is not None else [])
+        )
         toolkit_ids = list(stage_toolkits.get(stage) or role_toolkits.get(role.value) or [])
         toolkit_brief = (
             toolkit_briefs.get(f"stage:{stage}")
@@ -1883,12 +1900,25 @@ def build_graph_from_template(
         recall_out = await _stage_proactive_recall(state, stage, role, cfg)
         if recall_out.brief_append:
             toolkit_brief = f"{toolkit_brief}\n\n{recall_out.brief_append}".strip()
-        if toolkit_brief and toolkit_brief not in persona:
-            persona = f"{persona}\n\n{toolkit_brief}"
         if recall_out.item_ids:
             toolkit_ids = toolkit_ids + [
                 i for i in recall_out.item_ids if i not in toolkit_ids
             ]
+        # 契约白名单兜底：主动召回 / 阶段级绑定也可能引入契约外条目
+        if allowed_tools:
+            filtered = filter_toolkit_by_contract(toolkit_ids, allowed_tools)
+            if filtered != toolkit_ids:
+                toolkit_ids = filtered
+                try:
+                    from sortie_deck.orchestrator import get_orchestrator
+
+                    toolkit_brief = get_orchestrator()._toolkit_brief(toolkit_ids) or ""
+                except Exception:  # noqa: BLE001 — brief 重建失败只影响提示
+                    toolkit_brief = ""
+                if recall_out.brief_append and toolkit_brief:
+                    toolkit_brief = f"{toolkit_brief}\n\n{recall_out.brief_append}".strip()
+        if toolkit_brief and toolkit_brief not in persona:
+            persona = f"{persona}\n\n{toolkit_brief}"
 
         # Agent-driven upstream/downstream consult before executing the node
         consult_artifacts: dict[str, str] = {}
@@ -2000,7 +2030,6 @@ def build_graph_from_template(
             )
         except Exception:  # noqa: BLE001 — memory is an enhancement, not a dependency
             memory_brief = ""
-        contract = load_agent_contract(role.value)
         if contract is not None:
             contract_targets = list(contract.handoff_targets)
         # 提示词里让模型用「角色」表达交接意图；这里预先把角色解析成 plan 阶段，
@@ -2077,6 +2106,9 @@ def build_graph_from_template(
             stage_timeout_seconds=timeout,
             # 阶段级工具禁用（tech_design 禁 Bash）：执行器转交 harness 生效
             disallowed_tools=_resolve_stage_disallowed_tools(stage, app_cfg),
+            # 角色级模型与契约工具白名单：执行器透传给 harness provider
+            model=model,
+            tools_allowed=allowed_tools,
         )
 
         # Session-capable executors get a host so they can pull a sub-room
@@ -2156,6 +2188,10 @@ def build_graph_from_template(
                     if policy and policy.allowed_toolkit_ids
                     else None
                 )
+                # 角色契约白名单与组织白名单取交集：in-loop pick 不得绕过
+                if allowed_tools:
+                    contract_set = set(allowed_tools)
+                    allowed = contract_set if allowed is None else allowed & contract_set
             except Exception:  # noqa: BLE001 — 元工具路径失败不影响阶段
                 return ToolkitMetaOutcome()
             budget = state.get("toolkit_pick_budget") or {}
