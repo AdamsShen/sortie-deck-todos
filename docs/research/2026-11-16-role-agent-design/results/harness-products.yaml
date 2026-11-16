@@ -1,0 +1,65 @@
+# Harness / 产品类调研结果（2024 年至今）
+items:
+  - id: claude_subagents
+    name: Claude Code Subagents
+    role_carrier: .claude/agents/*.md，YAML frontmatter（name/description/model/tools）+ body 作为 system prompt
+    role_dimensions: system prompt、工具访问、独立权限、可选 model
+    session_granularity: 每个 subagent 独立 context window；main conversation 只收到结果摘要
+    cross_stage_state: 主对话通过 Task 工具下发任务，subagent 只回传结果；状态不自动继承
+    compaction_strategy: 由 Claude Code 自身 auto-compact 管理
+    tool_loading: frontmatter 的 tools 白名单，会话启动时加载 name/description/tool list
+    isolation: 独立上下文窗口 + 独立权限（这是官方设计的核心卖点）
+    pros_cons: 上下文隔离、专用化；角色需落盘为文件，动态编排能力弱
+    similarity_to_sortie: 概念高度同构 —— frontmatter ≈ persona 六段式 + 契约；区别：Sortie Deck 在编排层用代码拼 prompt，不落 .claude/agents 文件，因此可以按任务/阶段动态生成角色
+    source:
+      - https://claude.com/fr/blog/steering-claude-code-skills-hooks-rules-subagents-and-more
+      - https://code.claude.com/docs/ko/sub-agents
+      - https://agentstacklist.com/guides/claude-code-subagents
+
+  - id: anthropic_research
+    name: Anthropic 多 Agent 研究系统
+    role_carrier: 代码编排（orchestrator + 动态生成 subagent）
+    role_dimensions: 每个 subagent 有独特任务描述、工具、探索轨迹
+    session_granularity: 每个 subagent 独立 context window，只回传压缩后的发现
+    cross_stage_state: 主 agent 把 plan 写入 Memory；子 agent 结果写入共享文件系统，彼此可读但不继承对话
+    compaction_strategy: 子 agent 并行压缩（parallel compression）；主 agent 200K 窗口会截断，因此把计划外置
+    tool_loading: 按 subagent 任务分配
+    isolation: 强隔离 —— 子 agent 只拿到任务、相关上下文、数据源三样
+    pros_cons: 研究类任务 +90.2%；token 消耗 10-15x；不适合强耦合编码任务
+    similarity_to_sortie: 很高 —— "子 agent 独立上下文 + 只回传摘要 + 写共享文件" 与 mission memory/产物交接同构
+    source:
+      - https://blog.ivheli.com/anthropic/zh/blog/17-%E5%A4%9AAgent%E7%A0%94%E7%A9%B6%E7%B3%BB%E7%BB%9F%E6%9E%84%E5%BB%BA
+      - https://www.cnblogs.com/informatics/p/19625900
+      - https://guanweilu.cn/article/587.html
+
+  - id: strands
+    name: AWS Strands Agents / AgentCore
+    role_carrier: 代码（Agent(model, system_prompt, tools)）
+    role_dimensions: system prompt、tools、model
+    session_granularity: SDK 内 agent loop；AgentCore 提供 session manager 持久化
+    cross_stage_state: AgentCore Memory 的 session/actor 维度存储；支持跨会话记忆
+    compaction_strategy: 交给 AgentCore Memory 集成层，SDK 本身不做压缩
+    tool_loading: 静态 tools 列表 + 可动态注册
+    isolation: 进程内 loop，隔离靠部署环境
+    pros_cons: 模型驱动、极简；记忆与压缩依赖云服务
+    similarity_to_sortie: 中 —— "agent = model + system prompt + tools + loop" 与 Sortie Deck 的 harness 抽象一致；记忆层更依赖云托管
+    source:
+      - https://aws.amazon.com/blogs/opensource/introducing-strands-agents-an-open-source-ai-agents-sdk
+      - https://docs.amazonaws.cn/bedrock-agentcore/latest/devguide/strands-sdk-memory.html
+      - https://cloudparts.dev/technologies/strands-agents
+
+  - id: devin_factory
+    name: Devin / Factory / Amp
+    role_carrier: 产品内部（未公开）；Amp 为不同子任务设计专用 sub-agent（Finder/Oracle/Librarian/Kraken）
+    role_dimensions: 专用 sub-agent 各有独立小模型/精简工具集/专用提示
+    session_granularity: 每任务一套 fresh environment（Amp 称 orb；Factory 有 Droid Computer）；子任务用独立 context window 的 sub-agent
+    cross_stage_state: 环境持久化文件系统；子 agent 只把精华结果回传主 agent
+    compaction_strategy: 用 sub-agent 隔离中间过程，避免主进程窗口被塞满（对抗 doom loop）
+    tool_loading: 按 sub-agent 专用化，工具集精简
+    isolation: 每任务独立沙箱环境
+    pros_cons: 长任务稳定；专用 sub-agent 需要大量人工设计
+    similarity_to_sortie: 高 —— "每任务独立环境 + 子任务独立上下文 + 只回传精华" 与 Sortie Deck 的阶段隔离 + worktree 一致
+    source:
+      - https://ain3xt.com/cn/posts/20251225-amp-code-contrarian-design
+      - https://continuumcode.ai/guides/factory-ai-vs-devin
+      - https://www.sitepoint.com/devin-ai-engineers-production-realities/

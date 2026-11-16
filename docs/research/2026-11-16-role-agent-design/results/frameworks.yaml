@@ -1,0 +1,81 @@
+# 多 Agent 框架类调研结果（2024 年至今）
+items:
+  - id: langgraph
+    name: LangGraph
+    role_carrier: 代码（节点函数 + StateGraph）；角色通常体现为不同的节点/子图
+    role_dimensions: prompt、可用工具、所在节点位置；model 可按节点配置
+    session_granularity: thread 级（一个 thread = 一条会话线），checkpointer 逐步持久化 graph state
+    cross_stage_state: 共享 state 对象 + checkpointer（短期记忆）+ store（长期记忆），支持 resume / time-travel
+    compaction_strategy: 框架本身不做自动压缩，靠 state 里只放必要字段 + 人工/自定义裁剪
+    tool_loading: 绑定在节点/agent 上，静态
+    isolation: thread 隔离 + 子图；但同一 thread 内消息累积
+    pros_cons: 控制力强、可恢复；需要自己设计 state 精简，否则 state 膨胀
+    similarity_to_sortie: 本项目的 graph.py / checkpointer 思路同源；区别是 Sortie Deck 把"角色"显式建模为 persona+契约，而不是节点函数
+    source:
+      - https://docs.langchain.com/oss/javascript/langgraph/durable-execution
+      - https://www.agentpatternscatalog.org/compositions/langgraph
+      - https://prodinit.com/blog/langgraph-production-guide
+
+  - id: crewai
+    name: CrewAI
+    role_carrier: 代码中声明 Agent(role, goal, backstory, tools, llm)
+    role_dimensions: 提示词四要素（role/goal/backstory）+ tools + 可选 llm + 可选 allow_delegation
+    session_granularity: Crew 一次 kickoff 内各 agent 顺序执行；无强绑定"每阶段新会话"概念
+    cross_stage_state: Task 的 description/expected_output 串接；context 参数可传上游任务输出
+    compaction_strategy: 依赖底层 LLM 窗口，无内置分层压缩
+    tool_loading: 每个 Agent 静态绑定 tools
+    isolation: agent 间通过 Task 输出交接，非共享完整对话
+    pros_cons: "角色扮演即代码"最直观；生产控制力偏弱
+    similarity_to_sortie: 高度相似 —— role/goal/backstory ≈ persona；tools ≈ toolkit 绑定；Task 输出 ≈ 产物契约
+    source:
+      - https://www.crewai.com/blog/how-crewai-is-evolving-beyond-orchestration-to-create-the-most-powerful-agentic-ai-platform
+      - https://con-fucius.github.io/ai-ml-research-hub/frameworks/crewai
+      - https://xcelore.com?p=1004536/
+
+  - id: autogen
+    name: AutoGen / Magentic-One
+    role_carrier: 代码（AssistantAgent + name/description/system_message）
+    role_dimensions: system_message、tools、model_client
+    session_granularity: Team 级共享对话（RoundRobin / Selector / MagenticOneGroupChat）
+    cross_stage_state: 共享消息历史；Magentic-One 由 Orchestrator 维护 Task Ledger / Progress Ledger
+    compaction_strategy: 团队级窗口管理，长期任务易上下文膨胀
+    tool_loading: 每个 agent 静态绑定
+    isolation: 默认共享上下文；已知问题：HITL 交接后上下文丢失（issue #7036）
+    pros_cons: 协作灵活；shared context 会导致 context rot 与注意力竞争
+    similarity_to_sortie: 差异最大 —— AutoGen 倾向共享对话，Sortie Deck 倾向阶段隔离 + 产物交接
+    source:
+      - https://aiwiki.ai/wiki/autogen
+      - https://github.com/microsoft/autogen/issues/7036
+      - https://devpress.csdn.net/v1/article/detail/148852488
+
+  - id: openai_agents
+    name: OpenAI Agents SDK
+    role_carrier: 代码（Agent(name, instructions, tools, model)）
+    role_dimensions: instructions、tools、model、handoffs、guardrails、output_type
+    session_granularity: Runner.run 一次一个 turn；Session 负责跨 turn 记忆
+    cross_stage_state: handoffs 传递控制权；session 持久化对话；handoff 输入可裁剪
+    compaction_strategy: SDK 不内置摘要；需自建 session/记忆层
+    tool_loading: 每个 Agent 静态绑定 tools
+    isolation: Agent 间 handoff，非共享全部历史
+    pros_cons: 原语少、清晰；状态管理交给应用层
+    similarity_to_sortie: 高 —— instructions ≈ persona，handoffs ≈ next_targets/handoff_targets，session ≈ 会话
+    source:
+      - https://openai.github.io/openai-agents-python/agents/
+      - https://lmversity.com/learn/agent-frameworks/openai-agents-sdk
+      - https://openai.com/agent-platform/
+
+  - id: metagpt
+    name: MetaGPT
+    role_carrier: 代码（Role 子类，含 profile / goal / constraints / SOP）
+    role_dimensions: 角色 profile、订阅的消息类型、可执行动作、SOP 阶段
+    session_granularity: 每个 Role 独立运行，靠共享 message pool 通信
+    cross_stage_state: 共享消息池（发布-订阅）+ 结构化文档交接；不靠对话历史
+    compaction_strategy: 用结构化产物替代长对话，天然压缩
+    tool_loading: Role 自带 action 集
+    isolation: 角色只订阅自己关心的消息（架构师只盯 PRD）
+    pros_cons: 抑制级联幻觉与闲聊；灵活性低、依赖人工写 SOP
+    similarity_to_sortie: 很高 —— "交接只认结构化文档不认对话" 与 Sortie Deck 的产物契约 + handoff_targets 一致
+    source:
+      - https://pyshine.com/metagpt/
+      - https://lacuna.tiptreesystems.com/work/metagpt-meta-programming-for-a-multi-agent-collaborative/version/art_7be03e3210dbec641688b76b190e9381
+      - https://ai.godsun.pro/?p=1160

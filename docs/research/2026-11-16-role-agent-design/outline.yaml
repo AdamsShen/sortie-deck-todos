@@ -1,0 +1,54 @@
+topic: 多 Agent 编排系统中「角色 Agent」设计的业界合理性调研
+current_date: 2026-11-16
+time_range: 2024年至今
+background: |
+  被测设计来自 Sortie Deck（AI 原生办公迭代控制平面）：
+  1) 角色 = persona 提示词 + 职责契约（front-matter: inputs/outputs/handoff_targets）+ toolkit 绑定（MCP/skill）+ 仓库绑定；
+  2) 角色差异在编排层烘焙进 prompt 与 context pack，不写入 .claude/ 目录；
+  3) 一个任务锁定一种 harness，每个阶段新建会话，跨阶段靠文件化 mission memory 重新 bootstrap；
+  4) 上下文压缩两层：provider 内 auto-compact（200K 窗口） + 编排层 rolling summary（60K token 预算）；
+  5) 权限/模型/回合数不按角色配置，按阶段/任务/全局配置。
+  调研目标：判断上述设计在业界是否有对应实践、哪些是主流、哪些是偏差或风险。
+
+items:
+  - id: langgraph
+    name: LangGraph
+    focus: 节点/状态、checkpointer、thread 级会话与记忆模型
+  - id: crewai
+    name: CrewAI
+    focus: Agent(role, goal, backstory, tools) 四要素抽象，Task/Crew 编排
+  - id: autogen
+    name: AutoGen / Magentic-One
+    focus: 角色化 AssistantAgent、GroupChat、上下文隔离
+  - id: openai_agents
+    name: OpenAI Agents SDK
+    focus: Agent(instructions, tools, handoffs) + session，交接与上下文传递
+  - id: metagpt
+    name: MetaGPT
+    focus: SOP + Role + 共享 message pool，流水线式角色协作
+  - id: claude_subagents
+    name: Claude Code Subagents
+    focus: .claude/agents/*.md frontmatter（system prompt/tools/model），独立上下文窗口
+  - id: strands
+    name: AWS Strands Agents / AgentCore harness
+    focus: 系统提示 + tools + 会话/记忆管理
+  - id: anthropic_research
+    name: Anthropic 多 Agent 研究系统
+    focus: orchestrator-worker、subagent 上下文隔离的工程复盘
+  - id: devin_factory
+    name: Devin / Factory / Amp 等产品
+    focus: 阶段化任务是否每阶段新会话，任务级记忆如何接续
+  - id: letta
+    name: Letta (MemGPT)
+    focus: 分层记忆与自动压缩的理论与实现
+  - id: don't_build_multi_agents
+    name: "Don't Build Multi-Agents" 等反方观点
+    focus: 多 agent 的风险、上下文碎片化争议
+  - id: context_engineering
+    name: Agent 上下文工程实践
+    focus: compaction / tool search / progressive disclosure / MCP 按需挂载
+
+execution:
+  batch_size: 3
+  items_per_agent: 4
+  output_dir: ./results

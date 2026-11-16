@@ -1,0 +1,42 @@
+fields:
+  - group: 角色定义
+    fields:
+      - name: role_carrier
+        description: 角色由什么载体定义（代码 / 配置文件 / prompt 文件 / frontmatter / 数据库）
+        detail_level: 详细
+      - name: role_dimensions
+        description: 角色之间实际差异维度（prompt、tools、model、permissions、memory、repo）
+        detail_level: 详细
+  - group: 会话与状态
+    fields:
+      - name: session_granularity
+        description: 会话粒度（全任务一个 / 每阶段一个 / 每 agent 一个 / 每次调用一个）
+        detail_level: 详细
+      - name: cross_stage_state
+        description: 跨阶段/跨会话状态传递机制（共享 state、文件记忆、摘要、检索）
+        detail_level: 详细
+  - group: 上下文管理
+    fields:
+      - name: compaction_strategy
+        description: 上下文压缩策略与触发时机（auto-compact、rolling summary、分层记忆、检索）
+        detail_level: 详细
+      - name: tool_loading
+        description: 工具/MCP/skill 加载方式（静态绑定、按需加载/tool search、目录文件自动加载）
+        detail_level: 详细
+  - group: 工程权衡
+    fields:
+      - name: isolation
+        description: 隔离与并发（context 隔离、工作区隔离、权限隔离）
+        detail_level: 简要
+      - name: pros_cons
+        description: 优点、缺点、适用场景
+        detail_level: 简要
+      - name: similarity_to_sortie
+        description: 与本项目设计的异同
+        detail_level: 详细
+      - name: source
+        description: 官方文档/工程博客/论文来源链接
+        detail_level: 详细
+
+uncertain:
+  - 部分产品（Devin/Factory/Amp）内部架构未公开，只能依据官方文档与工程博客推断

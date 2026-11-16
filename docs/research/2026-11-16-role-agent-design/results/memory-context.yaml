@@ -1,0 +1,67 @@
+# 记忆 / 上下文工程 / 反方观点调研结果（2024 年至今）
+items:
+  - id: letta
+    name: Letta (MemGPT)
+    role_carrier: persona 作为 core memory 的一个 block（可被 agent 运行时改写）
+    role_dimensions: 人设 block、可用记忆工具、model
+    session_granularity: agent state 由 runtime 持久化，跨会话延续
+    cross_stage_state: 三层记忆 —— core（常驻上下文）/ recall（全部历史可检索）/ archival（长期冷存储）
+    compaction_strategy: 把 context window 当 RAM，agent 主动在 core/recall/archival 之间搬移；工具化整理
+    tool_loading: 记忆操作本身就是工具
+    isolation: per-agent state
+    pros_cons: 理论上限高；工程复杂、依赖主动记忆管理质量
+    similarity_to_sortie: 中 —— 都做分层（memory.md + 绑定文件 + RAG），但 Sortie Deck 是编排层被动压缩，Letta 是 agent 主动管理
+    source:
+      - https://aiwiki.ai/wiki/letta
+      - http://quidproquo.cc/posts/ai/2026-08-22-letta-memgpt-agent-memory
+      - https://clawpk.net/encyclopedia/ENC-FRAMEWORK-18-letta.html
+
+  - id: dont_build_multi_agents
+    name: "Don't Build Multi-Agents"（Cognition）与反方观点
+    role_carrier: 主张单 agent + 工具，避免多 agent 上下文碎片化
+    role_dimensions: 不建议按角色拆分，除非子任务真正独立
+    session_granularity: 单一长会话
+    cross_stage_state: 指标：状态摘要交接优于裸转录（+34% task completion）
+    compaction_strategy: 依赖单会话内压缩；反对把决策分散到多个 agent
+    tool_loading: 单 agent 全量工具
+    isolation: 无
+    pros_cons: 顺序任务 <20K token 单 agent 胜；独立并行子问题多 agent 胜，但成本 10-15x
+    similarity_to_sortie: 反向参照 —— Sortie Deck 属"少数角色 + 强契约 + 阶段隔离"，而非"大量自由对话 agent"，正好落在反方建议的可行区间
+    source:
+      - https://neuralmasteryai.com/docs/agents/single-vs-multi-agent
+      - https://toolhalla.ai/blog/single-agent-vs-multi-agent-2026
+      - https://tryinterlock.com/blog/2026-agent-handoffs-state-summaries-beat-raw-transcripts-34.php
+
+  - id: context_engineering
+    name: Agent 上下文工程实践（compaction / tool search / progressive disclosure）
+    role_carrier: 不直接涉及角色定义
+    role_dimensions: 工具按需加载、上下文分层
+    session_granularity: 长任务可用 compaction 重启干净窗口
+    cross_stage_state: 结构化笔记外置（structured note-taking）+ 子 agent 干净上下文
+    compaction_strategy: Anthropic 2025.9 建议 compaction（摘要后重启窗口）/ note-taking / sub-agent 隔离；JetBrains 2025 对比 observation masking 与 LLM summarization
+    tool_loading: MCP 官方 client best practices 推荐 tool_search 元工具 + 渐进式 schema 加载；33 个工具可达 8000+ token
+    isolation: 子 agent 干净上下文
+    pros_cons: 显著降低 token 与 context rot；实现复杂
+    similarity_to_sortie: 高 —— Sortie Deck 的双层压缩（provider auto-compact + 60K rolling summary）与"按需挂 MCP + strict_mcp_config"正对应这两条最佳实践
+    source:
+      - https://www.sefism.com/resources/effective-context-engineering-for-ai-agents
+      - https://modelcontextprotocol.io/docs/latest/develop/clients/client-best-practices
+      - https://zylos.ai/research/2026-03-31-context-window-management-session-lifecycle-long-running-agents
+      - https://blog.synapticlabs.ai/bounded-context-packs-meta-tool-pattern
+
+  - id: phase_separation
+    name: Discrete Phase Separation（阶段分离实践）
+    role_carrier: 每阶段独立提示/会话，角色即阶段的执行者
+    role_dimensions: 每阶段的指令、可用工具、产物
+    session_granularity: 每阶段一个新会话，只有蒸馏后的 artifact 跨边界
+    cross_stage_state: 产物文档（artifact）作为唯一交接物；不传完整历史
+    compaction_strategy: 天然压缩 —— 阶段边界就是压缩点
+    tool_loading: 按阶段绑定
+    isolation: 阶段间上下文隔离
+    pros_cons: 避免规则遗忘/自相矛盾/重复劳动；需要高质量的产物契约
+    similarity_to_sortie: 极高 —— 直接对应 Sortie Deck 的"每阶段新会话 + 产物契约 + mission memory bootstrap"，且"Full history handoff 比 state summary 差 34%"为文件记忆提供了量化支持
+    source:
+      - https://agentpatterns.ai/patterns/agent-design/discrete-phase-separation
+      - https://github.com/MarkTripoli/skills/blob/main/docs/context-management.md
+      - https://tryinterlock.com/blog/2026-agent-handoffs-state-summaries-beat-raw-transcripts-34.php
+      - https://lobehub.com/es/skills/liminal-ai-liminal-spec-ls-research
