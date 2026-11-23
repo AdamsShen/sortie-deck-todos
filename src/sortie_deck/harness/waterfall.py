@@ -147,7 +147,9 @@ def build_briefing_waterfall_graph() -> Any:
             step="pipeline",
             label="③ 提案交付航线",
             tool="propose_pipeline",
-            build_args=lambda s, hs: {"title": s["title"], "brief": s["discussion"]},
+            build_args=lambda s, hs: {
+                "title": s["title"], "brief": hs.context.get("planning_brief") or s["discussion"],
+            },
         ),
     )
     graph.add_node(

@@ -118,6 +118,61 @@ def test_mission_briefing_plan_confirm_create(tmp_path: Path):
     assert "messages" not in state and "materials" not in state
 
 
+def test_mission_briefing_preserves_parallel_delivery_at_standard_tier(tmp_path: Path):
+    from sortie_deck.models import UpdatePipelineRequest
+    from sortie_deck.orchestrator import Orchestrator
+    from sortie_deck.parallel import collapse_to_waves
+
+    async def run():
+        cfg = _cfg(tmp_path)
+        orch = Orchestrator(cfg)
+        await orch.startup()
+        try:
+            agent = MissionBriefingAgent(
+                settings=cfg,
+                create_initiative=orch.create_initiative,
+                save_initiative=orch.store.upsert,
+            )
+            sess = agent.start()
+            sess.task_kind = "delivery"
+            sess.tier = "standard"
+            agent.store.save(sess)
+            sess = await agent.handle(sess.id, "开发 Web 前端、客户端和服务端", user_name="Ada")
+            sess = await agent.handle(sess.id, "仅修复 Web 前端，客户端和服务端不改", user_name="Ada")
+            assert not sess.draft["pipeline"]["parallel_delivery"]
+
+            sess = await agent.handle(sess.id, "恢复开发 Web 前端、客户端和服务端", user_name="Ada")
+            stages = sess.draft["pipeline"]["stages"]
+            waves = collapse_to_waves(stages)
+            delivery = next(w for w in waves if w.get("group") == "eng_delivery")
+            assert {
+                b["id"]: [s["id"] for s in b["members"]] for b in delivery["branches"]
+            } == {
+                "web": ["eng_web", "eng_web_selftest"],
+                "backend": ["eng_backend", "eng_backend_selftest"],
+                "client": ["eng_implement", "eng_selftest"],
+            }
+            integration = next(s for s in stages if s["id"] == "eng_integrate")
+            assert set(integration["depends_on"]) == {
+                "eng_web_selftest", "eng_backend_selftest", "eng_selftest",
+            }
+            assert "客户端开发 → 客户端自测" in sess.messages[-1].text
+            assert "∥" in sess.messages[-1].text
+
+            sess = await agent.handle(sess.id, "确认", user_name="Ada")
+            ini = orch.get(sess.id)
+            assert ini is not None and ini.meta["tier"] == "standard"
+            assert ini.meta["pipeline_specs"] == stages
+            confirmed = await orch.update_pipeline(
+                ini.id, UpdatePipelineRequest(stages=stages, confirm=True)
+            )
+            assert confirmed.meta["pipeline_confirmed"]
+        finally:
+            await orch.shutdown()
+
+    asyncio.run(run())
+
+
 def test_mission_briefing_multimodal_attachments(tmp_path: Path):
     cfg = _cfg(tmp_path)
     created: list[Initiative] = []

@@ -5,11 +5,13 @@ from typing import Any
 
 from sortie_deck.llm import LlmClient
 from sortie_deck.models import RoleId
+from sortie_deck.parallel import _PLATFORM_BRANCH
 from sortie_deck.pipeline import (
     PLANNER_AGENT,
     PLANNER_TITLE,
     TRACK_FILES,
     catalog_by_id,
+    delivery_platforms,
     normalize_specs,
     plan_pipeline,
     resolve_track,
@@ -24,17 +26,26 @@ from sortie_deck.tiers import (
 _SYSTEM = """You are Sortie Deck's pipeline_planner agent.
 Propose a software delivery pipeline as JSON with keys:
   track_hint: one of express|standard|default
+  task_kind: delivery or knowledge
   rationale: short Chinese or English explanation
   stages: array of {id, label?, role?, hitl_after?, parallel_group?, branch?, depends_on?}
 Only use stage ids from the provided catalog. Always include intake first and done last.
-The caller enforces a stage budget for the selected task_kind + tier: the catalog you
-receive is already filtered to that kind, and any stage outside the tier budget will be
-pruned before the human sees the proposal. Keep the pipeline as small as the tier allows.
-When multiple eng_* specialists (eng_web, eng_backend, eng_ios, …) should run together,
-give EACH its own tech design stage (`<role>_tech_design`, owned by that role) in an
-`eng_planning` parallel wave, then independent build→selftest branch chains in an
-`eng_delivery` parallel wave, then eng_integrate.
-Do NOT emit a single shared `eng_tech_design`; do NOT use a shared `eng_selftest`.
+Infer the work from the user's goals, conversation, and supplied requirements.
+When the requested task_kind is auto, classify building or changing a system as
+delivery. Use knowledge for work whose output is a document, analysis, or research.
+Honor an explicitly requested task_kind.
+For software delivery, also return parallel_builds: a list of build stage IDs.
+Use it only when at least two implementation workstreams are required and can
+implement and self-test independently before integration. Include every required
+implementation workstream if they can all run in parallel. Include inferred work
+even when the user did not name its platform. Exclude platforms that are only
+mentioned for context, already exist and need no changes, or are out of scope.
+Use [] when implementation must proceed serially or only one workstream is needed.
+Use eng_implement for a client whose platform is unspecified, without assuming
+iOS or Android. Include an explicit platform's build ID when its platform is known.
+The caller uses parallel_builds to construct the parallel timeline and applies
+the selected tier to the proposal. Keep engineering stages serial in the ordinary
+stage list. Respect the latest user correction to the scope.
 Human confirmation is mandatory after your proposal — never assume start.
 Return ONLY JSON.
 """
@@ -150,6 +161,7 @@ async def plan_pipeline_llm(
     hint_track: str | None = None,
     complexity: str = "auto",
     task_kind: str = "delivery",
+    tier: str = "auto",
     client: LlmClient | None = None,
 ) -> dict[str, Any] | None:
     """Optional LLM planner. Returns None on failure so caller can fall back."""
@@ -157,11 +169,11 @@ async def plan_pipeline_llm(
     if not llm.enabled:
         return None
     catalog = catalog_by_id()
-    # 只把本任务类型可用的阶段给模型：工程任务看不到 research 阶段，反之亦然
+    # 自动判定时给规划官完整目录，明确类型时只给对应阶段。
     catalog_summary = [
         {"id": s["id"], "label": s.get("label"), "role": s.get("role")}
         for s in catalog.values()
-        if s.get("kind", "delivery") == task_kind
+        if task_kind == "auto" or s.get("kind", "delivery") == task_kind
     ]
     hint = hint_track if hint_track in TRACK_FILES else None
     user = json.dumps(
@@ -170,6 +182,7 @@ async def plan_pipeline_llm(
             "brief": brief,
             "complexity": complexity,
             "task_kind": task_kind,
+            "tier": tier,
             "hint_track": hint,
             "catalog": catalog_summary,
         },
@@ -180,11 +193,31 @@ async def plan_pipeline_llm(
     except Exception:
         return None
 
+    if not isinstance(data, dict) or not data.get("stages"):
+        return None
+    parallel_builds = data.get("parallel_builds", [])
+    allowed_builds = {*_PLATFORM_BRANCH, "eng_implement"}
+    if not isinstance(parallel_builds, list) or any(
+        not isinstance(build, str) or build not in allowed_builds for build in parallel_builds
+    ):
+        return None
+
+    if task_kind == "auto" and data.get("task_kind") in ("delivery", "knowledge"):
+        task_kind = data["task_kind"]
     track = data.get("track_hint")
     if track not in TRACK_FILES:
         track, _ = resolve_track(complexity=complexity, brief=brief, title=title)
     try:
-        stages = normalize_specs(data.get("stages") or [])
+        raw_stages = data["stages"]
+        if task_kind != "knowledge" and hint is None and len(set(parallel_builds)) < 2:
+            raw_stages = [
+                {key: value for key, value in stage.items()
+                 if key not in {"parallel_group", "branch", "depends_on"}}
+                if str(stage.get("id") or stage.get("name")).startswith("eng_") else stage
+                for stage in raw_stages
+            ]
+        stages = normalize_specs(raw_stages)
+        confidence = float(data.get("confidence") or 0.6)
     except Exception:
         return None
     if not stages:
@@ -202,7 +235,8 @@ async def plan_pipeline_llm(
         "planner": "llm",
         "planner_backend": llm.backend,
         "task_kind": task_kind,
-        "confidence": float(data.get("confidence") or 0.6),
+        "parallel_builds": list(dict.fromkeys(parallel_builds)),
+        "confidence": confidence,
     }
 
 
@@ -348,34 +382,50 @@ async def plan_pipeline_smart(
         title, brief, has_repos=has_repos, requested=task_kind
     )
     if explicit_track:
-        # 用户明确选了航线：以该航线的阶段集合为预算，不再用档位推荐覆盖
+        # 用户明确选了航线：以该航线的阶段集合为预算。
         final_tier = {"express": "express", "standard": "standard"}.get(explicit_track, "full")
         tier_reason = f"显式航线 {explicit_track}"
-    else:
-        final_tier, tier_reason = resolve_tier(kind, title, brief, requested=tier)
-    tier_note = f"{kind_reason}; {tier_reason}"
-    allowed = track_allowed_stages(explicit_track) if explicit_track else None
-
+    infer_kind = task_kind == "auto" and not has_repos and not explicit_track
+    llm_proposal = None
     if use_llm:
         llm_proposal = await plan_pipeline_llm(
             title=title,
             brief=brief,
             hint_track=hint_track,
             complexity=complexity,
-            task_kind=kind,
+            task_kind="auto" if infer_kind else kind,
+            tier=tier,
             client=client,
         )
-        if llm_proposal:
-            enforced = enforce_tier(
-                llm_proposal,
-                task_kind=kind,
-                tier=final_tier,
-                catalog=catalog_by_id(),
-                allowed_override=allowed,
-            )
-            if enforced:
-                enforced["tier_reason"] = tier_note
-                return enforced
+        if infer_kind and llm_proposal and llm_proposal["task_kind"] in ("delivery", "knowledge"):
+            kind = llm_proposal["task_kind"]
+            kind_reason = f"航线规划官判定 → {kind}"
+    if not explicit_track:
+        final_tier, tier_reason = resolve_tier(kind, title, brief, requested=tier)
+
+    platforms = None
+    if not explicit_track and kind == "delivery":
+        platforms = (
+            llm_proposal["parallel_builds"] if llm_proposal is not None
+            else delivery_platforms(f"{title}\n{brief}")
+        )
+        if len(platforms) > 1 and tier == "auto":
+            final_tier, tier_reason = "full", "需要多端独立开发 → full"
+
+    tier_note = f"{kind_reason}; {tier_reason}"
+    if llm_proposal and not (platforms and len(platforms) > 1):
+        enforced = enforce_tier(
+            llm_proposal,
+            task_kind=kind,
+            tier=final_tier,
+            catalog=catalog_by_id(),
+            allowed_override=track_allowed_stages(explicit_track) if explicit_track else None,
+        )
+        if enforced:
+            if not explicit_track:
+                enforced["parallel_delivery"] = False
+            enforced["tier_reason"] = tier_note
+            return enforced
 
     if explicit_track:
         proposal = plan_pipeline(
@@ -392,7 +442,11 @@ async def plan_pipeline_smart(
             complexity=complexity,
             task_kind=kind,
             tier=final_tier,
+            platforms=platforms,
         )
+    if llm_proposal is not None and platforms is not None:
+        for key in ("planner", "planner_backend", "rationale", "confidence", "parallel_builds"):
+            proposal[key] = llm_proposal[key]
     proposal["planner"] = proposal.get("planner") or "heuristic"
     proposal.setdefault("confidence", 0.85)
     proposal["task_kind"] = kind

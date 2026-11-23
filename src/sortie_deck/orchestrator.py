@@ -1445,6 +1445,7 @@ class Orchestrator:
         from sortie_deck.tiers import TIER_ALLOWED
 
         allowed = set(TIER_ALLOWED.get((kind, tier)) or [])
+        allowed.update(meta.get("parallel_delivery_stages") or [])
         if not allowed:
             return
         extra = [

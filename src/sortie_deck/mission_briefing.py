@@ -468,6 +468,13 @@ class MissionBriefingAgent:
         harness, state = self._bind(sess)
 
         if sess.status == "awaiting_confirm" and _CONFIRM_RE.search(text):
+            draft = sess.draft or {}
+            if (draft.get("requested_tier", sess.tier) != sess.tier
+                    or draft.get("requested_task_kind", sess.task_kind) != sess.task_kind):
+                reply = "执行档位已调整。请发送一条消息更新航线，再确认组建。"
+                sess.messages.append(BriefingMessage(role="assistant", text=reply))
+                harness.emit(state, EventKind.ASSISTANT, reply)
+                return self._persist(sess, state)
             harness.confirm(state, approved=True, note="用户确认规划")
             await self._commit(sess, state, harness, user_name=user_name)
             return self._persist(sess, state)
@@ -494,6 +501,7 @@ class MissionBriefingAgent:
         # 仅取历史轮次（排除刚 appended 的当前轮），剔除欢迎语，限长防上下文膨胀。
         prior_msgs = sess.messages[:-1] if len(sess.messages) > 1 else []
         prior_turns: list[str] = []
+        prior_requirements: list[str] = []
         for m in prior_msgs:
             if m.role not in ("user", "assistant"):
                 continue
@@ -502,6 +510,11 @@ class MissionBriefingAgent:
             t = (m.text or "").strip()
             if t:
                 prior_turns.append(f"[{m.role}] {t}")
+                if m.role == "user":
+                    if _REJECT_RE.fullmatch(t):
+                        prior_requirements.clear()
+                    else:
+                        prior_requirements.append(t)
         prior_turns = prior_turns[-_MAX_PRIOR_TURNS:]
         prior_block = "\n".join(prior_turns)
         if len(prior_block) > _MAX_PRIOR_CHARS:
@@ -517,6 +530,11 @@ class MissionBriefingAgent:
         self._current_brief = composed
         state.status = "planning"
         state.goal = discussion
+        # 已提出的航线可能列过用户没要求的平台，规划输入只继承用户需求和资料。
+        requirements = "\n\n".join(prior_requirements[-_MAX_PRIOR_TURNS:])[-_MAX_PRIOR_CHARS:]
+        state.context["planning_brief"] = "\n\n".join(
+            part for part in (requirements, composed, mat_ctx) if part
+        )
         if sess.materials:
             pinned_n = sum(1 for m in sess.materials if m.pinned)
             harness.emit(
@@ -548,6 +566,8 @@ class MissionBriefingAgent:
         draft = {
             "title": sess.title,
             "brief": sess.brief,
+            "requested_task_kind": sess.task_kind,
+            "requested_tier": sess.tier,
             "coding_executor": sess.coding_executor or self._coding_executor(),
             "pipeline": state.context.get("pipeline"),
             "stages": state.context.get("stages"),
@@ -586,7 +606,11 @@ class MissionBriefingAgent:
         registry = ToolRegistry()
         registry.register(ToolSpec("search_history", "Search past missions", self._tool_history))
         registry.register(ToolSpec("retrieve_knowledge", "Retrieve KB", self._tool_kb))
-        registry.register(ToolSpec("propose_pipeline", "Propose stages", self._tool_pipeline))
+
+        async def propose_pipeline(args: dict[str, Any]) -> ToolResult:
+            return await self._tool_pipeline({**args, "task_kind": sess.task_kind, "tier": sess.tier})
+
+        registry.register(ToolSpec("propose_pipeline", "Propose stages", propose_pipeline))
         registry.register(ToolSpec("propose_loadout", "Propose loadout", self._tool_loadout))
         registry.register(ToolSpec("ensure_missing_roles", "Create missing agents", self._tool_ensure_roles))
         harness = Harness(registry, name="mission-briefing")
@@ -660,6 +684,14 @@ class MissionBriefingAgent:
                 "规划提案 stage 归一化失败，保留档位航线: initiative=%s", ini.id
             )
             return None
+        if (
+            "parallel_delivery" in proposal
+            and proposal.get("task_kind") == kind
+            and proposal.get("tier") == tier
+        ):
+            return {**proposal, "stages": specs}
+        if (ini.meta or {}).get("parallel_delivery_stages"):
+            return None
         constrained = enforce_tier(
             {**proposal, "stages": specs},
             task_kind=kind,
@@ -688,6 +720,16 @@ class MissionBriefingAgent:
             sess.status = "failed"
             return
         draft = sess.draft or {}
+        proposed = draft.get("pipeline") or {}
+        task_kind, tier = sess.task_kind, sess.tier
+        # 沿用基于完整会话生成的提案。自动判为办公后绑定仓库时仍重新判定类型。
+        reclassify = (
+            task_kind == "auto" and proposed.get("task_kind") == "knowledge"
+            and bool(draft.get("role_repos"))
+        )
+        if "parallel_delivery" in proposed and not reclassify:
+            task_kind = proposed["task_kind"] if task_kind == "auto" else task_kind
+            tier = proposed["tier"] if tier == "auto" else tier
         req = CreateInitiativeRequest(
             title=str(draft.get("title") or sess.title or "Untitled"),
             brief=str(draft.get("brief") or sess.brief),
@@ -705,8 +747,8 @@ class MissionBriefingAgent:
             # 归属到会话发起人；owner_id 为空时留 None（仅 admin 可见，见 app._visible_initiatives）
             created_by=sess.owner_id or None,
             # 建任务页选择的档位：orchestrator 据此生成预算内的航线
-            task_kind=sess.task_kind or "auto",  # type: ignore[arg-type]
-            tier=sess.tier or "auto",  # type: ignore[arg-type]
+            task_kind=task_kind,  # type: ignore[arg-type]
+            tier=tier,  # type: ignore[arg-type]
             auto_confirm_pipeline=False,
             auto_start=False,
         )
@@ -956,7 +998,20 @@ class MissionBriefingAgent:
 
     def _format_plan_reply(self, draft: dict[str, Any]) -> str:
         stages = draft.get("stages") or []
-        labels = " → ".join(str(s.get("label") or s.get("id")) for s in stages)
+        from sortie_deck.parallel import collapse_to_waves
+
+        labels = " → ".join(
+            "（" + " ∥ ".join(
+                " → ".join(str(s.get("label") or s["id"]) for s in branch["members"])
+                for branch in wave["branches"]
+            ) + "）"
+            if wave["kind"] == "parallel" and len(wave["branches"]) > 1
+            else " → ".join(
+                str(s.get("label") or s["id"])
+                for s in (wave["members"] if wave["kind"] == "parallel" else [wave["stage"]])
+            )
+            for wave in collapse_to_waves(stages)
+        )
         roles = ", ".join((draft.get("role_agents") or {}).keys()) or "(默认模板)"
         hist = draft.get("history_hits") or []
         kb = draft.get("knowledge_hits") or []
@@ -968,6 +1023,9 @@ class MissionBriefingAgent:
             f"航线：{labels or '(空)'}",
             f"编制：{roles}",
         ]
+        proposal = draft.get("pipeline") or {}
+        if proposal.get("planner") == "llm" and proposal.get("rationale"):
+            lines.append(f"规划依据：{proposal['rationale']}")
         if hist:
             lines.append(f"历史参考：{', '.join(h['title'] for h in hist[:3])}")
         if kb:

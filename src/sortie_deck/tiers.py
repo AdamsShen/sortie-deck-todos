@@ -423,11 +423,15 @@ def enforce_tier(
                 spec[key] = base[key]
         kept[mapped] = spec
 
+    full_delivery = task_kind == "delivery" and tier == "full" and not allowed_override
     core = CORE_STAGE.get((task_kind, tier))
-    if core and core not in kept:
+    has_specialist_build = full_delivery and bool(_ENG_BUILD_ALIASES.intersection(kept))
+    if core and core not in kept and not has_specialist_build:
         return None
 
-    stages = [kept[sid] for sid in allowed_list if sid in kept]
+    # 完整档保留规划官排出的依赖顺序。
+    order = kept if full_delivery and "parallel_builds" in proposal else allowed_list
+    stages = [kept[sid] for sid in order if sid in kept]
     if len(stages) < 2:
         return None
 

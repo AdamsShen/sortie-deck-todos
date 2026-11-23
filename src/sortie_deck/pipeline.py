@@ -104,7 +104,7 @@ _SKIP_DESIGN = [r"无需\s*设计", r"跳过\s*设计", r"no\s*design", r"skip\s
 _PLATFORM_SIGNALS: list[tuple[str, list[str]]] = [
     ("eng_ios", [r"\bios\b", r"iphone", r"ipad", r"swiftui", r"\bswift\b", r"uikit"]),
     ("eng_android", [r"android", r"kotlin", r"jetpack", r"compose"]),
-    ("eng_web", [r"\bweb\b", r"前端", r"react", r"vue", r"next\.?js", r"typescript", r"css"]),
+    ("eng_web", [r"\bweb\b", r"前端", r"react(?!\s+native)", r"vue", r"next\.?js", r"typescript", r"css"]),
     ("eng_backend", [r"后端", r"backend", r"api\s*服务", r"fastapi", r"spring", r"微服务", r"服务端"]),
     ("eng_agent", [r"\bagent\b", r"智能体", r"langgraph", r"agent\s*开发", r"mcp\s*工具"]),
 ]
@@ -410,36 +410,50 @@ def _yaml_stages(track: str) -> list[dict[str, Any]]:
     return [_stage_from_yaml(s) for s in tpl.get("stages", [])]
 
 
-def _tier_stage_ids(task_kind: str, tier: str, text: str) -> list[str]:
-    """按档位生成规则版阶段 id。
-
-    express/standard 是固定链路；full 档按简报命中的平台展开工种，不能把
-    TIER_ALLOWED 里的全部工种一次性塞进航线——那是「预算」，不是「必选清单」。
-    """
-    if task_kind != "delivery" or tier != "full":
-        return list(TIER_ALLOWED.get((task_kind, tier)) or [])
-
-    blob = text.lower()
+def delivery_platforms(text: str) -> list[str]:
+    clauses = re.split(r"[。！？；，;,\n]", text)
+    included = [
+        clause for clause in clauses
+        if not re.search(r"^\s*(?:不需要|不涉及|不做|不改|无需|排除)|(?:不做|不改|无需改动)\s*$", clause)
+    ]
+    start = 0
+    for index, clause in enumerate(included):
+        if re.search(r"(?:仅|只)(?:需|做|改|修|开发|实现)", clause):
+            start = index
+    scope = "\n".join(included[start:])
+    mobile = re.search(
+        r"客户端|移动端|\bmobile app\b|\bflutter\b|\breact native\b", scope, re.IGNORECASE
+    )
+    if mobile:
+        scope = re.sub(r"\btypescript\b", "", scope, flags=re.IGNORECASE)
     platforms = [
-        sid
-        for sid, pats in _PLATFORM_SIGNALS
-        if any(re.search(p, blob, re.IGNORECASE) for p in pats)
+        sid for sid, patterns in _PLATFORM_SIGNALS
+        if any(re.search(pattern, scope, re.IGNORECASE) for pattern in patterns)
     ]
+    # 未指定移动平台时，用通用工程角色承担客户端分支。
+    if mobile and not {"eng_ios", "eng_android"}.intersection(platforms):
+        platforms.append("eng_implement")
+    return platforms
+
+
+def _tier_stage_ids(task_kind: str, tier: str, platforms: list[str]) -> list[str]:
+    allowed = TIER_ALLOWED[(task_kind, tier)]
+    if task_kind != "delivery" or (tier != "full" and len(platforms) < 2):
+        return allowed
+
     builds = platforms or ["eng_implement"]
-    return [
-        "intake",
-        "product_prd",
-        "design_ui",
-        "qa_cases",
-        *[f"{sid}_tech_design" for sid in platforms],
-        *builds,
-        *[f"{sid}_selftest" for sid in platforms],
-        "eng_integrate",
-        "qa_handoff",
-        "qa_verify",
-        "deploy_preview",
-        "done",
-    ]
+    selftests = [selftest_id_for(sid) for sid in platforms]
+    if tier == "full":
+        design = [f"{sid}_tech_design" for sid in platforms if sid != "eng_implement"]
+        return [
+            "intake", "product_prd", "design_ui", "qa_cases",
+            *design, *builds, *selftests,
+            "eng_integrate", "qa_handoff", "qa_verify", "deploy_preview", "done",
+        ]
+
+    start = allowed.index("eng_implement")
+    end = allowed.index("qa_verify")
+    return [*allowed[:start], *builds, *selftests, "eng_integrate", *allowed[end:]]
 
 
 def plan_pipeline(
@@ -450,6 +464,7 @@ def plan_pipeline(
     complexity: Complexity | str = "auto",
     task_kind: str | None = None,
     tier: str | None = None,
+    platforms: list[str] | None = None,
 ) -> dict[str, Any]:
     """Internal pipeline_planner agent — proposes stages pending human confirm.
 
@@ -459,21 +474,31 @@ def plan_pipeline(
     text = f"{title}\n{brief}"
     if task_kind in TASK_KINDS and tier in TIERS:
         catalog = catalog_by_id()
+        if platforms is None:
+            platforms = delivery_platforms(text) if task_kind == "delivery" else []
+        parallel_delivery = len(platforms) > 1
+        delivery_branches = {
+            stage_id: _PLATFORM_BRANCH.get(build, "client")
+            for build in platforms
+            for stage_id in (build, selftest_id_for(build))
+        }
         stages: list[dict[str, Any]] = []
-        for sid in _tier_stage_ids(task_kind, tier, text):
+        for sid in _tier_stage_ids(task_kind, tier, platforms):
             if sid not in catalog:
                 continue
             spec = dict(catalog[sid])
-            # full 档多工种：补并行组与分支，否则图里会退化成全串行
-            if sid.endswith("_tech_design"):
+            if sid.endswith("_tech_design") and parallel_delivery:
                 spec["parallel_group"] = "eng_planning"
-            elif sid in _PLATFORM_BRANCH:
-                spec["parallel_group"] = "eng_delivery"
-                spec["branch"] = _PLATFORM_BRANCH[sid]
-            elif sid.endswith("_selftest") and sid != "eng_selftest":
-                spec["parallel_group"] = "eng_delivery"
-                spec["branch"] = sid.removesuffix("_selftest")
+            elif parallel_delivery and sid in delivery_branches:
+                spec.update(
+                    parallel_group="eng_delivery", branch=delivery_branches[sid], hitl_after=False
+                )
+                if sid == "eng_implement":
+                    spec.update(label="客户端开发", label_en="Client Build")
+                elif sid == "eng_selftest":
+                    spec.update(label="客户端自测", label_en="Client Self-test")
             stages.append(spec)
+        stages = normalize_specs(stages)
         return {
             "agent": PLANNER_AGENT,
             "agent_title": PLANNER_TITLE,
@@ -494,6 +519,7 @@ def plan_pipeline(
             "task_kind": task_kind,
             "tier": tier,
             "tier_pruned": [],
+            "parallel_delivery": parallel_delivery,
         }
 
     if hint_track in TRACK_FILES:
@@ -817,6 +843,10 @@ def apply_proposal_to_meta(meta: dict[str, Any], proposal: dict[str, Any], *, co
         meta["tier"] = proposal["tier"]
     if proposal.get("tier_pruned") is not None:
         meta["tier_pruned"] = list(proposal.get("tier_pruned") or [])
+    if "parallel_delivery" in proposal:
+        meta["parallel_delivery_stages"] = (
+            [s["id"] for s in specs] if proposal["parallel_delivery"] else []
+        )
     if proposal.get("tier_reason"):
         meta["tier_reason"] = proposal["tier_reason"]
     return meta
