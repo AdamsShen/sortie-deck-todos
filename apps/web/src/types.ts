@@ -76,6 +76,8 @@ export interface PipelineProposal {
   agent?: string;
   agent_title?: string;
   track_hint?: string;
+  task_kind?: TaskKind;
+  tier?: PipelineTier;
   rationale?: string;
   stages?: PipelineStageInfo[];
   status?: string;

@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { api } from "../api";
+import { api, updateBriefingPrefs } from "../api";
 import { playSfx } from "../sfx";
 import type {
   ExternalMaterial,
   GitCredentialInfo,
+  PipelineProposal,
+  PipelineTier,
+  TaskKind,
   RepoConfig,
   UserRepoInfo,
   WorkspaceRepoInfo,
@@ -56,7 +59,14 @@ export type BriefingSession = {
   title?: string;
   messages: BriefingMessage[];
   events: BriefingEvent[];
-  draft?: Record<string, unknown>;
+  draft?: {
+    pipeline?: PipelineProposal;
+    requested_task_kind?: TaskKind;
+    requested_tier?: PipelineTier;
+    [key: string]: unknown;
+  };
+  task_kind?: TaskKind;
+  tier?: PipelineTier;
   materials?: ExternalMaterial[];
   initiative_id?: string | null;
 };
@@ -76,6 +86,10 @@ type Props = {
   onMaterialsLoaded?: (mats: ExternalMaterial[]) => void;
   /** Session id == pre-generated mission id; parent uses it to upload originals. */
   onSessionReady?: (missionId: string) => void;
+  onSessionRestored: (session: BriefingSession) => void;
+  onDraftChange: (draft: BriefingSession["draft"]) => void;
+  taskKind: TaskKind;
+  tier: PipelineTier;
   /** Clears the parent's external-materials panel — wired to the "新会话" button. */
   onReset?: () => void;
   labels: {
@@ -113,6 +127,10 @@ export function MissionBriefingChat({
   onImportFiles,
   onMaterialsLoaded,
   onSessionReady,
+  onSessionRestored,
+  onDraftChange,
+  taskKind,
+  tier,
   onReset,
 }: Props) {
   const [session, setSession] = useState<BriefingSession | null>(null);
@@ -174,6 +192,7 @@ export function MissionBriefingChat({
             setSession(s);
             setBootError("");
             onSessionReady?.(s.id);
+            onSessionRestored(s);
             onMaterialsLoaded?.(s.materials || []);
             return;
           }
@@ -376,6 +395,7 @@ export function MissionBriefingChat({
     const ac = new AbortController();
     abortRef.current = ac;
     try {
+      await updateBriefingPrefs(token, session.id, { task_kind: taskKind, tier });
       const s = await api<BriefingSession>(`/api/briefing/sessions/${session.id}/messages`, {
         token,
         method: "POST",
@@ -456,6 +476,10 @@ export function MissionBriefingChat({
     ["waterfall", "tool", "confirm", "done", "plan"].includes(e.kind),
   );
   const awaiting = session?.status === "awaiting_confirm";
+
+  useEffect(() => {
+    onDraftChange(session?.draft);
+  }, [session?.draft, onDraftChange]);
 
   return (
     <div className="briefing">

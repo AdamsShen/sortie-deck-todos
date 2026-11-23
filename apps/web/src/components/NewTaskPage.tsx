@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import {
   listPipelineTiers,
-  updateBriefingPrefs,
   updateInitiativeMaterials,
   uploadMissionInput,
 } from "../api";
@@ -10,11 +9,12 @@ import type { I18nKey } from "../i18n";
 import type {
   ExternalMaterial,
   Lang,
+  PipelineStageInfo,
   PipelineTier,
   TaskKind,
   TierGroup,
 } from "../types";
-import { MissionBriefingChat } from "./MissionBriefingChat";
+import { MissionBriefingChat, type BriefingSession } from "./MissionBriefingChat";
 import type { ComposerAttachment } from "./ChatComposer";
 
 type Props = {
@@ -163,6 +163,26 @@ function fromAttachment(a: ComposerAttachment): DraftMaterial | null {
   };
 }
 
+function formatStageChain(stages: PipelineStageInfo[], lang: Lang): string {
+  const waves: { group?: string | null; branches: Map<string, string[]> }[] = [];
+  for (const stage of stages) {
+    const group = stage.parallel_group;
+    let wave = waves.at(-1);
+    if (!wave || !group || wave.group !== group) {
+      wave = { group, branches: new Map() };
+      waves.push(wave);
+    }
+    const branch = stage.branch || stage.id;
+    const labels = wave.branches.get(branch) || [];
+    labels.push(lang === "zh" ? stage.label : stage.label_en || stage.label);
+    wave.branches.set(branch, labels);
+  }
+  return waves.map(({ branches }) => {
+    const labels = Array.from(branches.values(), (stages) => stages.join(" → "));
+    return labels.length > 1 ? `(${labels.join(" ∥ ")})` : labels[0];
+  }).join(" → ");
+}
+
 export function NewTaskPage({ token, lang, tr, busy, setBusy, onCancel, onCreated, onError }: Props) {
   const [materials, setMaterials] = useState<DraftMaterial[]>([]);
   const [dragging, setDragging] = useState(false);
@@ -170,11 +190,11 @@ export function NewTaskPage({ token, lang, tr, busy, setBusy, onCancel, onCreate
   // 规划会话一开启就会预生成任务 id，拿到 id 后立刻把原件传进任务目录
   const [missionId, setMissionId] = useState("");
   const uploadedRef = useRef<Set<string>>(new Set());
-  // 执行档位：auto 交给后端按简报推荐；显式选择则写进 briefing session，
-  // 确认建队时作为阶段预算（planner 只能在预算内减，不能加）
+  // 档位选择随规划消息同步，具体阶段来自该会话的航线提案。
   const [taskKind, setTaskKind] = useState<TaskKind>("auto");
   const [tier, setTier] = useState<PipelineTier>("auto");
   const [tierGroups, setTierGroups] = useState<TierGroup[]>([]);
+  const [draft, setDraft] = useState<BriefingSession["draft"]>();
 
   async function uploadDraft(id: string, m: DraftMaterial) {
     if (!m.file || uploadedRef.current.has(m.uid)) return;
@@ -210,14 +230,6 @@ export function NewTaskPage({ token, lang, tr, busy, setBusy, onCancel, onCreate
       cancelled = true;
     };
   }, [token]);
-
-  // 会话就绪 / 档位变化时同步到后端；保存失败不阻断建队（后端按 auto 处理）
-  useEffect(() => {
-    if (!missionId) return;
-    void updateBriefingPrefs(token, missionId, { task_kind: taskKind, tier }).catch(
-      () => undefined,
-    );
-  }, [missionId, taskKind, tier, token]);
 
   // 会话 id 到位后补传「先选文件、后建会话」的那批；上传成功会写回 stored_path
   useEffect(() => {
@@ -355,14 +367,12 @@ export function NewTaskPage({ token, lang, tr, busy, setBusy, onCancel, onCreate
     [zh],
   );
 
-  const activeGroup = useMemo(
-    () => tierGroups.find((g) => g.task_kind === taskKind) ?? null,
-    [tierGroups, taskKind],
+  const proposal = (draft?.requested_task_kind ?? "auto") === taskKind
+    && (draft?.requested_tier ?? "auto") === tier ? draft?.pipeline : undefined;
+  const activeGroup = tierGroups.find((g) =>
+    g.task_kind === (proposal?.task_kind ?? taskKind),
   );
-  const activeTier = useMemo(
-    () => activeGroup?.tiers.find((t) => t.tier === tier) ?? null,
-    [activeGroup, tier],
-  );
+  const activeTier = activeGroup?.tiers.find((t) => t.tier === (proposal?.tier ?? tier));
 
   const plannerLabels = useMemo(
     () => ({
@@ -403,6 +413,7 @@ export function NewTaskPage({ token, lang, tr, busy, setBusy, onCancel, onCreate
                 <button
                   key={opt.value}
                   type="button"
+                  disabled={busy}
                   className={`tier-chip${taskKind === opt.value ? " on" : ""}`}
                   onClick={() => {
                     playSfx("toggle");
@@ -421,6 +432,7 @@ export function NewTaskPage({ token, lang, tr, busy, setBusy, onCancel, onCreate
                 <button
                   key={opt.value}
                   type="button"
+                  disabled={busy}
                   className={`tier-chip${tier === opt.value ? " on" : ""}`}
                   onClick={() => {
                     playSfx("toggle");
@@ -433,24 +445,19 @@ export function NewTaskPage({ token, lang, tr, busy, setBusy, onCancel, onCreate
             </div>
           </div>
           <div className="tier-chain">
-            {activeTier ? (
+            {proposal?.stages?.length ? (
               <>
                 <span className="tier-chain-meta">
-                  {activeTier.stage_count} {zh ? "个阶段" : "stages"} ·{" "}
-                  {activeTier.eta_minutes[0]}-{activeTier.eta_minutes[1]} min
+                  {activeTier && `${zh ? activeTier.label : activeTier.label_en} · `}
+                  {proposal.stages.length} {zh ? "个阶段" : "stages"}
                 </span>
-                <span className="tier-chain-path">
-                  {activeTier.stages
-                    .map((s) => (zh ? s.label : s.label_en || s.label))
-                    .join(" → ")}
-                </span>
-                <span className="tier-chain-desc">{activeTier.description}</span>
+                <span className="tier-chain-path">{formatStageChain(proposal.stages, lang)}</span>
               </>
             ) : (
               <span className="tier-chain-desc">
                 {zh
-                  ? "按简报自动判定任务类型与档位；选定具体类型和档位后可预览阶段链路。"
-                  : "Task type and tier are inferred from the brief; pick both to preview the stage chain."}
+                  ? "发送任务需求后预览实际航线，规划官会按需安排并行阶段。"
+                  : "Send your brief to preview the actual stages and any parallel branches."}
               </span>
             )}
           </div>
@@ -470,6 +477,13 @@ export function NewTaskPage({ token, lang, tr, busy, setBusy, onCancel, onCreate
                 materials={materialsPayload}
                 onImportFiles={addAttachments}
                 onSessionReady={setMissionId}
+                onSessionRestored={(session) => {
+                  setTaskKind(session.task_kind ?? "auto");
+                  setTier(session.tier ?? "auto");
+                }}
+                onDraftChange={setDraft}
+                taskKind={taskKind}
+                tier={tier}
                 onMaterialsLoaded={(mats) =>
                   setMaterials(mats.map((m) => ({ ...m, uid: `rst_${m.id}` })))
                 }
