@@ -1206,9 +1206,35 @@ export default function App() {
         });
       }
     };
+    // 并行波次开始时编排层发的是轻量 progress（不带整份 initiative）。
+    // 只挂 onUpdate 的话 `payload.initiative` 为空、什么都不会发生，页面要等
+    // 下一次全量 update 才知道有两条线在跑，这期间顶部只能显示「最近开始的那一个」。
+    const onProgress = (ev: MessageEvent) => {
+      const payload = JSON.parse(String(ev.data)) as {
+        initiative?: Initiative;
+        initiative_id?: string;
+        active_parallel?: unknown;
+      };
+      if (payload.initiative) {
+        onUpdate(ev);
+        return;
+      }
+      const parallel = Array.isArray(payload.active_parallel)
+        ? payload.active_parallel.map((v) => String(v)).filter(Boolean)
+        : [];
+      const patch = (ini: Initiative): Initiative => {
+        const meta = { ...(ini.meta || {}) };
+        if (parallel.length) meta.active_parallel = parallel;
+        else delete meta.active_parallel;
+        return { ...ini, meta };
+      };
+      const id = payload.initiative_id || "";
+      setDetail((prev) => (prev ? patch(prev) : prev));
+      setItems((prev) => prev.map((p) => (p.id === id ? patch(p) : p)));
+    };
     es.addEventListener("hitl", onUpdate);
     es.addEventListener("update", onUpdate);
-    es.addEventListener("progress", onUpdate);
+    es.addEventListener("progress", onProgress);
     es.addEventListener("stopped", onUpdate);
     // 阶段内子步骤（起止 / 自审第 N 轮）：不改变任务状态，只驱动转圈与文案。
     // 没有这些事件时，一个 5–10 分钟的 agent 回合在界面上和卡死无法区分。
