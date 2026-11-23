@@ -55,6 +55,21 @@ async def test_plan_pipeline_smart_falls_back_when_llm_fails(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_gateway_failure_keeps_explicit_frontend_and_backend_work(monkeypatch):
+    client = LlmClient(api_key="test-key", cli_fallback=False)
+    monkeypatch.setattr(client, "chat_json", AsyncMock(side_effect=RuntimeError("gateway unavailable")))
+
+    plan = await plan_pipeline_smart(
+        brief="帮我写一个可运行贪吃蛇小游戏，支持用户登陆注册，需要前后端同时参与",
+        use_llm=True, client=client,
+    )
+
+    assert plan["planner"] == "heuristic" and plan["tier"] == "full"
+    wave = next(w for w in collapse_to_waves(plan["stages"]) if w.get("group") == "eng_delivery")
+    assert {branch["id"] for branch in wave["branches"]} == {"web", "backend"}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(("requested", "expected"), [("auto", "full"), ("standard", "standard")])
 async def test_planner_can_infer_parallel_work_from_user_goals(monkeypatch, requested, expected):
     client = LlmClient(api_key="test-key")

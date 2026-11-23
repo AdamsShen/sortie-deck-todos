@@ -104,7 +104,7 @@ _SKIP_DESIGN = [r"无需\s*设计", r"跳过\s*设计", r"no\s*design", r"skip\s
 _PLATFORM_SIGNALS: list[tuple[str, list[str]]] = [
     ("eng_ios", [r"\bios\b", r"iphone", r"ipad", r"swiftui", r"\bswift\b", r"uikit"]),
     ("eng_android", [r"android", r"kotlin", r"jetpack", r"compose"]),
-    ("eng_web", [r"\bweb\b", r"前端", r"react(?!\s+native)", r"vue", r"next\.?js", r"typescript", r"css"]),
+    ("eng_web", [r"\bweb\b", r"前(?:后)?端", r"react(?!\s+native)", r"vue", r"next\.?js", r"typescript", r"css"]),
     ("eng_backend", [r"后端", r"backend", r"api\s*服务", r"fastapi", r"spring", r"微服务", r"服务端"]),
     ("eng_agent", [r"\bagent\b", r"智能体", r"langgraph", r"agent\s*开发", r"mcp\s*工具"]),
 ]
