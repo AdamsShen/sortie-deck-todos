@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import threading
 import time
 import types
 
@@ -308,6 +309,53 @@ async def test_send_timeout_kills_runtime(monkeypatch, dsh_settings):
     assert reply.status == "fail"
     assert reply.meta.get("timeout") is True
     assert _FakeHarness.instances[-1].closed is True
+
+
+async def test_watchdog_classifies_graceful_runtime_shutdown_as_timeout(monkeypatch, dsh_settings):
+    _install_fake(monkeypatch)
+    monkeypatch.setattr(settings, "dsh_request_timeout_seconds", 0.01)
+    _FakeHarness.delay = 0.1
+    provider = DshProvider()
+    session = await provider.start_session(initiative_id="ini_test", stage="eng_implement")
+
+    reply = await provider.send(session, "slow")
+
+    assert reply.status == "fail"
+    assert reply.meta.get("timeout") is True
+
+
+async def test_stage_cancellation_stops_dsh_before_returning(monkeypatch, dsh_settings):
+    started = threading.Event()
+    stopped = threading.Event()
+    exited = threading.Event()
+
+    class BlockingHarness(_FakeHarness):
+        def start_session(self, session_id=None):
+            def run(prompt, on_notification=None):
+                started.set()
+                stopped.wait(1)
+                exited.set()
+                return self.result
+            return types.SimpleNamespace(run=run)
+
+        resume_session = start_session
+
+        def close(self):
+            stopped.set()
+            super().close()
+
+    _install_fake(monkeypatch, BlockingHarness)
+    provider = DshProvider()
+    session = await provider.start_session(initiative_id="ini_test", stage="eng_implement")
+    task = asyncio.create_task(provider.send(session, "slow"))
+    assert await asyncio.to_thread(started.wait, 1)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert stopped.is_set()
+    assert exited.is_set()
 
 
 async def test_activity_bridge_forwards_tool_calls(monkeypatch, dsh_settings):

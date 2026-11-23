@@ -129,3 +129,144 @@ async def test_stage_timeout_recovers_artifacts_from_workspace(tmp_path, monkeyp
         assert any("回收产物" in e.message for e in ini.timeline)
     finally:
         await orch.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exhausted", [False, True])
+async def test_checkpointed_build_retries_before_handing_off(tmp_path, monkeypatch, exhausted):
+    from sortie_deck import graph as graph_mod
+    from sortie_deck.settings import settings
+
+    real_run_executor = graph_mod.run_executor
+    build_attempts = []
+    qa_calls = []
+
+    async def fake_run_executor(executor, ctx, host=None):
+        if ctx.stage == "eng_implement":
+            build_attempts.append(ctx)
+            if len(build_attempts) == 1 or exhausted:
+                workspace = Path(ctx.workspace_dir)
+                workspace.mkdir(parents=True, exist_ok=True)
+                (workspace / "implementation.md").write_text("# Partial build", encoding="utf-8")
+                return StageResult(
+                    status="fail",
+                    message="DSH timeout",
+                    meta={"build_checkpoint": True, "timeout": True},
+                )
+        if ctx.stage == "qa_verify":
+            qa_calls.append(ctx.stage)
+        return await real_run_executor(executor, ctx, host)
+
+    monkeypatch.setattr(graph_mod, "run_executor", fake_run_executor)
+    monkeypatch.setattr(settings, "stage_self_check_attempts", 1)
+    monkeypatch.setattr(settings, "max_consecutive_same_failure", 3)
+    orch = Orchestrator(Settings(
+        data_dir=tmp_path / "data", kb_backend="local", pipeline_llm=False, room_llm=False,
+    ))
+    await orch.startup()
+    try:
+        ini = await orch.create_and_start(CreateInitiativeRequest(
+            title="Checkpoint retry",
+            brief="Build a static page",
+            harness="mock",
+            pipeline_track="express",
+            auto_start=True,
+            auto_confirm_pipeline=True,
+        ))
+        for _ in range(100):
+            ini = orch.get(ini.id)
+            if ini.status.value in {"waiting_hitl", "failed", "done", "stopped"}:
+                break
+            await asyncio.sleep(0.05)
+
+        assert len(build_attempts) == 2
+        if exhausted:
+            assert not qa_calls
+            assert ini.status.value == "failed"
+            assert ini.current_stage == "eng_implement"
+        else:
+            assert ini.status.value in {"waiting_hitl", "done"}
+            assert qa_calls == ["qa_verify"]
+            assert build_attempts[1].permissions.get("build_recovery") is True
+    finally:
+        await orch.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_parallel_branch_timeout_blocks_downstream(tmp_path, monkeypatch):
+    """并行分支里任一实现重试耗尽，都不能继续到联调与 QA。
+
+    串行航线在节点里就 raise 了；并行航线是把每个分支的 run_stage 结果
+    gather 回来再合并，所以失败分支必须单独拦截，否则合并后照常往下走。
+    """
+    from sortie_deck import graph as graph_mod
+    from sortie_deck.contracts import REQUIRED
+    from sortie_deck.settings import settings
+
+    web_attempts: list[object] = []
+    downstream: list[str] = []
+
+    async def fake_run_executor(executor, ctx, host=None):
+        if ctx.stage == "eng_web":
+            web_attempts.append(ctx)
+            return StageResult(
+                status="fail",
+                message="DSH timeout",
+                meta={"build_checkpoint": True, "timeout": True},
+            )
+        if ctx.stage in {"eng_integrate", "qa_verify", "deploy_preview"}:
+            downstream.append(ctx.stage)
+        return StageResult(
+            status="ok",
+            message="fixture",
+            artifacts={name: "{}" for name in REQUIRED.get(ctx.stage, [])},
+        )
+
+    # 固定一条最短并行航线，避开 standard 模板里的 PRD 人工确认与 LLM 规划
+    async def fake_plan(*, title="", brief="", **kwargs):
+        return {
+            "stages": [
+                {"id": "intake", "name": "intake"},
+                {"id": "eng_web", "name": "eng_web", "parallel_group": "eng_delivery",
+                 "branch": "web", "depends_on": ["intake"]},
+                {"id": "eng_backend", "name": "eng_backend", "parallel_group": "eng_delivery",
+                 "branch": "backend", "depends_on": ["intake"]},
+                {"id": "eng_integrate", "name": "eng_integrate",
+                 "depends_on": ["eng_web", "eng_backend"]},
+                {"id": "done", "name": "done", "depends_on": ["eng_integrate"]},
+            ],
+            "rationale": "前后端并行开发",
+            "notes": [],
+        }
+
+    monkeypatch.setattr("sortie_deck.orchestrator.plan_pipeline_smart", fake_plan)
+    monkeypatch.setattr(graph_mod, "run_executor", fake_run_executor)
+    monkeypatch.setattr(settings, "stage_self_check_attempts", 1)
+    monkeypatch.setattr(settings, "max_consecutive_same_failure", 3)
+    orch = Orchestrator(Settings(
+        data_dir=tmp_path / "data", kb_backend="local", pipeline_llm=False, room_llm=False,
+    ))
+    await orch.startup()
+    try:
+        ini = await orch.create_and_start(CreateInitiativeRequest(
+            title="Parallel checkpoint retry",
+            brief="需要前后端 API 与页面，可并行开发后联调",
+            harness="mock",
+            pipeline_track="standard",
+            auto_start=True,
+            auto_confirm_pipeline=True,
+        ))
+        for _ in range(200):
+            ini = orch.get(ini.id)
+            if ini.status.value in {"waiting_hitl", "failed", "done", "stopped"}:
+                break
+            await asyncio.sleep(0.05)
+        # 运行是 create_task 起的：等失败收尾（timeline / room / emit）落完，
+        # 否则残留协程会跑进后面的用例，造成随机顺序下的偶发失败
+        await asyncio.sleep(0.2)
+
+        assert web_attempts, "失败分支应被真正执行"
+        assert downstream == [], f"并行失败后仍进入下游：{downstream}"
+        assert ini.status.value == "failed"
+    finally:
+        await orch.shutdown()

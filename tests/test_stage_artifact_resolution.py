@@ -6,6 +6,8 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from sortie_deck.harness_providers.base import HarnessReply, HarnessSession, ProbeStatus
 from sortie_deck.harness_providers.executor import HarnessStageExecutor
 from sortie_deck.models import RoleId, StageContext
@@ -36,6 +38,7 @@ class _WriterProvider:
         cwd: str | None = None,
         context_pack: dict[str, Any] | None = None,
         extra_dirs: list[str] | None = None,
+        on_tool_result: Any = None,
     ) -> HarnessReply:
         self.calls.append((str(cwd or ""), list(extra_dirs or []), prompt))
         root = Path(str(cwd or "."))
@@ -85,12 +88,112 @@ def _ctx(
     )
 
 
-def _run(monkeypatch, provider: _WriterProvider, ctx: StageContext):
+def _run(monkeypatch, provider: _WriterProvider, ctx: StageContext, *, host=None):
     monkeypatch.setattr(
         "sortie_deck.harness_providers.base.get_harness_registry",
         lambda: _Registry(provider),
     )
-    return asyncio.run(HarnessStageExecutor().run(ctx))
+    return asyncio.run(HarnessStageExecutor().run(ctx, host=host))
+
+
+@pytest.mark.parametrize("tasks", [None, "invalid JSON", '{"status":"completed"}'])
+def test_build_recovery_without_checkpoint_requires_real_artifacts(tmp_path, monkeypatch, tasks):
+    from sortie_deck.settings import settings
+
+    monkeypatch.setattr(settings, "review_lenses_enabled", False)
+    artifact_dir = tmp_path / "data/missions/ini_art/artifacts/eng_implement"
+    ctx = _ctx(tmp_path, stage="eng_implement", role="eng", artifact_dir=artifact_dir)
+    ctx.harness = "dsh"
+    ctx.permissions["build_recovery"] = True
+    files = {"implementation.md": "# Implementation"}
+    if tasks is not None:
+        files["tasks.json"] = tasks
+
+    result = _run(monkeypatch, _WriterProvider(files), ctx)
+
+    if tasks == '{"status":"completed"}':
+        assert result.status == "ok"
+        assert result.artifacts["tasks.json"] == tasks
+        assert result.proposed_next == "qa_verify"
+    else:
+        assert result.status == "fail"
+        assert result.meta["build_checkpoint"] is True
+        assert "tasks.json" not in result.artifacts
+        assert not (artifact_dir / "tasks.json").exists()
+
+
+@pytest.mark.parametrize("source_changed,manager_follow", [(False, False), (True, False), (False, True)])
+def test_dsh_timeout_resumes_verified_build_checkpoint(
+    tmp_path, monkeypatch, source_changed, manager_follow
+):
+    from sortie_deck.settings import settings
+
+    class Manager:
+        async def escalate(self, question):
+            return "manager: Proceed"
+
+    class InterruptedBuild(_WriterProvider):
+        async def send(self, session, prompt, *, cwd, on_tool_result=None, **kwargs):
+            root = Path(cwd)
+            source = root / "repos" / "app.js"
+            turn = len(self.calls)
+            self.calls.append(prompt)
+            if manager_follow and turn == 0:
+                return HarnessReply(
+                    status="ok", text='```control\n{"escalate": {"question": "Proceed?"}}\n```',
+                )
+            if turn == int(manager_follow):
+                source.parent.mkdir(exist_ok=True)
+                source.write_text("first version", encoding="utf-8")
+                (root / "checklist.md").write_text(
+                    "- [x] C1 first — verify: `check-first`\n"
+                    "- [x] C2 second — verify: `check-second`\n",
+                    encoding="utf-8",
+                )
+                log = root / "selftest_log.json"
+                first = '{"item":"C1","command":"check-first","exit_code":0}'
+                log.write_text(f"[{first}]", encoding="utf-8")
+                if on_tool_result:
+                    on_tool_result()
+                source.write_text("second version", encoding="utf-8")
+                log.write_text(
+                    f'[{first},{{"item":"C2","command":"check-second","exit_code":0}}]',
+                    encoding="utf-8",
+                )
+                (root / "implementation.md").write_text("# Completed implementation", encoding="utf-8")
+                if on_tool_result:
+                    on_tool_result()
+                return HarnessReply(status="fail", text="DSH timeout", meta={"timeout": True})
+            (root / "tasks.json").write_text('{"status":"completed"}', encoding="utf-8")
+            if source_changed:
+                (root / "implementation.md").write_text("# Updated implementation", encoding="utf-8")
+            return HarnessReply(status="ok", text="Finished checkpoint")
+
+    monkeypatch.setattr(settings, "review_lenses_enabled", False)
+    artifact_dir = tmp_path / "data/missions/ini_art/artifacts/eng_implement"
+    ctx = _ctx(tmp_path, stage="eng_implement", role="eng", artifact_dir=artifact_dir)
+    ctx.harness = "dsh"
+    provider = InterruptedBuild()
+
+    failed = _run(monkeypatch, provider, ctx, host=Manager() if manager_follow else None)
+    assert failed.status == "fail"
+    assert failed.meta["build_checkpoint"] is True
+    assert "tasks.json" not in failed.artifacts
+    checkpoint = tmp_path / "data/missions/ini_art/logs/eng_implement/build-checkpoint.json"
+    assert checkpoint.is_file()
+
+    if source_changed:
+        workspace = tmp_path / "data/missions/ini_art/workspace"
+        (workspace / "repos/app.js").write_text("edited after timeout", encoding="utf-8")
+    resumed = _run(monkeypatch, provider, ctx)
+    verified = "none" if source_changed else "C2"
+    assert f"Reusable verified items: {verified}." in provider.calls[-1]
+    expected = "# Updated implementation" if source_changed else "# Completed implementation"
+    assert resumed.artifacts["implementation.md"] == expected
+    assert resumed.artifacts["tasks.json"] == '{"status":"completed"}'
+    assert resumed.status == "ok"
+    assert resumed.proposed_next == "qa_verify"
+    assert not checkpoint.exists()
 
 
 def test_doc_stage_writes_straight_into_artifact_dir(tmp_path, monkeypatch):

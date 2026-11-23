@@ -947,6 +947,13 @@ _SELF_CHECK_SKIP_PREFIXES = ("deploy",)
 # 自审真跑过（有独立结论）才算“不需要自检”；skipped / failed / unparsed 都算没跑成。
 _REVIEW_DONE_STATUSES = {"passed", "findings", "blocking"}
 
+
+def _failed_build_recovery(result: dict[str, Any]) -> bool:
+    return result.get("status") == "fail" and bool(
+        (result.get("meta") or {}).get("build_checkpoint")
+    )
+
+
 # 环境侧失败：重跑同一阶段不会改变结论，必须暂停而不是打回开发
 _ENV_BLOCK_KINDS = {"environment_blocked", "auth_blocked"}
 
@@ -2086,6 +2093,8 @@ def build_graph_from_template(
             persona=persona,
             permissions={
                 "qa_attempt": state.get("qa_attempt", 1),
+                "build_recovery": state.get("stage") == stage
+                and _failed_build_recovery(state.get("last_result") or {}),
                 **_coding_perm_from_instruction(state.get("human_instruction")),
             },
             toolkit_ids=toolkit_ids,
@@ -2123,12 +2132,21 @@ def build_graph_from_template(
             try:
                 return await asyncio.wait_for(_execute(), timeout=timeout)
             except TimeoutError:
+                checkpointed_build = (
+                    executor_name == "harness_stage"
+                    and ctx.harness == "dsh"
+                    and stage in ENG_BUILD_STAGES
+                )
                 return StageResult(
                     status="fail",
                     message=f"stage `{stage}` timed out after {timeout:.0f}s",
                     artifacts={},
                     proposed_next=stage,
-                    meta={"timeout": True, "timeout_seconds": timeout},
+                    meta={
+                        "timeout": True,
+                        "timeout_seconds": timeout,
+                        **({"build_checkpoint": True} if checkpointed_build else {}),
+                    },
                 )
 
         if stage in ENG_BUILD_STAGES:
@@ -2139,7 +2157,7 @@ def build_graph_from_template(
         # 失败/超时兜底：执行器被取消时不会组装 artifacts（harness 由回复文本合成），
         # 但 agent 已写进 workspace 的契约文件仍然有效。回收后可继续推进，
         # 避免 15 分钟的产出只因超时被整体丢弃。
-        if result.status == "fail":
+        if result.status == "fail" and not (result.meta or {}).get("build_checkpoint"):
             # 产物目录优先（文档型阶段直写），workspace 兜底（编码型阶段）
             salvage_extra = [
                 p
@@ -2288,7 +2306,9 @@ def build_graph_from_template(
         # 只带 reply.md 之类过程文件，按交付契约校验会把一次正常的人工升级判成
         # 流水线失败（2026-11-04 qa_verify 事故：决策已生成、状态已置 waiting_hitl，
         # 随后被这里抛出的 StageContractError 覆盖成 failed，人工答复无处可恢复）。
-        if result.status != "needs_hitl":
+        if result.status != "needs_hitl" and not (
+            result.status == "fail" and (result.meta or {}).get("build_checkpoint")
+        ):
             _validate_or_explain(stage, result)
 
         # git 回写（任务分支 commit/push + MR）——只影响 meta，不影响阶段判定
@@ -2628,6 +2648,11 @@ def build_graph_from_template(
                         "status": "running",
                     }
 
+            if _failed_build_recovery(result):
+                raise StageContractError(
+                    stage_name, result.get("message") or "构建检查点未能续跑"
+                )
+
             if result.get("status") != "needs_hitl":
                 # Serial step: the agent itself may hand off (contract-checked);
                 # otherwise the frozen plan's default edge decides.
@@ -2869,13 +2894,20 @@ def build_graph_from_template(
                     name = m["name"]
                     await _mark_parallel_progress(initiative_id, stage=name, active=member_names)
                     st = await run_stage(dict(st), name)
-                    if (st.get("last_result") or {}).get("status") == "needs_hitl":
+                    result = st.get("last_result") or {}
+                    if result.get("status") == "needs_hitl" or _failed_build_recovery(result):
                         return st
                     if st.get("stopped"):
                         return st
                 return st
 
             results = await asyncio.gather(*[_run_branch(br["members"]) for br in branches])
+            for st in results:
+                result = st.get("last_result") or {}
+                if _failed_build_recovery(result):
+                    raise StageContractError(
+                        st["stage"], result.get("message") or "构建检查点未能续跑"
+                    )
 
             merged_upstream = dict(state.get("upstream") or {})
             merged_events = list(state.get("events") or [])

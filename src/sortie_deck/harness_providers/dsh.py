@@ -33,6 +33,8 @@ import socket
 import threading
 import time
 import uuid
+from collections.abc import Callable
+from concurrent.futures import Future
 from pathlib import Path
 from typing import Any
 
@@ -667,6 +669,7 @@ class DshProvider:
         context_pack: dict[str, Any] | None = None,
         extra_dirs: list[str] | None = None,
         on_activity: Any = None,
+        on_tool_result: Any = None,
     ) -> Any:
         from sortie_deck.harness_providers.base import HarnessReply
 
@@ -700,7 +703,9 @@ class DshProvider:
             # 运行时元数据回传：_run_once 在 worker 线程里写入，异常兜底分支也能
             # 保留沙箱回退的审计字段（否则失败时无从判断是否提过权）
             runtime_meta: dict[str, Any] = {}
-            reply = await asyncio.to_thread(
+            stop_ready: Future[Callable[[], None]] = Future()
+            cancelled = threading.Event()
+            worker = asyncio.create_task(asyncio.to_thread(
                 self._run_once,
                 session,
                 prompt,
@@ -713,8 +718,24 @@ class DshProvider:
                 sandbox_mode,
                 runtime_meta,
                 str((context_pack or {}).get("model") or "").strip() or None,
-            )
-            return reply
+                on_tool_result,
+                stop_ready,
+                cancelled,
+            ))
+            try:
+                return await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                # to_thread keeps running after cancellation. Stop and join it before
+                # the stage can retry in the same workspace.
+                cancelled.set()
+                ready = asyncio.wrap_future(stop_ready)
+                done, _ = await asyncio.wait((worker, ready), return_when=asyncio.FIRST_COMPLETED)
+                if ready in done:
+                    await asyncio.to_thread(ready.result())
+                else:
+                    ready.cancel()
+                await asyncio.gather(worker, return_exceptions=True)
+                raise
         except Exception as exc:  # noqa: BLE001 — 降级为 fail，绝不把异常抛给编排层
             logger.exception(
                 "DSH 调用失败: initiative=%s stage=%s session=%s error=%s",
@@ -750,6 +771,9 @@ class DshProvider:
         sandbox_mode: str | None = None,
         runtime_meta: dict[str, Any] | None = None,
         model: str | None = None,
+        on_tool_result: Any = None,
+        stop_ready: Future[Callable[[], None]] | None = None,
+        cancelled: threading.Event | None = None,
     ) -> Any:
         """线程内同步跑一轮：建进程 → resume/start → run → 关进程。"""
         from deepseek_harness import DeepSeekHarness
@@ -772,7 +796,7 @@ class DshProvider:
         base_kwargs: dict[str, Any] = {
             "provider": _llm_provider(),
             # 角色级模型优先（context_pack["model"]），缺省回落全局 dsh_model
-            "model": model or _model(),
+            "model": _model(model),
             "max_tokens": max_tokens or None,
             "reasoning_effort": str(getattr(settings, "dsh_reasoning_effort", "") or "") or None,
             "cwd": str(cwd) if cwd else None,
@@ -798,10 +822,18 @@ class DshProvider:
         harness = DeepSeekHarness(**base_kwargs, env=env)
 
         # 看门狗：Session.run() 无 cancel，超时只能从外部关掉子进程逼它退出
-        fired = {"timeout": False}
+        timed_out = threading.Event()
+        close_lock = threading.Lock()
+
+        def _close_runtime() -> None:
+            with close_lock:
+                try:
+                    harness.close()
+                except Exception:  # noqa: BLE001 — preserve the original turn outcome
+                    logger.debug("DSH 关闭运行时失败", exc_info=True)
 
         def _on_timeout() -> None:
-            fired["timeout"] = True
+            timed_out.set()
             logger.warning(
                 "DSH 单轮超时，强制关闭运行时: initiative=%s stage=%s session=%s timeout=%.0fs",
                 (session.meta or {}).get("initiative_id"),
@@ -809,23 +841,26 @@ class DshProvider:
                 session.id,
                 timeout,
             )
-            try:
-                harness.close()
-            except Exception:  # noqa: BLE001 — 关进程失败不影响上层判定
-                logger.debug("DSH 超时关闭运行时失败", exc_info=True)
+            _close_runtime()
 
         timer = threading.Timer(timeout, _on_timeout)
         timer.daemon = True
-        _notify = _make_notifier(on_activity, loop)
+        _notify = _make_notifier(on_activity, loop, on_tool_result)
 
         native_id = session.native_id or _native_session_id(session)
+        error_type = ""
         try:
             timer.start()
             dsh_session = _open_session(harness, native_id, session)
+            if stop_ready is not None:
+                stop_ready.set_result(_close_runtime)
+            if timed_out.is_set() or (cancelled is not None and cancelled.is_set()):
+                raise RuntimeError("DSH turn stopped before execution")
             try:
                 result = dsh_session.run(prompt, on_notification=_notify)
             except Exception as exc:  # noqa: BLE001 — 并发/续跑共用会话 id 时会「已存在」
-                if not _is_session_conflict(exc):
+                if (timed_out.is_set() or (cancelled is not None and cancelled.is_set())
+                        or not _is_session_conflict(exc)):
                     raise
                 # 执行器不回写 native_id 时，同阶段第二轮会复用同一 id 直接 run，
                 # 运行时判定「already exists」；并发自审轮也会撞锁。改用独立会话
@@ -840,26 +875,22 @@ class DshProvider:
                 dsh_session = harness.start_session(fresh)
                 result = dsh_session.run(prompt, on_notification=_notify)
         except Exception as exc:  # noqa: BLE001 — 进程被杀/协议断开都在这里收敛
-            if fired["timeout"]:
-                return HarnessReply(
-                    status="fail",
-                    text=f"DSH 单轮超时（{timeout:.0f}s）已终止",
-                    session_id=session.id,
-                    native_id=native_id or "",
-                    meta={
-                        **patch_meta,
-                        **fallback_meta,
-                        "timeout": True,
-                        "error_type": type(exc).__name__,
-                    },
-                )
-            raise
+            if not timed_out.is_set():
+                raise
+            error_type = type(exc).__name__
         finally:
             timer.cancel()
-            try:
-                harness.close()
-            except Exception:  # noqa: BLE001 — 收尾失败只记日志
-                logger.debug("DSH 关闭运行时失败", exc_info=True)
+            timer.join()
+            _close_runtime()
+
+        if timed_out.is_set():
+            return HarnessReply(
+                status="fail",
+                text=f"DSH 单轮超时（{timeout:.0f}s）已终止",
+                session_id=session.id,
+                native_id=native_id or "",
+                meta={**patch_meta, **fallback_meta, "timeout": True, "error_type": error_type},
+            )
 
         events = list(getattr(result, "events", None) or [])
         text = str(getattr(result, "final_response", "") or "").strip()
@@ -908,7 +939,7 @@ class DshProvider:
         """无状态 provider：进程已在 send 内关闭，这里保持幂等空实现。"""
 
 
-def _make_notifier(on_activity: Any, loop: Any) -> Any:
+def _make_notifier(on_activity: Any, loop: Any, on_tool_result: Any = None) -> Any:
     """构造本轮的通知回调：把 tool/call 转成 on_activity（在 worker 线程内执行）。
 
     ``on_activity`` 由执行器提供且是协程函数，必须投递回事件循环执行；节流放在
@@ -917,13 +948,21 @@ def _make_notifier(on_activity: Any, loop: Any) -> Any:
     last = {"at": 0.0}
 
     def _notify(notification: Any) -> None:
-        if on_activity is None:
+        if on_activity is None and on_tool_result is None:
             return
         if str(getattr(notification, "method", "")) != "session.event":
             return
         payload = getattr(notification, "payload", None) or {}
         event = payload.get("event") if isinstance(payload, dict) else None
-        if not isinstance(event, dict) or event.get("type") != "tool/call":
+        if not isinstance(event, dict):
+            return
+        if event.get("type") == "tool/result" and on_tool_result is not None:
+            try:
+                on_tool_result()
+            except Exception:  # noqa: BLE001 — checkpoint failure must not break the active turn
+                logger.warning("DSH build checkpoint callback failed", exc_info=True)
+            return
+        if event.get("type") != "tool/call" or on_activity is None:
             return
         data = event.get("data") if isinstance(event.get("data"), dict) else {}
         tool = str(data.get("name") or "").strip()
@@ -957,9 +996,12 @@ def _llm_provider() -> str:
     return str(getattr(settings, "dsh_llm_provider", "") or "deepseek-official").strip()
 
 
-def _model() -> str:
+def _model(role_model: str | None = None) -> str:
     from sortie_deck.settings import settings
 
+    # 已保存的角色可能仍使用旧的网关模型名。
+    if role_model and role_model != "deepseek/deepseek-v4-flash-20260731":
+        return role_model
     return str(getattr(settings, "dsh_model", "") or "deepseek-v4-flash").strip()
 
 

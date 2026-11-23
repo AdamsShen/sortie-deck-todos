@@ -20,6 +20,7 @@ import logging
 import re
 import time
 from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -886,6 +887,7 @@ async def _send_turn(
     pack: dict[str, Any],
     extra_dirs: list[str] | None = None,
     on_activity: Any = None,
+    on_tool_result: Any = None,
 ) -> Any:
     """统一的 provider 调用：按能力决定是否传额外参数（旧签名 provider 不传）。"""
     kwargs: dict[str, Any] = {"cwd": str(cwd), "context_pack": pack}
@@ -893,6 +895,8 @@ async def _send_turn(
         kwargs["extra_dirs"] = list(extra_dirs)
     if on_activity is not None and _supports_on_activity(provider):
         kwargs["on_activity"] = on_activity
+    if on_tool_result is not None:
+        kwargs["on_tool_result"] = on_tool_result
     return await provider.send(session, prompt, **kwargs)
 
 
@@ -1147,7 +1151,9 @@ class HarnessStageExecutor:
     async def _run_harness(
         self, ctx: StageContext, harness: str, *, host: Any = None
     ) -> StageResult:
+        from sortie_deck.contracts import optional_artifacts
         from sortie_deck.harness_providers.base import get_harness_registry
+        from sortie_deck.harness_providers.build_checkpoint import BuildCheckpoint
         from sortie_deck.mission_memory import build_stage_summary, get_mission_memory
         from sortie_deck.plugins.coding import (
             _count_impl_files,
@@ -1179,6 +1185,34 @@ class HarnessStageExecutor:
         # 产物目录：文档型阶段 cwd 直接指向 artifacts/<stage>（运行期可实时看到真产物），
         # 编码型阶段 cwd 仍是 workspace，产物目录只作为额外可写目录 / 收尾归档目标。
         artifact_dir = Path(ctx.artifact_dir) if ctx.artifact_dir else None
+        checkpoint = None
+        checkpoint_prompt = ""
+        checkpoint_outputs: set[str] = set()
+        if harness == "dsh" and ctx.stage in ENG_BUILD_STAGES:
+            scope = sha256(
+                json.dumps([ctx.brief, ctx.upstream_artifacts], sort_keys=True).encode()
+            ).hexdigest()
+            checkpoint = BuildCheckpoint(
+                data_dir / "missions" / ctx.initiative_id / "logs" / ctx.stage / "build-checkpoint.json",
+                workspace,
+                scope,
+            )
+            checkpoint_outputs, verified = checkpoint.resume()
+            if checkpoint.saved:
+                checkpoint_prompt = (
+                    "\n\n## Resume interrupted build\n"
+                    "Reuse the existing workspace. Checkpoint deliverables: "
+                    f"{', '.join(sorted(checkpoint_outputs)) or 'none'}. Reusable verified items: "
+                    f"{', '.join(verified) or 'none'}. "
+                    "Resume from unchecked or unverified items. The checkpoint supersedes any "
+                    "instruction to rerun every checklist command: reuse only the listed results "
+                    "and rerun affected checks if you change code, tests, or commands. "
+                    "Review existing deliverables and write only missing or outdated files. "
+                    "The orchestrator generates diff.patch from the final workspace."
+                )
+        build_recovery = checkpoint is not None and (
+            bool(checkpoint_prompt) or bool(ctx.permissions.get("build_recovery"))
+        )
         direct_write = bool(getattr(settings, "harness_artifact_direct_write", True))
         doc_stage = bool(direct_write and artifact_dir is not None and _is_doc_stage(ctx.stage))
         snapshot: dict[str, tuple[float, int]] = {}
@@ -1217,7 +1251,8 @@ class HarnessStageExecutor:
             if local_upstream:
                 ctx = ctx.model_copy(update={"upstream_paths": local_upstream})
             snapshot = _snapshot_contract_files(
-                [workspace, artifact_dir], _contract_names(ctx.stage)
+                [workspace, artifact_dir],
+                _contract_names(ctx.stage) + (optional_artifacts(ctx.stage) if checkpoint else []),
             )
             if direct_write and artifact_dir is not None:
                 artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -1233,12 +1268,14 @@ class HarnessStageExecutor:
             artifact_dir=artifact_dir,
             doc_stage=doc_stage,
         )
+        prompt += checkpoint_prompt
         provider = get_harness_registry().get(harness)
         session = await provider.start_session(
             initiative_id=ctx.initiative_id,
             stage=ctx.stage,
             meta={"role": str(getattr(ctx.role, "value", ctx.role))},
         )
+        on_tool_result = checkpoint.capture if checkpoint else None
         reply = await _send_turn(
             provider,
             session,
@@ -1247,10 +1284,12 @@ class HarnessStageExecutor:
             pack=pack,
             extra_dirs=extra_dirs,
             on_activity=_activity_callback(ctx),
+            on_tool_result=on_tool_result,
         )
         # 模型声明小群讨论意图时，立即拉群并把结论回注成第二轮收尾
         reply = await self._maybe_consult_subroom(
-            ctx, provider, session, reply, pack, host, cwd, extra_dirs
+            ctx, provider, session, reply, pack, host, cwd, extra_dirs,
+            on_tool_result=on_tool_result,
         )
 
         # 控制平面意图：handoff 交给图的条件边跳转，escalate 先 Manager 后真人。
@@ -1285,6 +1324,7 @@ class HarnessStageExecutor:
                                 pack=pack,
                                 extra_dirs=extra_dirs,
                                 on_activity=_activity_callback(ctx),
+                                on_tool_result=on_tool_result,
                             )
                         except Exception:  # noqa: BLE001 — 二次调用失败保留首轮结果
                             logger.warning(
@@ -1294,28 +1334,22 @@ class HarnessStageExecutor:
                                 exc_info=True,
                             )
                         else:
-                            merged = "\n\n".join(
-                                part
-                                for part in (
-                                    _strip_control_block(getattr(reply, "text", "") or ""),
-                                    str(getattr(follow, "text", "") or "").strip(),
+                            if checkpoint and (follow.meta or {}).get("timeout"):
+                                reply = follow
+                            else:
+                                merged = "\n\n".join(
+                                    part
+                                    for part in (
+                                        _strip_control_block(getattr(reply, "text", "") or ""),
+                                        str(getattr(follow, "text", "") or "").strip(),
+                                    )
+                                    if part
                                 )
-                                if part
-                            )
-                            reply = reply.model_copy(
-                                update={
+                                reply = reply.model_copy(update={
                                     "text": merged,
-                                    "status": (
-                                        "ok"
-                                        if str(getattr(follow, "status", "")) == "ok"
-                                        else reply.status
-                                    ),
-                                    "native_id": (
-                                        str(getattr(follow, "native_id", "") or "")
-                                        or str(getattr(reply, "native_id", "") or "")
-                                    ),
-                                }
-                            )
+                                    "status": "ok" if follow.status == "ok" else reply.status,
+                                    "native_id": follow.native_id or reply.native_id,
+                                })
                     else:
                         control_meta["escalation"] = {"level": "human", "channel": answer}
                         stripped = _strip_control_block(getattr(reply, "text", "") or "")
@@ -1361,6 +1395,19 @@ class HarnessStageExecutor:
                     )
             reply = reply.model_copy(
                 update={"text": _strip_control_block(getattr(reply, "text", "") or "")}
+            )
+
+        if checkpoint and reply.status == "fail" and (reply.meta or {}).get("timeout"):
+            return StageResult(
+                status="fail",
+                message=reply.text,
+                artifacts={"reply.md": reply.text},
+                meta={
+                    "harness": harness,
+                    "session_id": reply.native_id or session.native_id or session.id,
+                    "build_checkpoint": True,
+                    "timeout": True,
+                },
             )
 
         # 多镜头自审：编码阶段收尾时在同一会话续跑 N 轮（自测阶段不再自审）。
@@ -1451,12 +1498,18 @@ class HarnessStageExecutor:
             artifact_dir=artifact_dir,
             snapshot=snapshot,
             diff=stage_diff or None,
+            checkpoint_outputs=(
+                checkpoint_outputs & checkpoint.resume()[0] if checkpoint_prompt else None
+            ),
+            build_recovery=build_recovery,
         )
         # 契约缺件不能靠回复包装蒙混过关：包装件会让阶段"看起来有产物"，下游读到的
         # 却是一段说明（intake 越界写 PRD、正式契约反而不存在，就是这么被放过的）。
-        # 只对 strict_contract_stages 列出的阶段硬失败，其余保持历史降级行为。
+        # 检查点续跑同样要求完整真产物；其余阶段仍按 strict_contract_stages 配置。
         missing_contracts = list(artifact_meta.get("artifact_degraded") or [])
-        strict_missing = bool(missing_contracts) and _strict_contract_stage(ctx.stage)
+        strict_missing = bool(missing_contracts) and (
+            build_recovery or _strict_contract_stage(ctx.stage)
+        )
         if strict_missing:
             ok = False
         # 收尾清理本阶段越界产物：必须排在 _artifacts 之后（workspace 里的真产物
@@ -1480,6 +1533,10 @@ class HarnessStageExecutor:
             "stray_moved": stray_moved,
             **artifact_meta,
         }
+        if build_recovery and not ok:
+            meta["build_checkpoint"] = True
+            for name in missing_contracts:
+                artifacts.pop(name, None)
         # 自审报告：真正跑过轮次才进产物（skipped/prompted 只留日志，避免假报告），
         # 精简结论进 meta 供工作台/门禁展示（完整记录在 logs/<stage>/review.json）
         if review_log is not None:
@@ -1551,7 +1608,10 @@ class HarnessStageExecutor:
                     proposed_next=ctx.stage,
                     failure_kind=failure_kind,
                     retryable=retryable,
-                    meta={**meta, "review_blocking": True},
+                    meta={
+                        **meta, "review_blocking": True,
+                        **({"build_checkpoint": True} if build_recovery and policy == "fail" else {}),
+                    },
                 )
         # 模型没声明交接时保留编码角色的既有默认落点（qa_verify）
         fallback_next = (
@@ -1559,6 +1619,8 @@ class HarnessStageExecutor:
             if ok and str(getattr(ctx.role, "value", ctx.role)) in CODING_ROLE_VALUES
             else None
         )
+        if checkpoint and ok:
+            checkpoint.finish()
         return StageResult(
             status="ok" if ok else "fail",
             message=(
@@ -1795,6 +1857,8 @@ class HarnessStageExecutor:
         host: Any,
         cwd: Path,
         extra_dirs: list[str] | None = None,
+        *,
+        on_tool_result: Any = None,
     ) -> Any:
         """模型声明小群讨论意图时拉群，并把结论回注成第二轮回复。
 
@@ -1852,6 +1916,7 @@ class HarnessStageExecutor:
                 pack=pack,
                 extra_dirs=extra_dirs,
                 on_activity=_activity_callback(ctx),
+                on_tool_result=on_tool_result,
             )
         except Exception:  # noqa: BLE001 — 二次调用失败时保留首轮结果
             logger.warning(
@@ -1862,6 +1927,8 @@ class HarnessStageExecutor:
             )
             return reply
 
+        if on_tool_result is not None and (follow.meta or {}).get("timeout"):
+            return follow
         merged_text = "\n\n".join(
             part
             for part in (
@@ -2134,7 +2201,13 @@ class HarnessStageExecutor:
             )
         else:
             location_line = f"Workspace (cwd): `{workspace}` — you may create/edit files here."
-            if artifact_dir is not None:
+            if ctx.harness == "dsh" and ctx.stage in ENG_BUILD_STAGES and contract_hint:
+                location_line += (
+                    f"\nWrite {contract_hint} in the workspace root as soon as their sections "
+                    "are ready. The orchestrator archives them. Update selftest_log.json "
+                    "immediately after each verification, before making any further code changes."
+                )
+            elif artifact_dir is not None:
                 # 无契约阶段不再回退成 "the contract files"：含糊指令会让模型自己找
                 # 规格（实测 intake 因此反手写了整份 PRD + 验收用例，越界且留脏文件）
                 write_hint = (
@@ -2283,6 +2356,8 @@ class HarnessStageExecutor:
         artifact_dir: Path | None = None,
         snapshot: dict[str, tuple[float, int]] | None = None,
         diff: str | None = None,
+        checkpoint_outputs: set[str] | None = None,
+        build_recovery: bool = False,
     ) -> tuple[dict[str, str], str, dict[str, Any]]:
         """组装阶段产物：优先取磁盘真文件，读不到才回退回复包装。
 
@@ -2324,10 +2399,17 @@ class HarnessStageExecutor:
                 if root is None:
                     continue
                 path = root / name
-                if not _is_fresh(path, snap):
+                if not _is_fresh(path, snap) and not (
+                    source == "workspace" and name in (checkpoint_outputs or set())
+                ):
                     continue
                 text = _read_contract_text(path)
                 if text is None:
+                    continue
+                if build_recovery and name == "tasks.json" and not isinstance(
+                    _parse_artifact_json(text), (dict, list)
+                ):
+                    text = None
                     continue
                 sources[name] = source
                 break
@@ -2385,7 +2467,9 @@ class HarnessStageExecutor:
                 if root is None:
                     continue
                 path = root / name
-                if not _is_fresh(path, snap):
+                if not _is_fresh(path, snap) and not (
+                    source == "workspace" and name in (checkpoint_outputs or set())
+                ):
                     continue
                 text = _read_contract_text(path)
                 if text is None:
