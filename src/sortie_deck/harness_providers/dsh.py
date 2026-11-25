@@ -957,10 +957,15 @@ class DshProvider:
 def _record_subagent_notification(method: str, payload: Any, acc: dict[str, Any]) -> None:
     """累积 dsh 的子代理生命周期事件（``subagent.started`` / ``subagent.finished``）。
 
-    payload 结构未在 SDK 文档固化，这里只按 dict 宽容读取三个可预期键
-    （provider / id / session_id），缺字段就只计数——宁可少记，不猜结构。
-    观测到的 ``calls`` 是"发起了多少次委派"，不是子代理内部步数（后者的
-    session 事件不属于 root events）。
+    实测 payload（SDK 0.2.1rc2，2026-11-25）：
+
+    - ``subagent.started``: ``{parentSessionId, childSessionId}``
+    - ``subagent.finished``: ``{provider, agentId, parentSessionId, childSessionId,
+      status, stopReason, lastAssistantMessage}``
+
+    所以子会话 id 取 ``childSessionId`` / ``agentId``；``provider`` 只在 finished
+    上出现。老键名（``id`` / ``session_id``）保留为兜底，缺字段就只计数——宁可
+    少记，不猜结构。``calls`` 是"发起几次委派"，不是子代理内部步数。
     """
     data = payload if isinstance(payload, dict) else {}
     started = method.endswith(".started")
@@ -971,11 +976,28 @@ def _record_subagent_notification(method: str, payload: Any, acc: dict[str, Any]
         providers = acc.setdefault("providers", [])
         if provider not in providers:
             providers.append(provider)
-    child = str(data.get("id") or data.get("session_id") or "").strip()
+    child = str(
+        data.get("childSessionId")
+        or data.get("agentId")
+        or data.get("id")
+        or data.get("session_id")
+        or ""
+    ).strip()
     if child:
         children = acc.setdefault("children", [])
         if child not in children:
             children.append(child)
+    if started:
+        return
+    # finished 才有结果字段：status / stopReason
+    status = str(data.get("status") or "").strip()
+    if status and status != "ok":
+        acc["failed"] = int(acc.get("failed", 0)) + 1
+    stop = str(data.get("stopReason") or "").strip()
+    if stop:
+        reasons = acc.setdefault("stop_reasons", [])
+        if stop not in reasons:
+            reasons.append(stop)
 
 
 def _make_notifier(

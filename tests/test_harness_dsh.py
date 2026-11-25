@@ -477,6 +477,55 @@ def test_subagent_notification_tolerates_unknown_payload():
     assert "children" not in acc
 
 
+def test_subagent_notification_uses_real_payload_keys():
+    """实测 payload（0.2.1rc2）：started 只有 childSessionId，finished 才带 provider/status。"""
+    from sortie_deck.harness_providers.dsh import _record_subagent_notification
+
+    acc: dict = {}
+    child = "1d2f912a-4268-4d58-996d-23ac910bc8d4"
+    parent = "hs_dsh_20261125032245345270"
+    _record_subagent_notification(
+        "subagent.started", {"parentSessionId": parent, "childSessionId": child}, acc
+    )
+    _record_subagent_notification(
+        "subagent.finished",
+        {
+            "provider": "spawn",
+            "agentId": child,
+            "parentSessionId": parent,
+            "childSessionId": child,
+            "status": "ok",
+            "stopReason": "completed",
+            "lastAssistantMessage": [{"type": "text", "text": "PROBE_OK"}],
+        },
+        acc,
+    )
+
+    assert acc["calls"] == 1
+    assert acc["finished"] == 1
+    # started 就该拿到子会话 id，finished 不能重复计数
+    assert acc["children"] == [child]
+    assert acc["providers"] == ["spawn"]
+    assert acc["stop_reasons"] == ["completed"]
+    assert "failed" not in acc
+
+
+def test_subagent_finished_non_ok_counts_failed():
+    """子代理异常结束要能区分出来，否则指标里失败和成功混在一起。"""
+    from sortie_deck.harness_providers.dsh import _record_subagent_notification
+
+    acc: dict = {}
+    _record_subagent_notification(
+        "subagent.finished",
+        {"provider": "spawn", "childSessionId": "c1", "status": "error", "stopReason": "error"},
+        acc,
+    )
+
+    assert acc["finished"] == 1
+    assert acc["failed"] == 1
+    assert acc["stop_reasons"] == ["error"]
+
+
 def test_notifier_records_subagents_without_activity_callback():
     """没有进度回调时也要记子代理事件（观测与 UI 进度互不依赖）。"""
     from sortie_deck.harness_providers.dsh import _make_notifier
