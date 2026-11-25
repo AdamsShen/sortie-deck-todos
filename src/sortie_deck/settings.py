@@ -300,9 +300,11 @@ class Settings(BaseSettings):
     # 留空 = 不禁用（回滚开关）。
     review_disallowed_tools: str = "Read,Bash,Grep,Glob"
     # --- 全局子代理池（见 docs/plans/2026-11-24-全局子代理池.md）----------------
-    # 总开关：默认关闭（灰度）。关闭时既不注入 agent 定义也不注入委派指引，零行为变化。
+    # 总开关：默认开启（2026-11-25 起常开）。关闭时不注入 agent 定义也不注入委派指引，
+    # 任意时刻置 false 即可整体回滚到「无子代理」行为。
     # 开启后默认只供给只读 scout；写型子代理必须由模板声明且放行 subagent_allow_write。
-    subagent_enabled: bool = False
+    # 无委派能力的 harness（cursor / mock）仍自动空池，不产生任何注入。
+    subagent_enabled: bool = True
     # 是否允许模板声明 mode=write 的子代理（同一 worktree 多写者会互相覆盖，默认禁止）
     subagent_allow_write: bool = False
     # spec 未指定 max_turns 时的兜底上限：防止子代理无限循环放大成本

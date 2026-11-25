@@ -46,7 +46,7 @@ pack["subagents"] = resolve_subagents(ctx, declared=...).model_dump()
 
 ```2171:2177:/Library/git-root/sortie-deck-todos/src/sortie_deck/harness_providers/executor.py
         # 子代理池：默认只有只读 scout（业务语义由模板声明补充）。
-        # 关闭开关时 agents 为空，prompt 与 provider 两侧都不产生任何变化。
+        # 开关关闭时 agents 为空，prompt 与 provider 两侧都不产生任何变化。
         from sortie_deck.subagents import resolve_subagents
 
         out["subagents"] = resolve_subagents(
@@ -62,7 +62,7 @@ pack["subagents"] = resolve_subagents(ctx, declared=...).model_dump()
             sections.append(subagent_guidance)
 ```
 
-**关键设计：池为空时，prompt 与 provider 两侧都不产生任何字节变化。** 这是所有开关默认关闭还能零回归的原因。
+**关键设计：池为空时，prompt 与 provider 两侧都不产生任何字节变化。** 这是开关可随时置 false 整体回滚的原因（开关自 2026-11-25 起默认常开）。
 
 ## 3. canonical spec 与派生规则
 
@@ -220,9 +220,9 @@ def _record_subagent_notification(method: str, payload: Any, acc: dict[str, Any]
 
 ## 6. 开关与支持矩阵
 
-```304:319:/Library/git-root/sortie-deck-todos/src/sortie_deck/settings.py
+```302:321:/Library/git-root/sortie-deck-todos/src/sortie_deck/settings.py
     # 开启后默认只供给只读 scout；写型子代理必须由模板声明且放行 subagent_allow_write。
-    subagent_enabled: bool = False
+    subagent_enabled: bool = True
     # 是否允许模板声明 mode=write 的子代理（同一 worktree 多写者会互相覆盖，默认禁止）
     subagent_allow_write: bool = False
     # spec 未指定 max_turns 时的兜底上限：防止子代理无限循环放大成本
