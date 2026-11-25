@@ -911,6 +911,16 @@ class DshProvider:
         native_id = str(getattr(result, "session_id", "") or native_id or "")
         finish = str(getattr(result, "finish_reason", "") or "")
         error = _error_of(events)
+        if subagent_stats:
+            # 与 claude_code 同口径：委派次数 / 子会话数量，便于端到端核对
+            logger.info(
+                "子代理用量(DSH): session=%s calls=%s finished=%s providers=%s children=%s",
+                session.id,
+                subagent_stats.get("calls", 0),
+                subagent_stats.get("finished", 0),
+                ",".join(subagent_stats.get("providers") or []) or "-",
+                len(subagent_stats.get("children") or []),
+            )
         meta: dict[str, Any] = {
             "provider": self.name,
             "finish_reason": finish,
