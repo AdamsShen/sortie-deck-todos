@@ -456,6 +456,9 @@ class StageContext(BaseModel):
     model: str = ""
     # 角色契约声明的 toolkit 白名单（AgentContract.tools_allowed）；空 = 不限制
     tools_allowed: list[str] = Field(default_factory=list)
+    # 本阶段模板声明的子代理（pipeline stage 的 `subagents:` 原样透传）。
+    # 空 = 只用默认只读 scout；见 sortie_deck.subagents。
+    subagents: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class StageFailureKind(str, Enum):
@@ -536,6 +539,9 @@ class PipelineStageSpec(BaseModel):
     # 本阶段单独的超时上限（秒）；不配则按阶段类型取全局默认
     # （编码类 eng_stage_timeout_seconds=3600s，其余 stage_timeout_seconds=1800s）
     timeout_seconds: float | None = None
+    # 本阶段可委派的子代理声明（模板 `subagents:`）。缺省 = 只用默认只读 scout。
+    # 这里必须显式声明，否则手工增删阶段时字段会被 pydantic 裁掉。
+    subagents: list[dict[str, Any]] | None = None
 
 
 class UpdatePipelineRequest(BaseModel):

@@ -442,3 +442,49 @@ async def test_send_retries_with_fresh_session_on_conflict(monkeypatch, dsh_sett
 def test_provider_cannot_widen_writable_dirs():
     # 执行器据此不传 extra_dirs（DSH 一个会话只有一个可写根）
     assert DshProvider().supports_extra_write_dirs is False
+
+
+def test_subagent_lifecycle_notifications_accumulate():
+    """dsh 的 subagent.started/finished 是唯一的委派观测源，必须计入 meta。"""
+    from sortie_deck.harness_providers.dsh import _record_subagent_notification
+
+    acc: dict = {}
+    _record_subagent_notification(
+        "subagent.started", {"provider": "spawn", "id": "child-1"}, acc
+    )
+    _record_subagent_notification(
+        "subagent.finished", {"provider": "spawn", "id": "child-1"}, acc
+    )
+    _record_subagent_notification(
+        "subagent.started", {"provider": "fork", "session_id": "child-2"}, acc
+    )
+
+    assert acc["calls"] == 2
+    assert acc["finished"] == 1
+    assert acc["providers"] == ["spawn", "fork"]
+    assert acc["children"] == ["child-1", "child-2"]
+
+
+def test_subagent_notification_tolerates_unknown_payload():
+    """payload 结构未固化：缺字段时只计数，不抛异常、不猜结构。"""
+    from sortie_deck.harness_providers.dsh import _record_subagent_notification
+
+    acc: dict = {}
+    _record_subagent_notification("subagent.started", None, acc)
+    _record_subagent_notification("subagent.started", ["unexpected"], acc)
+
+    assert acc["calls"] == 2
+    assert "children" not in acc
+
+
+def test_notifier_records_subagents_without_activity_callback():
+    """没有进度回调时也要记子代理事件（观测与 UI 进度互不依赖）。"""
+    from sortie_deck.harness_providers.dsh import _make_notifier
+
+    stats: dict = {}
+    notify = _make_notifier(None, None, None, subagent_stats=stats)
+
+    notify(types.SimpleNamespace(method="subagent.started", payload={"provider": "spawn"}))
+    notify(types.SimpleNamespace(method="session.event", payload={}))
+
+    assert stats["calls"] == 1

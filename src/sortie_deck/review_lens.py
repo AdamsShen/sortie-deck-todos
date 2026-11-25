@@ -546,6 +546,8 @@ _SCOPE_SKIP_PARTS = frozenset(
         "node_modules",
         "__pycache__",
         ".cursor",
+        # 编排层为 codex 生成的项目级子代理定义，不是 agent 写的实现
+        ".codex",
         ".sortie-deck",
         ".write_probe",
     }

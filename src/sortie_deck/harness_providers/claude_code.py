@@ -51,6 +51,64 @@ def _activity_detail(payload: dict[str, Any]) -> str:
     return ""
 
 
+def _agent_definitions(subagents: dict[str, Any], disallowed: list[str]) -> dict[str, Any]:
+    """把编排层的 canonical 子代理计划渲染成 SDK ``AgentDefinition`` 映射。
+
+    输入：``pack["subagents"]``（见 ``sortie_deck.subagents``）+ 本阶段禁用工具。
+    输出：``{agent_id: AgentDefinition}``；空 dict 表示本阶段不提供子代理。
+
+    只做两件事：能力标签 → Claude 工具名、剔除被阶段禁用的工具。路由描述与提示词
+    原样透传——那是父模型判断"何时委派"的唯一信号，provider 不得改写。
+    单条渲染失败只丢该条并告警：子代理是增强项，不能打挂阶段。
+    """
+    rows = list((subagents or {}).get("agents") or [])
+    if not rows:
+        return {}
+    try:
+        from claude_agent_sdk import AgentDefinition  # type: ignore[import-untyped]
+    except Exception:  # noqa: BLE001 — 旧 SDK 没有该类型
+        logger.info("claude-agent-sdk 不支持 AgentDefinition，跳过子代理注入")
+        return {}
+
+    from sortie_deck.subagents import tool_names
+
+    banned = {str(name) for name in disallowed if str(name or "").strip()}
+    defs: dict[str, Any] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            tools = [
+                name
+                for name in tool_names("claude_code", list(row.get("capabilities") or []))
+                if name not in banned
+            ]
+            kwargs: dict[str, Any] = {
+                "description": str(row.get("description") or ""),
+                "prompt": str(row.get("prompt") or ""),
+            }
+            if tools:
+                kwargs["tools"] = tools
+            # SDK 字段是 camelCase（匹配线路格式），Python 侧也保持一致
+            if int(row.get("max_turns") or 0) > 0:
+                kwargs["maxTurns"] = int(row["max_turns"])
+            if str(row.get("model") or "").strip():
+                kwargs["model"] = str(row["model"]).strip()
+            defs[str(row.get("id") or "")] = AgentDefinition(**kwargs)
+        except Exception:  # noqa: BLE001 — 单条定义失败不影响其它
+            logger.warning("子代理定义渲染失败: id=%s", row.get("id"), exc_info=True)
+    return defs
+
+
+def _harness_env(settings: Any) -> dict[str, str]:
+    """本阶段 SDK env 增量：压缩窗口 + 内置子代理开关（SDK 对 env 是合并语义）。"""
+    env = dict(_auto_compact_env(getattr(settings, "harness_auto_compact_window", 0)) or {})
+    if bool(getattr(settings, "subagent_disable_builtin", False)):
+        # 内置 Explore/general-purpose 会与我们供给的 scout 抢路由；观测到冲突再打开
+        env["CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS"] = "1"
+    return env
+
+
 def _auto_compact_env(window: Any) -> dict[str, str] | None:
     """把配置的压缩窗口转成 SDK env；0/None/非法值返回 None（不注入）。
 
@@ -245,13 +303,22 @@ class ClaudeCodeProvider:
             # strict 模式下这就是本阶段 MCP 的全部；空 dict = 本阶段不挂任何 MCP
             "mcp_servers": dict(pack.get("mcp_servers") or {}),
             "strict_mcp_config": strict,
-            "env": _auto_compact_env(settings.harness_auto_compact_window),
+            "env": _harness_env(settings),
             # 阶段回合上限：intake 等对齐阶段封顶（stage_max_turns），编码阶段默认不限
             "max_turns": resolve_stage_max_turns(str((session.meta or {}).get("stage", "")))
             or None,
             # 单条 CLI 消息上限：默认 1 MiB，agent Read 截图时 base64 后会溢出
             "max_buffer_size": _max_buffer_size(settings.harness_max_buffer_bytes),
         }
+        # 子代理池（默认仅只读 scout）：SDK 有 agents 字段才传，旧 SDK 忽略（零回归）
+        agent_defs = _agent_definitions(pack.get("subagents") or {}, disallowed)
+        if agent_defs and "agents" in getattr(ClaudeAgentOptions, "__dataclass_fields__", {}):
+            options_kwargs["agents"] = agent_defs
+            logger.info(
+                "注入子代理: session=%s agents=%s",
+                session.id,
+                ",".join(sorted(agent_defs)),
+            )
         # 角色级模型：SDK 支持该字段时原样透传；旧版本 SDK 没有则忽略（零回归）
         model = str(pack.get("model") or "").strip()
         if model and "model" in getattr(ClaudeAgentOptions, "__dataclass_fields__", {}):
@@ -262,8 +329,15 @@ class ClaudeCodeProvider:
         is_error = False
         context_meta: dict[str, Any] = {}
         last_activity = 0.0
+        # 子代理观测（P0）：calls = 委派次数，steps = 子代理内部的 assistant 消息数，
+        # task_tool 来自 system:init 的工具清单，None 表示没收到 init 事件。
+        subagent_meta: dict[str, Any] = {"calls": 0, "steps": 0, "task_tool": None, "agents": []}
         async for message in query(prompt=prompt, options=options):
             if isinstance(message, AssistantMessage):
+                # 子代理内部的 assistant 消息带 parent_tool_use_id：用它区分
+                # 「主线程在干活」与「子代理在干活」，否则 142 步的账算不到一起
+                if str(getattr(message, "parent_tool_use_id", "") or ""):
+                    subagent_meta["steps"] += 1
                 for block in getattr(message, "content", []) or []:
                     text = getattr(block, "text", None)
                     if isinstance(text, str):
@@ -272,6 +346,21 @@ class ClaudeCodeProvider:
                     # ToolUseBlock：把「此刻在做什么」推给编排层，转圈才有细节可展示。
                     # 节流 0.8s：一轮里连续读多个文件时不刷屏，也少写事件表。
                     tool = getattr(block, "name", None)
+                    if isinstance(tool, str) and tool in {"Task", "Agent"}:
+                        # 一次委派：记次数与被选中的子代理类型（不同 SDK 版本叫法不同）
+                        params = getattr(block, "input", {}) or {}
+                        subagent_meta["calls"] += 1
+                        agent_type = str(
+                            params.get("subagent_type") or params.get("agent_type") or ""
+                        ).strip()
+                        if agent_type and agent_type not in subagent_meta["agents"]:
+                            subagent_meta["agents"].append(agent_type)
+                        logger.info(
+                            "子代理委派: session=%s agent=%s purpose=%s",
+                            session.id,
+                            agent_type or "(default)",
+                            str(params.get("description") or "")[:80],
+                        )
                     if on_activity is None or not isinstance(tool, str) or not tool.strip():
                         continue
                     now = time.monotonic()
@@ -301,8 +390,15 @@ class ClaudeCodeProvider:
                     }
                 )
             elif isinstance(message, SystemMessage):
+                subtype = str(getattr(message, "subtype", "") or "")
+                # init 事件带本次会话的工具清单：据此判断委派能力位是否真的开着，
+                # 而不是假设「SDK 装了就有 Task 工具」
+                if subtype == "init":
+                    data = getattr(message, "data", None) or {}
+                    tools = {str(t) for t in (data.get("tools") or []) if isinstance(t, str)}
+                    subagent_meta["task_tool"] = bool(tools & {"Task", "Agent"})
                 # 压缩边界事件：只记日志与 meta，不把摘要正文带进产物
-                if str(getattr(message, "subtype", "") or "") == "compact_boundary":
+                if subtype == "compact_boundary":
                     data = getattr(message, "data", None) or {}
                     context_meta.update(_compact_meta(data))
                     logger.info(
@@ -314,6 +410,15 @@ class ClaudeCodeProvider:
                     )
                 continue
         text = "\n".join(p for p in parts if p.strip()).strip()
+        context_meta["subagents"] = subagent_meta
+        if subagent_meta["calls"] or subagent_meta["steps"]:
+            logger.info(
+                "子代理用量: session=%s calls=%d steps=%d agents=%s",
+                session.id,
+                subagent_meta["calls"],
+                subagent_meta["steps"],
+                ",".join(subagent_meta["agents"]) or "-",
+            )
         return HarnessReply(
             status="fail" if (is_error and not text) else "ok",
             text=text,

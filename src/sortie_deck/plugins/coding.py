@@ -371,6 +371,7 @@ def _workspace_file_listing(workspace: Path) -> str:
         ".mypy_cache",
         ".next",
         ".cursor",
+        ".codex",
         ".sortie-deck",
         ".write_probe",
     }
@@ -765,6 +766,7 @@ def _count_impl_files(workspace: Path, *, has_repos: bool = False) -> int:
         "node_modules",
         ".write_probe",
         ".cursor",
+        ".codex",
         ".sortie-deck",
         # 编排层注入目录：上游镜像与跨阶段遗留归档，不能算成 agent 写的实现文件
         ".upstream",

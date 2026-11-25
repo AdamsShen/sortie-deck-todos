@@ -299,6 +299,24 @@ class Settings(BaseSettings):
     # 默认只禁只读检索类，保留 Edit/Write 以便 correctness / boundaries 就地修。
     # 留空 = 不禁用（回滚开关）。
     review_disallowed_tools: str = "Read,Bash,Grep,Glob"
+    # --- 全局子代理池（见 docs/plans/2026-11-24-全局子代理池.md）----------------
+    # 总开关：默认关闭（灰度）。关闭时既不注入 agent 定义也不注入委派指引，零行为变化。
+    # 开启后默认只供给只读 scout；写型子代理必须由模板声明且放行 subagent_allow_write。
+    subagent_enabled: bool = False
+    # 是否允许模板声明 mode=write 的子代理（同一 worktree 多写者会互相覆盖，默认禁止）
+    subagent_allow_write: bool = False
+    # spec 未指定 max_turns 时的兜底上限：防止子代理无限循环放大成本
+    subagent_max_turns: int = 12
+    # 单阶段允许的委派次数（只在提示词里约束，harness 侧无法硬拦）
+    subagent_max_calls_per_stage: int = 6
+    # 所有子代理 description 的字符预算：Claude 侧合计超 15k token 会告警，
+    # 超出即按声明序截断（宁可少给，不要撞预算）
+    subagent_description_budget: int = 12_000
+    # 是否允许只读池并行；写型池无论该值如何都不并行
+    subagent_parallel: bool = True
+    # 是否关闭 harness 内置子代理（claude_code: CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS）。
+    # 默认保留内置 Explore——代码任务多一个免费选项；若观测到与 scout 抢路由再打开。
+    subagent_disable_builtin: bool = False
     # Stage timeout for coding CLI (seconds)
     coding_timeout_seconds: float = 900.0
     # When true, coding executors list/call MCP tools from toolkit bindings

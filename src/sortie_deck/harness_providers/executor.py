@@ -2165,6 +2165,13 @@ class HarnessStageExecutor:
                 ),
             },
         }
+        # 子代理池：默认只有只读 scout（业务语义由模板声明补充）。
+        # 关闭开关时 agents 为空，prompt 与 provider 两侧都不产生任何变化。
+        from sortie_deck.subagents import resolve_subagents
+
+        out["subagents"] = resolve_subagents(
+            ctx, declared=list(getattr(ctx, "subagents", None) or [])
+        ).model_dump()
         return out
 
     async def _artifact_briefs(
@@ -2386,6 +2393,10 @@ class HarnessStageExecutor:
             sections.append(_TOOLKIT_META_PROTOCOL)
         if _memory_tools_enabled():
             sections.append(_MEMORY_META_PROTOCOL)
+        # 子代理委派指引：只在池非空时注入（关闭开关 / 无只读能力时完全不出现在 prompt 里）
+        subagent_guidance = str((pack.get("subagents") or {}).get("guidance") or "")
+        if subagent_guidance.strip():
+            sections.append(subagent_guidance)
         # 小群讨论协议只在编排层确实提供了 host 时注入（否则模型声明了也兑现不了）
         if with_subroom:
             sections.append(_SUBROOM_PROTOCOL)

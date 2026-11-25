@@ -688,6 +688,16 @@ class DshProvider:
                 (session.meta or {}).get("stage"),
                 [Path(str(d)).name for d in extra_dirs if str(d or "").strip()],
             )
+        subagent_rows = ((context_pack or {}).get("subagents") or {}).get("agents") or []
+        if subagent_rows:
+            # 不静默：DSH 的自定义子代理定义机制尚未验证（见计划 P4），
+            # 当前只能靠提示词引导它用自带的 tool-subagent，无法保证按池选择
+            logger.warning(
+                "DSH 暂不支持自定义子代理定义，仅提示词引导: initiative=%s stage=%s agents=%s",
+                (session.meta or {}).get("initiative_id"),
+                (session.meta or {}).get("stage"),
+                ",".join(str(r.get("id") or "") for r in subagent_rows if isinstance(r, dict)),
+            )
 
         initiative_id = str((session.meta or {}).get("initiative_id") or "unknown")
         # 公共档位（pack["sandbox"]["mode"]）优先，补齐任务级 override 对 DSH 的缺口
@@ -845,7 +855,11 @@ class DshProvider:
 
         timer = threading.Timer(timeout, _on_timeout)
         timer.daemon = True
-        _notify = _make_notifier(on_activity, loop, on_tool_result)
+        # 子代理观测：notifier 在 worker 线程里累积，回合结束后并入 meta
+        subagent_stats: dict[str, Any] = {}
+        _notify = _make_notifier(
+            on_activity, loop, on_tool_result, subagent_stats=subagent_stats
+        )
 
         native_id = session.native_id or _native_session_id(session)
         error_type = ""
@@ -900,8 +914,9 @@ class DshProvider:
         meta: dict[str, Any] = {
             "provider": self.name,
             "finish_reason": finish,
-            # 下游只读 meta["context"] 的压缩信息；DSH 不提供 token 口径，留空
-            "context": {},
+            # 下游只读 meta["context"] 的压缩信息；DSH 不提供 token 口径。
+            # 子代理观测（calls/finished/providers/children）有值时才出现。
+            "context": {"subagents": dict(subagent_stats)} if subagent_stats else {},
             **patch_meta,
             **fallback_meta,
         }
@@ -939,7 +954,37 @@ class DshProvider:
         """无状态 provider：进程已在 send 内关闭，这里保持幂等空实现。"""
 
 
-def _make_notifier(on_activity: Any, loop: Any, on_tool_result: Any = None) -> Any:
+def _record_subagent_notification(method: str, payload: Any, acc: dict[str, Any]) -> None:
+    """累积 dsh 的子代理生命周期事件（``subagent.started`` / ``subagent.finished``）。
+
+    payload 结构未在 SDK 文档固化，这里只按 dict 宽容读取三个可预期键
+    （provider / id / session_id），缺字段就只计数——宁可少记，不猜结构。
+    观测到的 ``calls`` 是"发起了多少次委派"，不是子代理内部步数（后者的
+    session 事件不属于 root events）。
+    """
+    data = payload if isinstance(payload, dict) else {}
+    started = method.endswith(".started")
+    acc["calls"] = int(acc.get("calls", 0)) + (1 if started else 0)
+    acc["finished"] = int(acc.get("finished", 0)) + (0 if started else 1)
+    provider = str(data.get("provider") or "").strip()
+    if provider:
+        providers = acc.setdefault("providers", [])
+        if provider not in providers:
+            providers.append(provider)
+    child = str(data.get("id") or data.get("session_id") or "").strip()
+    if child:
+        children = acc.setdefault("children", [])
+        if child not in children:
+            children.append(child)
+
+
+def _make_notifier(
+    on_activity: Any,
+    loop: Any,
+    on_tool_result: Any = None,
+    *,
+    subagent_stats: dict[str, Any] | None = None,
+) -> Any:
     """构造本轮的通知回调：把 tool/call 转成 on_activity（在 worker 线程内执行）。
 
     ``on_activity`` 由执行器提供且是协程函数，必须投递回事件循环执行；节流放在
@@ -948,9 +993,17 @@ def _make_notifier(on_activity: Any, loop: Any, on_tool_result: Any = None) -> A
     last = {"at": 0.0}
 
     def _notify(notification: Any) -> None:
+        method = str(getattr(notification, "method", "") or "")
+        # 子代理生命周期：即使没有进度回调也要记（P0 观测口径）
+        if method in {"subagent.started", "subagent.finished"}:
+            if subagent_stats is not None:
+                _record_subagent_notification(
+                    method, getattr(notification, "payload", None), subagent_stats
+                )
+            return
         if on_activity is None and on_tool_result is None:
             return
-        if str(getattr(notification, "method", "")) != "session.event":
+        if method != "session.event":
             return
         payload = getattr(notification, "payload", None) or {}
         event = payload.get("event") if isinstance(payload, dict) else None

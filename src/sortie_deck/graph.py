@@ -2130,6 +2130,13 @@ def build_graph_from_template(
             # 角色级模型与契约工具白名单：执行器透传给 harness provider
             model=model,
             tools_allowed=allowed_tools,
+            # 模板声明的子代理（stage 的 `subagents:`）：执行器据此派生池，
+            # 空 = 只用默认只读 scout
+            subagents=[
+                dict(row)
+                for row in ((stage_by_name.get(stage) or {}).get("subagents") or [])
+                if isinstance(row, dict)
+            ],
         )
 
         # Session-capable executors get a host so they can pull a sub-room

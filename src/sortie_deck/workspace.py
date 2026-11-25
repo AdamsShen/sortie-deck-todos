@@ -243,6 +243,8 @@ _ARCHIVE_SKIP_DIRS = {
     ".cache",
     ".tdt",
     ".cursor",
+    # 编排层为 codex 生成的项目级子代理定义，不进产物归档
+    ".codex",
     ".sortie-deck",
 }
 

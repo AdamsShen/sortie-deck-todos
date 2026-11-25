@@ -27,6 +27,12 @@ stages:
     label: 采集
     label_en: Scan
     hitl: false
+    # 调研专用子代理：只在模板声明，代码里不硬编码业务角色（见 docs/plans/2026-11-24-全局子代理池.md）
+    subagents:
+      - id: web-researcher
+        description: 检索公开资料并交叉验证，返回带来源的结论。需要多源比对或查最新信息时使用。
+        capabilities: [web, read_files]
+        max_turns: 12
   - name: research_synthesize
     role: product
     label: 结论

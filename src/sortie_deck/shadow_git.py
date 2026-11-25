@@ -43,6 +43,8 @@ _STATIC_EXCLUDES: tuple[str, ...] = (
     ".sortie-deck/",
     ".write_probe/",
     ".cursor/",
+    # codex 的项目级子代理定义（编排层生成），不是 agent 产出，不能进自审 diff
+    ".codex/",
     "node_modules/",
     "__pycache__/",
     ".venv/",

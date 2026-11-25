@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,13 @@ logger = logging.getLogger(__name__)
 
 # 鉴权失败的关键词：Codex CLI 在未登录/凭据过期时走的是文本报错而不是结构化事件
 _AUTH_HINTS = ("not logged in", "codex login", "401 unauthorized", "unauthorized")
+
+# codex 的项目级 agent 目录（相对 cwd）；个人目录在 $CODEX_HOME/agents。
+# 写项目级而不是 $CODEX_HOME：后者是宿主机全局状态，会污染其它任务。
+_SUBAGENT_DIR = Path(".codex") / "agents"
+
+# codex 的 agent_name 只接受小写字母/数字/下划线
+_AGENT_ID_RE = re.compile(r"[^a-z0-9]+")
 
 
 def _binary() -> str | None:
@@ -48,6 +56,76 @@ def _has_login_credentials() -> bool:
         return path.is_file() and path.stat().st_size > 0
     except OSError:
         return False
+
+
+def _codex_agent_name(raw: str) -> str:
+    """把子代理 id 收敛成 codex 可接受的 agent_name（``[a-z0-9_]``）。
+
+    实测（codex-cli 0.162.1）：name 带连字符时 spawn 直接报
+    ``agent_name must use only lowercase letters, digits, and underscores``，
+    模板里的 ``web-researcher`` 必须落成 ``web_researcher``。
+    """
+    slug = _AGENT_ID_RE.sub("_", str(raw or "").strip().lower()).strip("_")
+    return slug or "subagent"
+
+
+def _toml_str(value: str) -> str:
+    """TOML 基本字符串转义：反斜杠、双引号、换行/制表符。"""
+    text = str(value or "")
+    text = text.replace("\\", "\\\\").replace('"', '\\"')
+    return (
+        text.replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t")
+    )
+
+
+def _subagent_toml(spec: dict[str, Any]) -> str:
+    """canonical spec → codex agent 文件内容（name/description/instructions）。"""
+    name = _codex_agent_name(str(spec.get("id") or ""))
+    description = str(spec.get("description") or "").strip() or name
+    instructions = str(spec.get("prompt") or description).strip()
+    if str(spec.get("mode") or "readonly") == "readonly":
+        # codex 的自定义 agent 无法按工具裁剪（官方只支持继承父级），
+        # 只读约束只能写进指令，并在观测里标注"无法硬保证"
+        instructions += "\n只读约束：禁止创建、修改、删除任何文件；需要变更时只报告建议。"
+    return (
+        f'name = "{_toml_str(name)}"\n'
+        f'description = "{_toml_str(description)}"\n'
+        f'developer_instructions = "{_toml_str(instructions)}"\n'
+    )
+
+
+def ensure_subagent_files(subagents: dict[str, Any], cwd: str | Path) -> tuple[str, list[str]]:
+    """把子代理池写成 ``<cwd>/.codex/agents/*.toml``（codex 项目级发现）。
+
+    返回 ``(support, notes)``：``native`` 表示文件已就位（含内容未变），
+    ``prompt_only`` 表示写盘失败，只能靠提示词引导。
+    幂等：内容相同不重写，避免每轮刷新 mtime 被误当成产出改动。
+    """
+    rows = [row for row in ((subagents or {}).get("agents") or []) if isinstance(row, dict)]
+    notes: list[str] = []
+    if not rows:
+        return "unsupported", notes
+    root = Path(str(cwd or "") or ".") / _SUBAGENT_DIR
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        # 让 agent 自己的 git 操作看不到这些编排层文件：避免被 `git add -A` 提交进业务仓库
+        gitignore = root.parent / ".gitignore"
+        if not gitignore.is_file():
+            gitignore.write_text("agents/\n", encoding="utf-8")
+        for row in rows:
+            text = _subagent_toml(row)
+            path = root / f"{_codex_agent_name(str(row.get('id') or ''))}.toml"
+            if path.is_file():
+                try:
+                    if path.read_text(encoding="utf-8", errors="replace") == text:
+                        continue
+                except OSError:
+                    pass
+            path.write_text(text, encoding="utf-8")
+    except OSError as exc:  # noqa: BLE001 — 写不了就退化为提示词引导
+        notes.append(f"子代理定义写盘失败（{exc.__class__.__name__}），退化为提示词引导")
+        return "prompt_only", notes
+    return "native", notes
 
 
 class CodexProvider:
@@ -106,6 +184,26 @@ class CodexProvider:
             )
         from sortie_deck.settings import settings
 
+        # 子代理池：首轮把定义落到项目级 .codex/agents（后续轮次复用同一 workspace）
+        subagent_support = ""
+        subagents = (context_pack or {}).get("subagents") or {}
+        if subagents.get("agents") and not (session.meta or {}).get("subagents_materialized"):
+            subagent_support, notes = ensure_subagent_files(subagents, cwd or ".")
+            session.meta["subagents_materialized"] = subagent_support
+            session.meta["subagents_notes"] = notes
+            if subagent_support == "native":
+                logger.info(
+                    "codex 子代理定义已就位: session=%s agents=%s",
+                    session.id,
+                    ",".join(_codex_agent_name(str(r.get("id") or "")) for r in subagents["agents"]),
+                )
+            else:
+                logger.warning(
+                    "codex 子代理定义未生效(%s): %s", subagent_support, "；".join(notes) or "-"
+                )
+        else:
+            subagent_support = str((session.meta or {}).get("subagents_materialized") or "")
+
         if session.native_id:
             # 续跑沿用首次会话的沙箱档位（CLI 不接受在 resume 上改沙箱）
             args = [binary, "exec", "resume", session.native_id, "--json", "--skip-git-repo-check"]
@@ -156,12 +254,22 @@ class CodexProvider:
                 meta={"provider": self.name, "exit": proc.returncode or 0, "auth": True},
             )
         status = "ok" if (proc.returncode == 0 and text.strip() and not errored) else "fail"
+        meta: dict[str, Any] = {
+            "provider": self.name,
+            "exit": proc.returncode or 0,
+            "usage": usage,
+        }
+        if subagent_support:
+            meta["subagents_support"] = subagent_support
+        collab = _collab_stats(stdout)
+        if collab:
+            meta["context"] = {"subagents": collab}
         return HarnessReply(
             status=status,
             text=text,
             session_id=session.id,
             native_id=native_id or session.native_id,
-            meta={"provider": self.name, "exit": proc.returncode or 0, "usage": usage},
+            meta=meta,
         )
 
     async def close(self, session: HarnessSession) -> None:
@@ -212,6 +320,43 @@ def _first_turn_args(
         if str(extra or "").strip():
             args += ["--add-dir", str(extra)]
     return args
+
+
+def _collab_stats(stdout: str) -> dict[str, Any]:
+    """统计 codex 的协作工具调用，作为子代理观测。
+
+    实测（0.162.1）：``spawn_agent`` 本身不出现在 ``--json`` 流里，可见的只有
+    ``item.* collab_tool_call``（tool=wait/send_message...，且 ``receiver_thread_ids``
+    常为空）。因此只能给出"委派活动次数 + 用到的协作工具"，**拿不到被委派 agent
+    的名字**——这个限制必须在指标里显式保留，不能假装有完整归因。
+    """
+    seen: set[str] = set()
+    tools: list[str] = []
+    calls = 0
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        item = event.get("item") if isinstance(event, dict) else None
+        if not isinstance(item, dict) or item.get("type") != "collab_tool_call":
+            continue
+        # started/completed 是同一次调用，按 item id 去重
+        item_id = str(item.get("id") or "")
+        if item_id and item_id in seen:
+            continue
+        if item_id:
+            seen.add(item_id)
+        calls += 1
+        tool = str(item.get("tool") or "").strip()
+        if tool and tool not in tools:
+            tools.append(tool)
+    if not calls:
+        return {}
+    return {"calls": calls, "tools": tools, "source": "collab_tool_call"}
 
 
 def _parse_jsonl(stdout: str) -> tuple[str, str, bool, dict[str, Any]]:

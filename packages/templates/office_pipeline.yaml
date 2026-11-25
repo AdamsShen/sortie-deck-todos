@@ -28,6 +28,12 @@ stages:
     hitl_after: false
     output_contract:
       - notes.md
+    # 办公专用子代理：批量读附件并提炼要点，只读（能力集不含 shell/write）
+    subagents:
+      - id: doc-reader
+        description: 批量阅读输入文档并提炼要点与出处。输入文件很多、只需要摘要时使用。
+        capabilities: [read_files]
+        max_turns: 12
   - name: office_produce
     role: product
     label: 产出
