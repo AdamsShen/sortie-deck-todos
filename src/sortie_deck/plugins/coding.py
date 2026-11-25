@@ -388,7 +388,11 @@ def _workspace_file_listing(workspace: Path) -> str:
 
 
 async def _git_diff(
-    workspace: Path, repo_root: Path | None = None, repos: list[RepoConfig] | None = None
+    workspace: Path,
+    repo_root: Path | None = None,
+    repos: list[RepoConfig] | None = None,
+    *,
+    timeout: float = 60.0,
 ) -> str:
     """采集 agent 本阶段的代码改动，供 diff.patch 与自审范围复用。
 
@@ -397,6 +401,11 @@ async def _git_diff(
     2. 否则走影子仓 ``.shadow.git`` 的 diff（见 ``shadow_git``；覆盖 ``repos/`` 下
        从 0 写的代码，但跳过已存在 ``.git`` 的 clone），影子仓不可用时回退文件清单；
     3. 绑定了 mission repos → 每个 clone 再单独 ``git diff``，业务代码落在这里。
+
+    三条路径都是**幂等且累计**的（影子仓以阶段开始时的 baseline 为 HEAD 做
+    ``diff --cached``），因此同一阶段可以重复调用：自审每隔一轮重采集一次改动面，
+    收尾再采一次刷 ``diff.patch``。``timeout`` 供自审这类预算紧张的场景收紧
+    （默认 60s 是给大仓库首采留的余量）。
 
     ``repo_root`` 仅为兼容旧签名保留，不参与任何判定。历史实现用
     ``(repo_root / ".git").exists()`` 判断 has_git，但 repo_root 指向宿主机仓库，
@@ -413,14 +422,14 @@ async def _git_diff(
     # 此时 git diff 拿到的是那个仓库的改动，宁可按「无 git」处理。
     if toplevel is not None and toplevel == workspace.resolve():
         _code, out, err = await _run_cmd(
-            ["git", "diff", "--no-ext-diff"], cwd=workspace, timeout=60
+            ["git", "diff", "--no-ext-diff"], cwd=workspace, timeout=timeout
         )
         parts.append(out or err or "# (empty diff)\n")
     else:
         # 无项目 git：优先用影子仓的真实 diff
         from sortie_deck.shadow_git import ShadowRepo
 
-        shadow_diff = await ShadowRepo(workspace).capture()
+        shadow_diff = await ShadowRepo(workspace, timeout=timeout).capture()
         if shadow_diff:
             parts.append(shadow_diff)
         else:
@@ -437,7 +446,7 @@ async def _git_diff(
         if not (target / ".git").exists():
             continue
         _rcode, rout, rerr = await _run_cmd(
-            ["git", "diff", "--no-ext-diff"], cwd=target, timeout=60
+            ["git", "diff", "--no-ext-diff"], cwd=target, timeout=timeout
         )
         rdiff = rout or rerr or ""
         if rdiff.strip():

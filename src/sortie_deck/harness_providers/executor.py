@@ -41,6 +41,10 @@ from sortie_deck.permissions import (
 # 命令审批被拒时底层 CLI/SDK 回显的特征串；命中即认为是环境侧问题
 _BLOCKED_HINTS = ("requires approval", "permission denied", "command not allowed")
 
+# 自审轮之间重采集改动面的超时：单轮审查通常 50~200s，采集只能用其中很小一段。
+# 采集失败/超时只影响「本轮看到的是否最新」，不能让自审轮次失败。
+_REVIEW_DIFF_REFRESH_TIMEOUT = 10.0
+
 
 def _parse_artifact_json(text: str) -> Any:
     """解析阶段产物 JSON；缺文件/格式错误返回 None，分类是旁路能力不能打断阶段。"""
@@ -1417,8 +1421,8 @@ class HarnessStageExecutor:
                 },
             )
 
-        # 多镜头自审：编码阶段收尾时在同一会话续跑 N 轮（自测阶段不再自审）。
-        # diff 同时供自审范围与 diff.patch 产物复用，只跑一次 git。
+        # 多镜头自审：编码阶段收尾时串行跑 N 轮，每轮独立会话（自测阶段不再自审）。
+        # 首轮 diff 供自审起点与 diff.patch 复用；自审轮之间按需重采集（见 _run_review）。
         from sortie_deck.contracts import REQUIRED as _REQUIRED
         from sortie_deck.plugins.coding import _git_diff
         from sortie_deck.review_lens import load_review_config, stage_in_review_scope
@@ -1447,6 +1451,14 @@ class HarnessStageExecutor:
                 workspace=workspace,
                 cfg=review_cfg,
                 started=stage_started,
+                # 自审轮之间的重采集：超时必须小于单轮审查预算，采集卡住时
+                # 让 run_review_lenses 沿用上一轮 scope，而不是把本轮顶成超时
+                refresh_diff=lambda: _git_diff(
+                    workspace,
+                    repo_root,
+                    ctx.repos,
+                    timeout=_REVIEW_DIFF_REFRESH_TIMEOUT,
+                ),
             )
             # 自审轮次可能就地修过文件：diff.patch 必须反映最终状态，
             # 不能沿用自审开始前的快照（否则 QA 看到的是旧改动）
@@ -1664,8 +1676,16 @@ class HarnessStageExecutor:
         workspace: Path,
         cfg: Any,
         started: float = 0.0,
+        refresh_diff: Any = None,
     ) -> Any:
-        """编码阶段的收尾自审：同一会话跑 N 轮，返回 ReviewLog。
+        """编码阶段的收尾自审：每轮独立会话串行跑 N 轮，返回 ReviewLog。
+
+        会话隔离的含义：串行不变（顺序 / 角度去重 / 熔断都靠 ``run_review_lenses``
+        的循环保证），但每轮新建 provider 会话，避免前几轮输出把后一轮的判断带偏；
+        轮次之间只通过「scope + 前几轮结论」这条显式通道传递信息。
+
+        ``refresh_diff`` 是改动面重采集回调（由调用方注入 ``_git_diff``）：上一轮
+        可能就地修过文件，第 2..N 轮开审前要重新采一次。为 None 时沿用首轮快照。
 
         跳过条件是「审了也没意义」的场景（mock harness / 首轮就失败 / 阶段剩余
         预算不足），跳过也会留一条 ``skipped`` 记录，避免日志里出现
@@ -1688,21 +1708,29 @@ class HarnessStageExecutor:
                 logger.warning("实现清单读取失败: %s", local_checklist)
         elif ctx.upstream_artifacts.get("checklist.md"):
             checklist = ctx.upstream_artifacts["checklist.md"]
+
+        def _compose_scope(raw_diff: str) -> Any:
+            """由 diff 正文组装审查范围；统计用完整 diff，prompt 只带裁剪后的正文。
+
+            无 git 差异时 ``build_scope`` 会退化成工作区文件清单（source=workspace），
+            此时 ``raw_diff`` 本身就是文件清单文本，同样适用。
+            """
+            return build_scope(
+                ctx,
+                raw_diff,
+                checklist,
+                workspace=workspace,
+                diff_excerpt=clip_diff(
+                    raw_diff,
+                    max_chars=int(getattr(settings, "review_diff_max_chars", 60_000)),
+                    max_file_lines=int(getattr(settings, "review_diff_max_file_lines", 2_000)),
+                    max_file_chars=int(getattr(settings, "shadow_git_max_file_bytes", 1_048_576)),
+                ),
+            )
+
         # workspace 用于「无 git 差异」时的改动面兜底（没绑仓库的任务很常见）。
-        # 统计用完整 diff，prompt 只带裁剪后的正文：否则 24 文件从 0 开发的 diff
-        # 会挤掉审查指令，或被完全省略导致模型退回逐个 Read。
-        scope = build_scope(
-            ctx,
-            diff,
-            checklist,
-            workspace=workspace,
-            diff_excerpt=clip_diff(
-                diff,
-                max_chars=int(getattr(settings, "review_diff_max_chars", 60_000)),
-                max_file_lines=int(getattr(settings, "review_diff_max_file_lines", 2_000)),
-                max_file_chars=int(getattr(settings, "shadow_git_max_file_bytes", 1_048_576)),
-            ),
-        )
+        # 否则 24 文件从 0 开发的 diff 会挤掉审查指令，或被完全省略导致模型退回逐个 Read。
+        scope = _compose_scope(diff)
         # 编排层规则打分：不额外调模型，判定依据写进 review.json，事后可复盘调阈值
         from sortie_deck.complexity import estimate_from_scope
 
@@ -1818,7 +1846,8 @@ class HarnessStageExecutor:
 
         # 自审轮禁掉逐文件 Read/Bash：diff 已在 prompt 里，读文件只会把单轮拖到 100s+
         review_banned = _review_disallowed_tools()
-        review_pack = _merge_disallowed(pack, review_banned)
+        # 自审轮不供给子代理：自审本身已占阶段耗时的 68%，再嵌套委派会让成本无法归因
+        review_pack = {**_merge_disallowed(pack, review_banned), "subagents": {}}
         if review_banned:
             logger.info(
                 "自审禁用工具: initiative=%s stage=%s tools=%s",
@@ -1827,11 +1856,66 @@ class HarnessStageExecutor:
                 ",".join(review_banned),
             )
 
+        # 改动面指纹：重采集结果与上一轮相同则复用 scope，避免无意义重渲染
+        scope_digest = sha256(str(diff or "").encode("utf-8", "replace")).hexdigest()
+
+        async def refresh_scope_turn() -> Any:
+            """第 2..N 轮开审前重采集改动面；失败/未变化返回 None 或旧对象。"""
+            nonlocal scope, scope_digest
+            if refresh_diff is None:
+                return None
+            try:
+                fresh = await refresh_diff()
+            except Exception:  # noqa: BLE001 — 采集失败由 run_review_lenses 沿用上一轮
+                logger.warning(
+                    "自审改动面重采集异常: initiative=%s stage=%s",
+                    ctx.initiative_id,
+                    ctx.stage,
+                    exc_info=True,
+                )
+                return None
+            fresh_digest = sha256(str(fresh or "").encode("utf-8", "replace")).hexdigest()
+            if fresh_digest == scope_digest:
+                # 同一份改动：返回原对象，调用方据此判定「本轮未刷新」
+                return scope
+            scope_digest = fresh_digest
+            scope = _compose_scope(str(fresh or ""))
+            logger.info(
+                "自审改动面已刷新: initiative=%s stage=%s files=%d source=%s",
+                ctx.initiative_id,
+                ctx.stage,
+                len(scope.changed_files),
+                scope.source,
+            )
+            return scope
+
+        turn_no = 0
+
         async def send(prompt: str) -> Any:
-            # 续接同一 provider 会话：第 2..N 轮必须看到首轮实现上下文
+            """每轮落在独立 provider 会话上（会话隔离）；建会话失败回落阶段会话。"""
+            nonlocal turn_no
+            turn_no += 1
+            review_session = None
+            try:
+                review_session = await provider.start_session(
+                    initiative_id=ctx.initiative_id,
+                    stage=ctx.stage,
+                    meta={
+                        "role": str(getattr(ctx.role, "value", ctx.role)),
+                        "review_round": turn_no,
+                    },
+                )
+            except Exception:  # noqa: BLE001 — 隔离是优化项，建不出来就用阶段会话
+                logger.warning(
+                    "自审独立会话创建失败，回落阶段会话: initiative=%s stage=%s round=%d",
+                    ctx.initiative_id,
+                    ctx.stage,
+                    turn_no,
+                    exc_info=True,
+                )
             return await _send_turn(
                 provider,
-                session,
+                review_session or session,
                 prompt,
                 cwd=cwd,
                 pack=review_pack,
@@ -1852,6 +1936,7 @@ class HarnessStageExecutor:
             circuit_breaker=bool(getattr(cfg, "circuit_breaker", True)),
             complexity=complexity_meta,
             disallowed_tools=review_banned,
+            refresh_scope=refresh_scope_turn,
         )
 
     async def _maybe_consult_subroom(

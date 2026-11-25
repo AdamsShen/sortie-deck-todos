@@ -627,3 +627,160 @@ def test_merge_disallowed_keeps_stage_pack_intact():
     assert merged["mcp_servers"] == {}
     assert pack["disallowed_tools"] == ["Bash"]
     assert _merge_disallowed(pack, []) is pack
+
+
+# --- 7. 会话隔离（每轮独立会话 + 改动面重采集）--------------------------------
+
+
+async def test_run_review_lenses_refreshes_scope_between_rounds(tmp_path):
+    """第 2、3 轮开审前重采集改动面；同一对象表示未变化，不标 refreshed。"""
+    ctx = _ctx(tmp_path)
+    first = ReviewScope(stage="eng_web", role="eng_web", changed_files=["src/a.py"])
+    second = ReviewScope(
+        stage="eng_web", role="eng_web", changed_files=["src/a.py", "src/b.py"]
+    )
+    prompts: list[str] = []
+    calls = {"n": 0}
+
+    async def send(prompt: str) -> HarnessReply:
+        prompts.append(prompt)
+        return _reply(_review_text("passed"))
+
+    async def refresh() -> ReviewScope:
+        calls["n"] += 1
+        return second
+
+    log = await run_review_lenses(
+        ctx,
+        first,
+        send,
+        rounds=3,
+        timeout=5,
+        refresh_scope=refresh,
+        data_dir=tmp_path / "data",
+    )
+
+    # 第 1 轮用首轮 scope，第 2/3 轮各重采集一次
+    assert calls["n"] == 2
+    assert "src/b.py" not in prompts[0]
+    assert "src/b.py" in prompts[1]
+    assert "src/b.py" in prompts[2]
+    assert log.lenses[0].scope_refreshed is False
+    assert log.lenses[1].scope_refreshed is True
+    # 第二次返回同一对象 = 指纹未变，本轮不算刷新
+    assert log.lenses[2].scope_refreshed is False
+
+
+async def test_run_review_lenses_keeps_previous_scope_when_refresh_fails(tmp_path):
+    """重采集失败（None / 异常）时沿用上一轮 scope，轮次照跑，不降级为 failed。"""
+    ctx = _ctx(tmp_path)
+    scope = ReviewScope(stage="eng_web", role="eng_web", changed_files=["src/a.py"])
+    prompts: list[str] = []
+
+    async def send(prompt: str) -> HarnessReply:
+        prompts.append(prompt)
+        return _reply(_review_text("passed"))
+
+    async def broken() -> ReviewScope | None:
+        raise RuntimeError("index.lock exists")
+
+    log = await run_review_lenses(
+        ctx,
+        scope,
+        send,
+        rounds=3,
+        timeout=5,
+        refresh_scope=broken,
+        data_dir=tmp_path / "data",
+    )
+
+    assert [run.status for run in log.lenses] == [LensStatus.PASSED] * 3
+    assert all(run.scope_refreshed is False for run in log.lenses)
+    assert all("src/a.py" in prompt for prompt in prompts)
+
+
+class _IsolatedSessionProvider:
+    """假 provider：验证自审每轮是否新建会话（不碰真实 CLI）。"""
+
+    name = "fake_review"
+
+    def __init__(self) -> None:
+        self.sessions: list[HarnessSession] = []
+        self.prompts: list[str] = []
+        self.packs: list[dict[str, Any]] = []
+
+    async def start_session(
+        self, *, initiative_id: str, stage: str, meta: dict[str, Any] | None = None
+    ) -> HarnessSession:
+        session = HarnessSession(
+            id=f"hs_rev_{len(self.sessions) + 1}",
+            provider=self.name,
+            meta=dict(meta or {}),
+        )
+        self.sessions.append(session)
+        return session
+
+    async def send(
+        self,
+        session: HarnessSession,
+        prompt: str,
+        *,
+        cwd: str | None = None,
+        context_pack: dict[str, Any] | None = None,
+        extra_dirs: list[str] | None = None,
+        on_activity: Any = None,
+    ) -> HarnessReply:
+        self.prompts.append(prompt)
+        self.packs.append(dict(context_pack or {}))
+        return HarnessReply(
+            status="ok",
+            text=_review_text("passed"),
+            session_id=session.id,
+            native_id=f"nat_{session.id}",
+        )
+
+
+async def test_run_review_creates_isolated_session_per_round(tmp_path):
+    """串行不变，但每轮落在独立会话；改动面按轮重采集且带指纹短路。"""
+    from dataclasses import replace
+
+    from sortie_deck.review_lens import load_review_config
+
+    workspace = tmp_path / "workspace"
+    (workspace / "src").mkdir(parents=True)
+    diff = "".join(
+        _diff_block(f"src/a{i}.py", [f"+value{i} = {i}"]) for i in range(4)
+    )
+    ctx = _ctx(tmp_path)
+    provider = _IsolatedSessionProvider()
+    cfg = replace(load_review_config("fake_review"), rounds=3, adaptive=False, timeout=5.0)
+    refreshes = {"n": 0}
+
+    async def refresh_diff() -> str:
+        refreshes["n"] += 1
+        return diff  # 与首轮一致：调用发生但不重渲染 scope
+
+    log = await HarnessStageExecutor()._run_review(
+        ctx,
+        _reply("implemented\n\n## Result\nok"),
+        provider,
+        HarnessSession(id="hs_main", provider=provider.name),
+        {},
+        cwd=workspace,
+        extra_dirs=None,
+        harness=provider.name,
+        diff=diff,
+        data_dir=tmp_path / "data",
+        workspace=workspace,
+        cfg=cfg,
+        refresh_diff=refresh_diff,
+    )
+
+    assert len(provider.sessions) == 3
+    assert len(log.lenses) == 3
+    assert len({run.session_id for run in log.lenses}) == 3
+    assert refreshes["n"] == 2  # 第 2、3 轮各一次
+    assert all(run.scope_refreshed is False for run in log.lenses)
+    assert log.summary()["isolated_sessions"] == 3
+    # 自审轮不供给子代理：否则「自审里再委派」的成本无法归因
+    assert all(not (pack.get("subagents") or {}) for pack in provider.packs)

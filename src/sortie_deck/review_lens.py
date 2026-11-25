@@ -6,7 +6,8 @@
 对所有 harness 行为一致。设计取舍见
 ``docs/plans/2026-11-02-多镜头自审方案与改动说明.md``。
 
-一轮 lens = 同一 provider 会话上的下一次 ``send()``。本模块负责三件事：
+一轮 lens = 一次 ``send()``，会话由执行器注入（可以落在独立会话上）。轮次严格串行，
+后一轮只通过 prompt 里的「前面几轮结论」继承上下文。本模块负责三件事：
 
 1. 组装「审查范围」（本阶段改动文件 / 契约产物 / 上游产物），回答**审查了什么**；
 2. 解析回复里的 ```review 围栏块，拿到 status / findings，回答**审查结果**；
@@ -326,6 +327,13 @@ class LensRun(BaseModel):
     duration_ms: int = 0
     reply_chars: int = 0
     error: str = ""
+    # 本轮实际使用的 provider 会话（会话隔离后每轮一个；空表示回落到了阶段主体会话）
+    session_id: str = ""
+    native_id: str = ""
+    # 本轮审查所依据的改动面：diff = 真实 git 差异；workspace = 无 git 时按文件清单推断
+    scope_source: str = ""
+    # 上一轮修过文件后重采集到新改动面（False 表示沿用上一轮 scope）
+    scope_refreshed: bool = False
 
 
 class ReviewLog(BaseModel):
@@ -378,6 +386,8 @@ class ReviewLog(BaseModel):
             "log_lines_path": self.log_lines_path,
             "blocking_findings": blocking[:5],
             "statuses": {run.lens: run.status.value for run in self.lenses},
+            # 会话隔离是否真生效：1 = 各轮共用阶段会话，N = 每轮独立会话
+            "isolated_sessions": len({run.session_id for run in self.lenses if run.session_id}),
         }
         if self.reason:
             out["reason"] = self.reason
@@ -714,7 +724,8 @@ def build_lens_prompt(
     history = f"\n前面几轮结论（不要重复审这些角度）：{done}\n" if done else ""
     return (
         f"## 多镜头自审 · 第 {index}/{total} 轮：{lens.title}\n\n"
-        "你正在同一个任务、同一个会话里做阶段收尾自审。审查对象是本阶段的真实改动，"
+        "你正在为同一个任务的阶段收尾做一次独立自审：看不到前几轮的对话，"
+        "只以本轮给定的改动面与前几轮结论为准。审查对象是本阶段的真实改动，"
         "不是重新读一遍需求。\n\n"
         f"### 审查范围\n{scope.render()}\n"
         f"{history}\n"
@@ -801,6 +812,8 @@ def _append_run_log(log: ReviewLog, run: LensRun) -> None:
 # --- 执行 ---------------------------------------------------------------------
 
 SendTurn = Callable[[str], Awaitable[Any]]
+# 改动面重采集：返回新的 scope；None = 采集失败沿用上一轮；返回同一对象 = 未变化
+RefreshScopeFn = Callable[[], Awaitable[ReviewScope | None]]
 # 进度回调：同步或异步均可，异常一律吞掉（进度不能反过来失败掉阶段）
 ProgressFn = Callable[[dict[str, Any]], Any]
 
@@ -817,6 +830,27 @@ async def _notify_progress(fn: ProgressFn | None, payload: dict[str, Any]) -> No
         logger.warning("自审进度回调失败: %s", payload.get("phase"), exc_info=True)
 
 
+async def _refresh_scope_safe(
+    fn: RefreshScopeFn, ctx: StageContext, index: int
+) -> ReviewScope | None:
+    """调用改动面重采集；失败只告警，由调用方沿用上一轮 scope。
+
+    git 采集可能因为锁文件 / 大仓库超时 / 无 git 二进制失败，但自审是增强项，
+    不能因为「看不到最新改动」就把整轮判成失败。
+    """
+    try:
+        return await fn()
+    except Exception:  # noqa: BLE001 — 采集失败退化为沿用上一轮
+        logger.warning(
+            "自审改动面重采集失败，沿用上一轮: initiative=%s stage=%s round=%d",
+            ctx.initiative_id,
+            ctx.stage,
+            index,
+            exc_info=True,
+        )
+        return None
+
+
 async def run_review_lenses(
     ctx: StageContext,
     scope: ReviewScope,
@@ -831,11 +865,20 @@ async def run_review_lenses(
     circuit_breaker: bool = True,
     complexity: dict[str, Any] | None = None,
     disallowed_tools: list[str] | None = None,
+    refresh_scope: RefreshScopeFn | None = None,
 ) -> ReviewLog:
-    """在同一会话上依次跑 N 轮审查，返回汇总日志。
+    """串行跑 N 轮审查，返回汇总日志。
 
-    ``send_turn`` 由执行器注入（复用同一个 provider/session），因此这里不感知
-    vendor。任何一轮超时/异常只把该轮标 failed，后续轮次继续——自审是增强项。
+    串行是语义要求（角度去重 / 就地修复 / 熔断互斥），与「是否共用会话」无关：
+    - ``send_turn`` 由执行器注入，每轮可以落在独立会话上（会话隔离），因此这里
+      不感知 vendor，也不知道会话是怎么建的；
+    - 轮次之间唯一的显式输入是 ``previous`` 里前几轮的状态与结论（见
+      ``build_lens_prompt``），不再依赖「上一轮对话历史还在」；
+    - ``refresh_scope`` 在每轮开始前重采集改动面（上一轮可能就地修过文件）。
+      返回 ``None`` 或抛异常表示采集失败，沿用上一轮 scope；返回同一对象表示
+      改动面没变，避免重复渲染 prompt。
+
+    任何一轮超时/异常只把该轮标 failed，后续轮次继续——自审是增强项。
     """
     lenses = select_lenses(rounds)
     started = time.monotonic()
@@ -887,6 +930,14 @@ async def run_review_lenses(
             )
             continue
 
+        # 上一轮可能就地修过文件：本轮开审前重采集改动面（失败沿用上一轮）
+        refreshed = False
+        if refresh_scope is not None and index > 1:
+            new_scope = await _refresh_scope_safe(refresh_scope, ctx, index)
+            if new_scope is not None:
+                # 返回同一对象 = diff 指纹未变，说明上一轮没有产生新改动
+                refreshed = new_scope is not scope
+                scope = new_scope
         prompt = build_lens_prompt(lens, index, len(lenses), scope, runs, disallowed_tools or [])
         run = LensRun(
             lens=lens.name,
@@ -894,6 +945,8 @@ async def run_review_lenses(
             round=index,
             status=LensStatus.FAILED,
             started_at=utc_now().isoformat(),
+            scope_source=scope.source,
+            scope_refreshed=refreshed,
         )
         run_started = time.monotonic()
         await _notify_progress(
@@ -905,6 +958,9 @@ async def run_review_lenses(
                 "lens": lens.name,
                 "title": lens.title,
                 "timeout": timeout,
+                # 本轮是否换了一份改动面：前端可据此提示「已包含上一轮修复」
+                "scope_source": scope.source,
+                "scope_refreshed": refreshed,
             },
         )
         try:
@@ -934,6 +990,9 @@ async def run_review_lenses(
                 exc_info=True,
             )
         else:
+            # 记录本轮落点会话：隔离生效时各轮不同，用于复盘「是否真的换了上下文」
+            run.session_id = str(getattr(reply, "session_id", "") or "")
+            run.native_id = str(getattr(reply, "native_id", "") or "")
             text = str(getattr(reply, "text", "") or "")
             run.reply_chars = len(text)
             status, findings, reviewed, summary = parse_review_reply(text)
