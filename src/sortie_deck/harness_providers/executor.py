@@ -1094,13 +1094,20 @@ class HarnessStageExecutor:
         # 这里只补阶段结束状态，避免同一阶段发两条开始事件。
         try:
             if not probe.ok:
-                if settings.harness_fallback:
+                build_recovery = (
+                    harness == "dsh" and ctx.stage in ENG_BUILD_STAGES
+                    and bool(ctx.permissions.get("build_recovery"))
+                )
+                if settings.harness_fallback and not build_recovery:
                     result = await self._fallback_run(ctx, harness, probe, host=host)
                 else:
                     result = StageResult(
                         status="fail",
                         message=f"harness `{harness}` unavailable: {probe.detail}",
-                        meta={"harness": harness, "probe": probe.as_dict(), "fallback": False},
+                        meta={
+                            "harness": harness, "probe": probe.as_dict(), "fallback": False,
+                            **({"build_checkpoint": True} if build_recovery else {}),
+                        },
                     )
             else:
                 result = await self._run_harness(ctx, harness, host=host)
