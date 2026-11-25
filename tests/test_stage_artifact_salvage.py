@@ -99,7 +99,7 @@ async def test_stage_timeout_recovers_artifacts_from_workspace(tmp_path, monkeyp
         kb_backend="local",
         pipeline_llm=False,
         room_llm=False,
-        stage_timeout_seconds=0.3,
+        stage_timeout_overrides="product_prd=0.3",
     )
     orch = Orchestrator(cfg)
     await orch.startup()

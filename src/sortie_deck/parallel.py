@@ -9,6 +9,11 @@ def wave_node_name(group: str) -> str:
     return f"__wave__{group}"
 
 
+def wave_gate_node_name(group: str) -> str:
+    """波次门禁节点名（interrupt 专用，与跑分支的节点分开以保住 checkpoint）。"""
+    return f"__wave_gate__{group}"
+
+
 def _stage_id(s: dict[str, Any]) -> str:
     return str(s.get("id") or s.get("name") or "")
 
@@ -34,6 +39,50 @@ def group_wave_branches(members: list[dict[str, Any]]) -> list[dict[str, Any]]:
             buckets[bid] = []
         buckets[bid].append(m)
     return [{"id": bid, "members": buckets[bid]} for bid in order]
+
+
+def pending_wave_members(
+    branches: list[dict[str, Any]], done: set[str] | list[str] | None = None
+) -> list[str]:
+    """按分支顺序列出尚未完成的波次成员。
+
+    HITL 放行重入波次时用它算「还欠哪几个阶段」，避免整波重放：
+    其它分支已跑完的成员直接复用结论。
+    """
+    skip = {str(n) for n in (done or set())}
+    out: list[str] = []
+    for br in branches:
+        for m in br["members"]:
+            name = str(m["name"])
+            if name not in skip:
+                out.append(name)
+    return out
+
+
+def merge_wave_checkpoint(
+    member_order: list[str], prev_done: list[str], finished: list[str]
+) -> list[str]:
+    """合并断点：按计划顺序去重，保证重放顺序稳定（不依赖集合迭代序）。"""
+    done = set(prev_done or []) | set(finished or [])
+    return [n for n in member_order if n in done]
+
+
+def clear_wave_checkpoint(
+    group: str,
+    done: dict[str, list[str]] | None,
+    results: dict[str, dict[str, Any]] | None,
+) -> tuple[dict[str, list[str]], dict[str, dict[str, Any]]]:
+    """清掉某个波次的断点。
+
+    波次整体跑完（或有指令要求返工时）必须清空：下一次进入该波次应当全量重跑，
+    不能拿旧结论跳过本该返工的阶段。
+    """
+    next_done = {k: v for k, v in (done or {}).items() if k != group}
+    prefix = f"{group}::"
+    next_results = {
+        k: v for k, v in (results or {}).items() if not str(k).startswith(prefix)
+    }
+    return next_done, next_results
 
 
 def collapse_to_waves(stages: list[dict[str, Any]]) -> list[dict[str, Any]]:

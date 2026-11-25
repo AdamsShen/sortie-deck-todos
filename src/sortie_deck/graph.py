@@ -45,7 +45,7 @@ from sortie_deck.models import (
     filter_toolkit_by_contract,
     role_key,
 )
-from sortie_deck.parallel import collapse_to_waves, wave_node_name
+from sortie_deck.parallel import collapse_to_waves, wave_gate_node_name, wave_node_name
 from sortie_deck.plugins.queue import ENG_QUEUE
 from sortie_deck.registry import ExecutorRegistry, run_executor
 from sortie_deck.templates import load_agent_contract, load_persona, load_pipeline_template
@@ -923,6 +923,18 @@ class PipelineState(TypedDict, total=False):
     failure_signatures: dict[str, int]
     # Manager-driven parallel wave retry budget per group
     wave_attempts: dict[str, int]
+    # 波次断点续跑：group -> 已完成成员名。HITL 放行后只重跑未完成成员，
+    # 不再把整波（含已成功的 20 分钟分支）从头重放。
+    wave_done: dict[str, list[str]]
+    # 波次断点续跑：`{group}::{member}` -> 该成员上次的 last_result。
+    # 被跳过的成员靠它参与汇合，避免下游看到空结果。
+    wave_results: dict[str, dict[str, Any]]
+    # 当前 handoff 是否来自波次 HITL 放行（=group 名）。只有才复用 wave_done，
+    # 防止 QA 打回 / 手工重启等场景误跳本该返工的阶段。
+    wave_resume: str
+    # 波次门禁载荷：跑分支的节点写，门禁节点 interrupt 消费。
+    # 拆成两个节点是因为 interrupt 前写进 state 的内容不会被 checkpoint 保留。
+    wave_hitl: dict[str, Any] | None
     # Stop the run without marking the initiative as `stopped`
     halt: bool
 
@@ -2876,7 +2888,12 @@ def build_graph_from_template(
         return hitl_gate
 
     def make_wave_node(group: str, members: list[dict[str, Any]]):
-        from sortie_deck.parallel import group_wave_branches
+        from sortie_deck.parallel import (
+            clear_wave_checkpoint,
+            group_wave_branches,
+            merge_wave_checkpoint,
+            pending_wave_members,
+        )
 
         member_names = [m["name"] for m in members]
         branches = group_wave_branches(members)
@@ -2886,23 +2903,61 @@ def build_graph_from_template(
                 return {**state, "status": "stopped"}
 
             initiative_id = state["initiative_id"]
-            await _mark_parallel_progress(initiative_id, stage=member_names[0], active=member_names)
+            # 断点续跑：只有「本波次 HITL 放行」才复用已完成成员。QA 打回 / 构建恢复
+            # / 手工重启必须全量重跑，否则会拿旧结论跳过本该返工的阶段。
+            reuse_done = state.get("wave_resume") == group
+            prev_done = [
+                n
+                for n in ((state.get("wave_done") or {}).get(group) or [])
+                if n in set(member_names)
+            ] if reuse_done else []
+            prev_results = {
+                str(k): v
+                for k, v in (state.get("wave_results") or {}).items()
+                if reuse_done and str(k).startswith(f"{group}::")
+            }
+            done_set = set(prev_done)
+            pending = pending_wave_members(branches, done_set)
+            await _mark_parallel_progress(
+                initiative_id,
+                stage=(pending[0] if pending else member_names[0]),
+                active=pending or member_names,
+            )
 
-            async def _run_branch(branch_members: list[dict[str, Any]]) -> PipelineState:
+            async def _run_branch(
+                branch_members: list[dict[str, Any]],
+            ) -> tuple[PipelineState, list[str], dict[str, dict[str, Any]]]:
+                """跑一条分支链 →（末态, 已完成成员, 本次新完成成员的 last_result）。
+
+                已完成成员不再重跑，但要把上次的 ``last_result`` 塞回状态，
+                让后续成员与汇合逻辑看到一致的上下文。
+                """
                 st: PipelineState = dict(state)
+                finished: list[str] = []
+                produced: dict[str, dict[str, Any]] = {}
                 for m in branch_members:
                     name = m["name"]
+                    if name in done_set:
+                        st = {
+                            **st,
+                            "stage": name,
+                            "last_result": prev_results.get(f"{group}::{name}") or {},
+                        }
+                        finished.append(name)
+                        continue
                     await _mark_parallel_progress(initiative_id, stage=name, active=member_names)
                     st = await run_stage(dict(st), name)
                     result = st.get("last_result") or {}
                     if result.get("status") == "needs_hitl" or _failed_build_recovery(result):
-                        return st
+                        return st, finished, produced
                     if st.get("stopped"):
-                        return st
-                return st
+                        return st, finished, produced
+                    finished.append(name)
+                    produced[name] = dict(result)
+                return st, finished, produced
 
             results = await asyncio.gather(*[_run_branch(br["members"]) for br in branches])
-            for st in results:
+            for st, _finished, _produced in results:
                 result = st.get("last_result") or {}
                 if _failed_build_recovery(result):
                     raise StageContractError(
@@ -2915,7 +2970,7 @@ def build_graph_from_template(
             hitl_member: str | None = None
             hitl_state: PipelineState | None = None
 
-            for br, st in zip(branches, results, strict=True):
+            for br, (st, _finished, _produced) in zip(branches, results, strict=True):
                 up = dict(st.get("upstream") or {})
                 # Bare kind keys: last-wins (fine for trunk artifacts shared into later stages).
                 for kind, rel in up.items():
@@ -2943,6 +2998,21 @@ def build_graph_from_template(
             tip = branches[-1]["members"][-1]["name"] if branches else member_names[-1]
             await _mark_parallel_progress(initiative_id, stage=tip, active=None)
 
+            # 断点记账：跑完就清空本组（QA 打回/返工必须全量重跑）；有成员停在
+            # HITL 才保留，供放行后的下一次进入只跑未完成成员。
+            next_done = dict(state.get("wave_done") or {})
+            next_results = dict(state.get("wave_results") or {})
+            if hitl_member is None:
+                next_done, next_results = clear_wave_checkpoint(group, next_done, next_results)
+            else:
+                finished_now = {n for _st, finished, _produced in results for n in finished}
+                next_done[group] = merge_wave_checkpoint(
+                    member_names, prev_done, sorted(finished_now)
+                )
+                for _st, _finished, produced in results:
+                    for name, res in produced.items():
+                        next_results[f"{group}::{name}"] = res
+
             base: PipelineState = {
                 **state,
                 "stage": tip,
@@ -2951,6 +3021,12 @@ def build_graph_from_template(
                 "last_result": last_result,
                 "status": "running",
                 "human_instruction": None,
+                "wave_done": next_done,
+                "wave_results": next_results,
+                # 一次性标记：放行重入本波次时才置为本 group
+                "wave_resume": "",
+                # 默认无待裁决；有成员停在 HITL 时由下面填进门禁载荷
+                "wave_hitl": None,
                 # consumed by this wave's conditional edge
                 "handoff_target": None,
             }
@@ -2972,6 +3048,22 @@ def build_graph_from_template(
                     },
                 }
             ]
+            if reuse_done and prev_done:
+                base["events"] = list(base["events"]) + [
+                    {
+                        "stage": tip,
+                        "kind": "transition",
+                        "message": (
+                            f"Parallel wave `{group}` resume: 复用 {len(prev_done)} 个已完成阶段，"
+                            f"只重跑未完成成员"
+                        ),
+                        "data": {
+                            "parallel_group": group,
+                            "reused": list(prev_done),
+                            "rerun": [n for n in member_names if n not in done_set],
+                        },
+                    }
+                ]
 
             if hitl_member is None:
                 # Parallel join: nobody can arbitrate for a sibling — the manager decides.
@@ -2979,17 +3071,20 @@ def build_graph_from_template(
                     group,
                     tip,
                     branches,
-                    results,
+                    [st for st, _finished, _produced in results],
                     state,
                     base,
                     _wave_default_next(tip),
                 )
 
             if hitl_member and hitl_state is not None:
-                # Re-enter the blocked member for permission HITL (single-branch resume)
+                # 卡住的成员不在这里 interrupt：载荷写进 state，交给门禁节点。
+                # 本节点必须完整返回，断点（wave_done / wave_results）才会被 checkpoint：
+                # LangGraph 恢复会重放 interrupt 之前的代码，节点在 interrupt 前写的
+                # state 不会被保留 —— 这正是原先「放行后整波重跑」的根因。
                 result = hitl_state.get("last_result") or {}
                 meta = result.get("meta") or {}
-                payload = {
+                base["wave_hitl"] = {
                     "stage": hitl_member,
                     "prompt": result.get("message")
                     or f"`{hitl_member}` needs operator approval (permissions).",
@@ -2997,54 +3092,83 @@ def build_graph_from_template(
                     "artifacts": list(merged_upstream.keys()),
                     "allowed_actions": [a.value for a in HitlAction],
                     "kind": "permission" if meta.get("permission_block") else "needs_hitl",
-                    "retry_permission_mode": meta.get("retry_permission_mode") or "bypassPermissions",
+                    "retry_permission_mode": meta.get("retry_permission_mode")
+                    or "bypassPermissions",
                     "parallel_group": group,
                     "parallel_members": member_names,
-                }
-                decision_raw = interrupt(payload)
-                if isinstance(decision_raw, dict):
-                    raw = dict(decision_raw)
-                    if hasattr(raw.get("action"), "value"):
-                        raw["action"] = raw["action"].value
-                    decision = HitlDecision.model_validate(raw)
-                else:
-                    decision = HitlDecision(action=HitlAction.APPROVE)
-                if decision.action == HitlAction.STOP:
-                    return {**base, "stopped": True, "status": "stopped"}
-                if decision.action == HitlAction.REJECT:
-                    return {
-                        **base,
-                        "human_instruction": decision.instruction or "Rejected permission grant",
-                        "status": "stopped",
-                        "stopped": True,
-                    }
-                resume_base: PipelineState = {**base}
-                if decision.action == HitlAction.SWITCH_HARNESS:
-                    # Authorised harness change inside a parallel wave: swap into
-                    # state and re-enter the wave (member re-runs on new harness).
-                    target = (decision.harness or "").strip()
-                    if target:
-                        resume_base["harness"] = target
-                    if decision.instruction:
-                        resume_base["human_instruction"] = decision.instruction
-                    resume_base["handoff_target"] = wave_node_name(group)
-                    return resume_base
-                retry_mode = payload.get("retry_permission_mode") or "bypassPermissions"
-                instr = decision.instruction or ""
-                return {
-                    **base,
-                    "human_instruction": (
-                        f"{instr}\n[sortie:coding_permission_mode={retry_mode}]".strip()
-                    ),
-                    # on_approval 回写模式：放行重入成功后触发 publish
-                    "publish_pending": True,
-                    # re-enter this same wave through the conditional edge
-                    "handoff_target": wave_node_name(group),
                 }
 
             return base
 
         return wave
+
+    def make_wave_gate(group: str):
+        """波次门禁：专职 interrupt + 放行裁决。
+
+        与跑分支的节点拆开是硬要求：``interrupt`` 会中止节点，之前的写入不落盘。
+        拆开后「哪条分支已完成 / 各自 last_result」先被 checkpoint，放行重入时
+        runner 才能只补跑被卡住的成员，而不是把已成功的分支（实测 20+ 分钟）重放。
+        """
+        wname = wave_node_name(group)
+
+        async def gate(state: PipelineState) -> PipelineState:
+            if state.get("stopped"):
+                return {**state, "status": "stopped"}
+            payload = state.get("wave_hitl")
+            if not payload:
+                # 没有待裁决：原样放行，路由交给本节点的 conditional edge
+                return {}
+            decision_raw = interrupt(payload)
+            if isinstance(decision_raw, dict):
+                raw = dict(decision_raw)
+                if hasattr(raw.get("action"), "value"):
+                    raw["action"] = raw["action"].value
+                decision = HitlDecision.model_validate(raw)
+            else:
+                decision = HitlDecision(action=HitlAction.APPROVE)
+            if decision.action == HitlAction.STOP:
+                return {"stopped": True, "status": "stopped", "wave_hitl": None}
+            if decision.action == HitlAction.REJECT:
+                return {
+                    "human_instruction": decision.instruction or "Rejected permission grant",
+                    "status": "stopped",
+                    "stopped": True,
+                    "wave_hitl": None,
+                }
+            if decision.action == HitlAction.SWITCH_HARNESS:
+                # 换 harness = 换「怎么干」：旧成员结论不代表新执行器，丢掉断点整波重跑
+                done, results = clear_wave_checkpoint(
+                    group, state.get("wave_done"), state.get("wave_results")
+                )
+                update: PipelineState = {
+                    "wave_done": done,
+                    "wave_results": results,
+                    "wave_resume": "",
+                    "wave_hitl": None,
+                    "handoff_target": wname,
+                }
+                target = (decision.harness or "").strip()
+                if target:
+                    update["harness"] = target
+                if decision.instruction:
+                    update["human_instruction"] = decision.instruction
+                return update
+            retry_mode = str(payload.get("retry_permission_mode") or "bypassPermissions")
+            instr = decision.instruction or ""
+            return {
+                "human_instruction": (
+                    f"{instr}\n[sortie:coding_permission_mode={retry_mode}]".strip()
+                ),
+                # on_approval 回写模式：放行重入成功后触发 publish
+                "publish_pending": True,
+                # 允许重入本波次时复用已完成成员（只重跑被卡住的分支）
+                "wave_resume": group,
+                # 回到跑分支的节点，按断点补跑
+                "handoff_target": wname,
+                "wave_hitl": None,
+            }
+
+        return gate
 
     graph = StateGraph(PipelineState)
     waves = collapse_to_waves(stages)
@@ -3072,8 +3196,11 @@ def build_graph_from_template(
             group = wave["group"]
             members = wave["members"]
             wname = wave_node_name(group)
+            gname = wave_gate_node_name(group)
             graph.add_node(wname, make_wave_node(group, members))
+            graph.add_node(gname, make_wave_gate(group))
             registered.add(wname)
+            registered.add(gname)
             # Keep individual stage nodes for HITL / inspect resume targets
             for m in members:
                 mname = m["name"]
@@ -3147,7 +3274,9 @@ def build_graph_from_template(
             default_next = (
                 f"hitl__{last}" if wave["members"][-1].get("hitl_after") else _next_after(wi)
             )
-            graph.add_conditional_edges(wname, _router(default_next))
+            # 分支跑完 → 门禁（可能 interrupt）→ 条件边决定下一跳
+            graph.add_edge(wname, wave_gate_node_name(group))
+            graph.add_conditional_edges(wave_gate_node_name(group), _router(default_next))
 
     # Gates route on the human verdict; the plan's approve target is the default.
     for gate, approve_next in gates:
